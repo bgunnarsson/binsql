@@ -1,0 +1,3 @@
+go build -o binsql ./cmd/binsql
+
+binsql mssql "server=sql-sgs-web.database.windows.net;database=SGS2024;encrypt=true;fedauth=ActiveDirectoryAzCli"

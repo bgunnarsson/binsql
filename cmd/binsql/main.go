@@ -1,3 +1,4 @@
+// cmd/binsql/main.go
 package main
 
 import (
@@ -12,32 +13,54 @@ import (
 )
 
 func main() {
-	var query string
+	// Workaround: azidentity/AzureCLICredential treats any stderr as error.
+	// Azure CLI on macOS+Py3.12 spews SyntaxWarning to stderr. Kill them.
+	if os.Getenv("PYTHONWARNINGS") == "" {
+		// ignore all Python warnings inside az
+		os.Setenv("PYTHONWARNINGS", "ignore")
+	}
 
+	var query string
 	flag.StringVar(&query, "q", "", "SQL query to run in non-interactive mode")
 	flag.Parse()
 
-	if flag.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: binsql [-q query] <db.sqlite>")
-		os.Exit(1)
+	if flag.NArg() < 2 {
+		fmt.Fprintln(os.Stderr, "usage: binsql [flags] <sqlite|postgres|mssql|mysql> <database-path-or-dsn>")
+		flag.PrintDefaults()
+		os.Exit(2)
 	}
 
-	dbPath := flag.Arg(0)
+	driverStr := flag.Arg(0)
+	dsn := flag.Arg(1)
+
+	var driver app.Driver
+	switch driverStr {
+	case string(app.DriverSqlite):
+		driver = app.DriverSqlite
+	case string(app.DriverPostgres):
+		driver = app.DriverPostgres
+	case string(app.DriverMssql):
+		driver = app.DriverMssql
+	case string(app.DriverMysql):
+		driver = app.DriverMysql	
+	default:
+		fmt.Fprintf(os.Stderr, "unknown driver %q (expected sqlite, postgres, mssql or mysql)\n", driverStr)
+		os.Exit(2)
+	}
 
 	ctx := context.Background()
-
 	stdoutIsTTY := term.IsTerminal(int(os.Stdout.Fd()))
+
 	if query != "" || !stdoutIsTTY {
-		if err := app.RunNonInteractive(ctx, dbPath, query); err != nil {
+		if err := app.RunNonInteractive(ctx, driver, dsn, query); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
 		return
 	}
 
-	if err := app.RunInteractive(ctx, dbPath); err != nil {
+	if err := app.RunInteractive(ctx, driver, dsn); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
-
