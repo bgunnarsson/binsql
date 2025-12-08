@@ -214,7 +214,7 @@ func (m Model) View() string {
 
 	// HEADER BAR
 	headerLeft := titleStyle.Render("BINSQL") + " " + dbBadgeStyle.Render("[sqlite]")
-	headerRight := headerHelpStyle.Render("\\lt tables  ·  \\e [n] expand  ·  \\q quit  ·  ↑/↓ history")
+	headerRight := headerHelpStyle.Render("\\dt tables  ·  \\e [n] expand  ·  \\q quit  ·  ↑/↓ history")
 	header := padToWidth(headerLeft, headerRight, m.width)
 
 	b.WriteString(header)
@@ -282,7 +282,7 @@ func (m *Model) runMeta(cmd string) tea.Cmd {
 		m.appendStyled("Bye.", hintStyle)
 		return tea.Quit
 
-	case s == `\lt`:
+	case s == `\dt`:
 		m.listTables()
 		return nil
 
@@ -298,7 +298,8 @@ func (m *Model) runMeta(cmd string) tea.Cmd {
 
 // \lt – boxed table
 func (m *Model) listTables() {
-	const q = `
+	// First try the original SQLite-specific query – nicer output when it works.
+	const sqliteQuery = `
 		SELECT
 			'' AS "Schema",
 			name AS "Name",
@@ -313,11 +314,31 @@ func (m *Model) listTables() {
 			name;
 	`
 
-	rows, err := m.db.Query(m.ctx, q)
+	rows, err := m.db.Query(m.ctx, sqliteQuery)
 	if err != nil {
-		m.appendStyled("error listing tables: "+err.Error(), errorStyle)
-		return
+		// Probably not SQLite (e.g. Postgres) – fall back to the driver’s ListTables.
+		names, err2 := m.db.ListTables(m.ctx)
+		if err2 != nil {
+			m.appendStyled("error listing tables: "+err2.Error(), errorStyle)
+			return
+		}
+		if len(names) == 0 {
+			m.appendLines("(no relations)")
+			return
+		}
+
+		// Build a generic single-column result set so we can reuse renderBoxTable.
+		rows = &db.Rows{
+			Columns: []db.Column{
+				{Name: "Table", Type: ""},
+			},
+			Data: make([]db.Row, len(names)),
+		}
+		for i, name := range names {
+			rows.Data[i] = db.Row{name}
+		}
 	}
+
 	if len(rows.Data) == 0 {
 		m.appendLines("(no relations)")
 		return
@@ -337,7 +358,7 @@ func (m *Model) listTables() {
 		switch i {
 		case 1:
 			m.appendLines(tableHeaderStyle.Render(line))
-		case 0, 2, len(lines) - 1:
+		case 0, 2, len(lines)-1:
 			m.appendLines(tableBorderStyle.Render(line))
 		default:
 			m.appendLines(tableBodyStyle.Render(line))
