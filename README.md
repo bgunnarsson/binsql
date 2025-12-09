@@ -1,4 +1,4 @@
-# binsql
+#https://github.com/bgunnarsson/binsql binsql
 
 `binsql` is a small terminal UI for exploring SQL databases. It supports SQLite, PostgreSQL, SQL Server (including Azure AD auth via Azure CLI), and MySQL from a single binary.
 
@@ -122,7 +122,7 @@ az login
 2. Run `binsql` with `fedauth=ActiveDirectoryAzCli`:
 
 ```bash
-PYTHONWARNINGS=ignore binsql mssql "server=sql-sgs-web.database.windows.net;database=SGS2024;encrypt=true;fedauth=ActiveDirectoryAzCli"
+PYTHONWARNINGS=ignore binsql mssql "server=xxx;database=xxx;encrypt=true;fedauth=ActiveDirectoryAzCli"
 ```
 
 Notes:
