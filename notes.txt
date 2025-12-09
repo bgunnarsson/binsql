@@ -16,3 +16,22 @@ tar -czf binsql-0.1.1-linux-amd64.tar.gz   binsql-0.1.1-linux-amd64
 tar -czf binsql-0.1.1-linux-arm64.tar.gz   binsql-0.1.1-linux-arm64
 zip binsql-0.1.1-windows-amd64.zip binsql-0.1.1-windows-amd64.exe
 
+git add .
+git commit -m "Release v${VERSION}"   # if needed
+git tag -a "v${VERSION}" -m "binsql v${VERSION}"
+git push origin main
+git push origin "v${VERSION}"
+
+cd dist/release
+
+gh release create "v0.1.1" \
+  binsql-0.1.1-darwin-amd64.tar.gz \
+  binsql-0.1.1-darwin-arm64.tar.gz \
+  binsql-0.1.1-linux-amd64.tar.gz \
+  binsql-0.1.1-linux-arm64.tar.gz \
+  binsql-0.1.1-windows-amd64.zip
+
+  gh release edit v0.1.0 \
+  --attach dist/release/binsql-0.1.0-linux-amd64.tar.gz \
+  --attach dist/release/binsql-0.1.0-darwin-arm64.tar.gz
+
