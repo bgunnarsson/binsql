@@ -147,14 +147,14 @@ binsql mysql "user:pass@tcp(localhost:3306)/mydb?parseTime=true&charset=utf8mb4"
 Once connected (any driver), you get a prompt:
 
 ```text
-BINSQL [sqlite]   \lt tables  ·  \e [n] expand  ·  \q quit
+BINSQL [sqlite]   \dt tables  ·  \e [n] expand  ·  \q quit
 >>> 
 ```
 
 Supported commands:
 
 - `\q` – quit
-- `\lt` – list tables (driver‑aware)
+- `\dt` – list tables (driver‑aware)
 - `\e [rowNumber]` – expand a row from the last result set
 
 Any other input is treated as SQL and sent to the connected database.
@@ -164,7 +164,7 @@ Any other input is treated as SQL and sent to the connected database.
 List tables:
 
 ```text
->>> \lt
+>>> \dt
 List of relations
 ┌─────────────────────────────┐
 │ Table                       │
@@ -237,5 +237,5 @@ Adding a new database is mostly a matter of implementing that interface and upda
 
 ## License
 
-MIT (or whatever you actually choose).
+MIT.
 
