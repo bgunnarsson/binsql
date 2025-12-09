@@ -1,6 +1,6 @@
-#https://github.com/bgunnarsson/binsql binsql
+# BINSQL
 
-`binsql` is a small terminal UI for exploring SQL databases. It supports SQLite, PostgreSQL, SQL Server (including Azure AD auth via Azure CLI), and MySQL from a single binary.
+`BINSQL` is a small terminal UI for exploring SQL databases. It supports SQLite, PostgreSQL, SQL Server (including Azure AD auth via Azure CLI), and MySQL from a single binary.
 
 The goal is a fast, keyboard‑driven way to inspect schemas and data without leaving the terminal.
 
