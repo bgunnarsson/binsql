@@ -1,0 +1,18 @@
+VERSION=0.1.0  # pick your version tag
+
+mkdir -p dist/release
+cp dist/binsql-darwin-amd64  dist/release/binsql-0.1.1-darwin-amd64
+cp dist/binsql-darwin-arm64  dist/release/binsql-0.1.1-darwin-arm64
+cp dist/binsql-linux-amd64   dist/release/binsql-0.1.1-linux-amd64
+cp dist/binsql-linux-arm64   dist/release/binsql-0.1.1-linux-arm64
+cp dist/binsql-windows-amd64.exe dist/release/binsql-0.1.1-windows-amd64.exe
+
+
+cd dist/release
+
+tar -czf binsql-0.1.1-darwin-amd64.tar.gz  binsql-0.1.1-darwin-amd64
+tar -czf binsql-0.1.1-darwin-arm64.tar.gz  binsql-0.1.1-darwin-arm64
+tar -czf binsql-0.1.1-linux-amd64.tar.gz   binsql-0.1.1-linux-amd64
+tar -czf binsql-0.1.1-linux-arm64.tar.gz   binsql-0.1.1-linux-arm64
+zip binsql-0.1.1-windows-amd64.zip binsql-0.1.1-windows-amd64.exe
+
