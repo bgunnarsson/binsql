@@ -37,7 +37,6 @@ func openDB(driver Driver, dsn string) (db.DB, error) {
 	}
 }
 
-
 func RunInteractive(ctx context.Context, driver Driver, dsn string) error {
 	sdb, err := openDB(driver, dsn)
 	if err != nil {
@@ -45,5 +44,11 @@ func RunInteractive(ctx context.Context, driver Driver, dsn string) error {
 	}
 	defer sdb.Close()
 
-	return ui.Run(ctx, sdb)
+	// Label for prompt/header
+	label := "sqlite"
+	if driver != "" {
+		label = string(driver)
+	}
+
+	return ui.Run(ctx, sdb, label)
 }

@@ -14,70 +14,109 @@ import (
 	"github.com/bgunnarsson/binsql/internal/db"
 )
 
-// Palette
+// ANSI palette indices – actual colors come from the user's terminal theme.
 const (
-	colorBg         = "#0F0F20"
-	colorBorder     = "#4A2366"
-	colorAccentDeep = "#782E5C"
-	colorAccent1    = "#D352FF"
-	colorAccent2    = "#E48EFF"
-	colorText       = "#E5E7F5"
-	colorMuted      = "#8B8FA7"
-	colorError      = "#FF5C7C"
+	colorFg      = "7" // default text
+	colorMuted   = "8" // dim / comments
+	colorAccent1 = "4" // title accent
+	colorAccent2 = "6" // prompts / meta / header
+	colorBorder  = "6" // table borders + body
+	colorError   = "1" // errors
 )
 
-// Styles
+// Styles – foreground only, background is whatever the terminal uses.
 var (
-	titleStyle = lipgloss.NewStyle().
+	baseStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorFg))
+
+	titleStyle = baseStyle.Copy().
 			Foreground(lipgloss.Color(colorAccent1)).
 			Bold(true)
 
-	dbBadgeStyle = lipgloss.NewStyle().
+	dbBadgeStyle = baseStyle.Copy().
 			Foreground(lipgloss.Color(colorAccent2)).
 			Bold(true)
 
-	headerHelpStyle = lipgloss.NewStyle().
+	headerHelpStyle = baseStyle.Copy().
 			Foreground(lipgloss.Color(colorMuted))
 
-	hintStyle = lipgloss.NewStyle().
+	// general body text
+	textStyle = baseStyle.Copy()
+
+	// muted hints (footer legend etc.)
+	hintStyle = baseStyle.Copy().
 			Foreground(lipgloss.Color(colorMuted))
 
-	metaEchoStyle = lipgloss.NewStyle().
+	metaEchoStyle = baseStyle.Copy().
 			Foreground(lipgloss.Color(colorAccent2))
 
-	errorStyle = lipgloss.NewStyle().
+	errorStyle = baseStyle.Copy().
 			Foreground(lipgloss.Color(colorError))
 
-	tableBorderStyle = lipgloss.NewStyle().
+	tableBorderStyle = baseStyle.Copy().
 				Foreground(lipgloss.Color(colorBorder))
 
-	tableHeaderStyle = lipgloss.NewStyle().
+	tableHeaderStyle = baseStyle.Copy().
 				Foreground(lipgloss.Color(colorAccent2)).
 				Bold(true)
 
-	tableBodyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorMuted))
+	// body cells same color as borders
+	tableBodyStyle = baseStyle.Copy().
+			Foreground(lipgloss.Color(colorBorder))
 
-	promptStyle = lipgloss.NewStyle().
+	promptStyle = baseStyle.Copy().
 			Foreground(lipgloss.Color(colorAccent2)).
 			Bold(true)
 
-	inputTextStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText))
+	inputTextStyle = baseStyle.Copy().
+			Foreground(lipgloss.Color(colorFg))
 
-	footerStyle = lipgloss.NewStyle().
+	footerStyle = baseStyle.Copy().
 			Foreground(lipgloss.Color(colorMuted))
 
-	rootStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText))
+	// No global fg/bg; let terminal + individual styles handle it.
+	rootStyle     = lipgloss.NewStyle()
+	viewportStyle = lipgloss.NewStyle()
 )
+
+type Mode int
+
+const (
+	ModeQuery Mode = iota
+	ModeHelp
+)
+
+type layout struct {
+	headerLines   int
+	promptLines   int
+	contentHeight int
+}
+
+func computeLayout(width, height int) layout {
+	const headerLines = 1
+	const promptLines = 2 // prompt + footer
+
+	used := headerLines + promptLines
+	contentHeight := height - used
+	if contentHeight < 3 {
+		contentHeight = 3
+	}
+
+	return layout{
+		headerLines:   headerLines,
+		promptLines:   promptLines,
+		contentHeight: contentHeight,
+	}
+}
 
 // Model is the Bubble Tea TUI model.
 type Model struct {
-	ctx context.Context
-	db  db.DB
+	ctx         context.Context
+	db          db.DB
+	mode        Mode
+	driverLabel string
 
-	history []string        // line-based output log
+	history []string        // line-based output log (already styled)
 	input   textinput.Model // prompt
 
 	width  int
@@ -91,21 +130,29 @@ type Model struct {
 	vp viewport.Model // scrollable content area
 }
 
-func NewModel(ctx context.Context, d db.DB) Model {
+func NewModel(ctx context.Context, d db.DB, driverLabel string) Model {
+	if driverLabel == "" {
+		driverLabel = "db"
+	}
+
 	ti := textinput.New()
-	ti.Prompt = promptStyle.Render("BINSQL> ")
+	ti.Placeholder = ""
+	ti.Prompt = fmt.Sprintf("BINSQL:%s> ", driverLabel)
+	ti.PromptStyle = promptStyle
 	ti.TextStyle = inputTextStyle
 	ti.Focus()
 
 	vp := viewport.New(0, 0)
-	// we want PgUp/PgDn + mouse wheel; viewport already handles MouseMsg
+	vp.Style = viewportStyle
 
 	return Model{
-		ctx:     ctx,
-		db:      d,
-		history: []string{},
-		input:   ti,
-		vp:      vp,
+		ctx:         ctx,
+		db:          d,
+		mode:        ModeQuery,
+		driverLabel: driverLabel,
+		history:     []string{},
+		input:       ti,
+		vp:          vp,
 	}
 }
 
@@ -119,24 +166,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Help mode short-circuit
+		if m.mode == ModeHelp {
+			switch msg.String() {
+			case "esc", "q":
+				m.mode = ModeQuery
+				m.refreshViewport()
+				handled = true
+			case "ctrl+c":
+				return m, tea.Quit
+			}
+		}
+
+		if handled {
+			break
+		}
+
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
 
-		// Up/Down: command history only (no scrolling)
-		case "up":
+		case "?":
+			// Open help only when prompt is empty
 			if strings.TrimSpace(m.input.Value()) == "" {
-				m.historyPrev()
-				handled = true
-			}
-		case "down":
-			if strings.TrimSpace(m.input.Value()) == "" {
-				m.historyNext()
+				m.mode = ModeHelp
+				m.vp.SetContent(helpContent())
+				m.vp.GotoTop()
 				handled = true
 			}
 
-		// PgUp/PgDn: scroll central area
-		case "pgup":
+		// History: Ctrl+J / Ctrl+K (vim-style), always active
+		case "ctrl+k":
+			m.historyPrev()
+			handled = true
+
+		case "ctrl+j":
+			m.historyNext()
+			handled = true
+
+		// Viewport scrolling: Ctrl+U / Ctrl+D
+		case "ctrl+u":
 			if m.vp.Height > 0 {
 				m.vp.LineUp(m.vp.Height / 2)
 			} else {
@@ -144,7 +213,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			handled = true
 
-		case "pgdown":
+		case "ctrl+d":
 			if m.vp.Height > 0 {
 				m.vp.LineDown(m.vp.Height / 2)
 			} else {
@@ -167,30 +236,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Layout:
-		//   1 line header
-		//   1 line help under header
-		//   content viewport
-		//   1 blank line
-		//   1 line prompt
-		//   1 line footer help
-		headerLines := 2
-		//blankBeforePrompt := 1
-		promptLines := 1
-		//footerLines := 1
-
-		used := headerLines +  promptLines
-		vpHeight := msg.Height - used
-		if vpHeight < 3 {
-			vpHeight = 3
-		}
+		l := computeLayout(msg.Width, msg.Height)
 
 		m.vp.Width = msg.Width
-		m.vp.Height = vpHeight
+		m.vp.Height = l.contentHeight
 		m.refreshViewport()
 	}
 
-	// Let viewport see mouse / other events (scroll wheel, etc.)
 	var vpCmd tea.Cmd
 	m.vp, vpCmd = m.vp.Update(msg)
 	if vpCmd != nil {
@@ -198,7 +250,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if !handled {
-		// Rest goes to text input (typing, left/right, etc.)
 		var tiCmd tea.Cmd
 		m.input, tiCmd = m.input.Update(msg)
 		if tiCmd != nil {
@@ -212,38 +263,91 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	var b strings.Builder
 
-	// HEADER BAR
-	headerLeft := titleStyle.Render("BINSQL") + " " + dbBadgeStyle.Render("[sqlite]")
-	headerRight := headerHelpStyle.Render("\\dt tables  ·  \\e [n] expand  ·  \\q quit  ·  ↑/↓ history")
+	headerLeft := titleStyle.Render("BINSQL") + " " +
+		dbBadgeStyle.Render("["+m.driverLabel+"]")
+
+	var headerRight string
+	switch m.mode {
+	case ModeHelp:
+		headerRight = headerHelpStyle.Render("HELP · esc/q to close")
+	default:
+		headerRight = headerHelpStyle.Render("/dt tables  ·  /e [n] expand  ·  /q quit  ·  Ctrl+J/K history  ·  ? help")
+	}
+
 	header := padToWidth(headerLeft, headerRight, m.width)
 
 	b.WriteString(header)
 	b.WriteString("\n")
 
-	// Help line under header
-	// b.WriteString(hintStyle.Render(`PgUp/PgDn scroll`))
-	// b.WriteString("\n")
-
-	// CONTENT AREA (scrollable)
 	b.WriteString(m.vp.View())
 	b.WriteString("\n")
 
-	// Prompt + footer
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
-	// b.WriteString(
-	// 	footerStyle.Render("^C Quit  ·  SQL + Enter to run"),
-	// )
-	// b.WriteString("\n")
+
+	b.WriteString(
+		footerStyle.Render("^C quit  ·  Ctrl+J/K history  ·  ? help  ·  Developed with <3 by @bgunnarsson"),
+	)
+	b.WriteString("\n")
 
 	return rootStyle.Render(b.String())
+}
+
+// ---------- help content ----------
+
+func helpContent() string {
+	var lines []string
+
+	// Title
+	lines = append(lines, titleStyle.Render(" BINSQL HELP "))
+	lines = append(lines, strings.Repeat("─", 40))
+
+	// Meta commands
+	sectionTitle := headerHelpStyle.Copy().Bold(true).Render(" Meta commands ")
+	lines = append(lines, "")
+	lines = append(lines, sectionTitle)
+	lines = append(lines, helpRow(`/dt`, "List tables"))
+	lines = append(lines, helpRow(`/e N`, "Expand row N from last result"))
+	lines = append(lines, helpRow(`/q`, "Quit binsql"))
+
+	// Keys
+	sectionTitle = headerHelpStyle.Copy().Bold(true).Render(" Keys ")
+	lines = append(lines, "")
+	lines = append(lines, sectionTitle)
+	lines = append(lines, helpRow("Ctrl+J / Ctrl+K", "Command history"))
+	lines = append(lines, helpRow("Ctrl+U / Ctrl+D", "Scroll output"))
+	lines = append(lines, helpRow("enter", "Execute SQL/meta command"))
+	lines = append(lines, helpRow("?", "Show this help (when prompt is empty)"))
+	lines = append(lines, helpRow("esc / q", "Close help"))
+	lines = append(lines, helpRow("ctrl+c", "Quit immediately"))
+
+	// Tips
+	sectionTitle = headerHelpStyle.Copy().Bold(true).Render(" Tips ")
+	lines = append(lines, "")
+	lines = append(lines, sectionTitle)
+	lines = append(lines, textStyle.Render("• Use /e 1, /e 2, ... to inspect wide rows"))
+	lines = append(lines, textStyle.Render("• Most SQL works as-is; meta commands always start with /"))
+	lines = append(lines, textStyle.Render("• History keeps recent commands – use Ctrl+J / Ctrl+K"))
+	lines = append(lines, textStyle.Render("• Scroll output with Ctrl+U / Ctrl+D"))
+
+	return strings.Join(lines, "\n")
+}
+
+// Render one help row: aligned command + description.
+func helpRow(cmd, desc string) string {
+	const cmdColWidth = 18
+
+	rawCmd := padRight(cmd, cmdColWidth)
+	styledCmd := promptStyle.Render(rawCmd)
+	styledDesc := textStyle.Render(desc)
+
+	return "  " + styledCmd + "  " + styledDesc
 }
 
 // ---------- history + viewport helpers ----------
 
 func (m *Model) refreshViewport() {
 	m.vp.SetContent(strings.Join(m.history, "\n"))
-	// When we add new stuff we want to follow the tail
 	m.vp.GotoBottom()
 }
 
@@ -266,7 +370,7 @@ func (m *Model) appendStyled(line string, style lipgloss.Style) {
 func (m *Model) execute(line string) tea.Cmd {
 	m.appendStyled(">>> "+line, metaEchoStyle)
 
-	if strings.HasPrefix(line, "\\") {
+	if strings.HasPrefix(line, "/") {
 		return m.runMeta(line)
 	}
 
@@ -278,15 +382,15 @@ func (m *Model) runMeta(cmd string) tea.Cmd {
 	s := strings.TrimSpace(cmd)
 
 	switch {
-	case s == `\q`:
-		m.appendStyled("Bye.", hintStyle)
+	case s == `/q`:
+		m.appendStyled("Bye.", textStyle)
 		return tea.Quit
 
-	case s == `\dt`:
+	case s == `/dt`:
 		m.listTables()
 		return nil
 
-	case strings.HasPrefix(s, `\e`):
+	case strings.HasPrefix(s, `/e`):
 		m.expandRow(s)
 		return nil
 
@@ -296,9 +400,8 @@ func (m *Model) runMeta(cmd string) tea.Cmd {
 	}
 }
 
-// \lt – boxed table
+// /dt – boxed table of relations
 func (m *Model) listTables() {
-	// First try the original SQLite-specific query – nicer output when it works.
 	const sqliteQuery = `
 		SELECT
 			'' AS "Schema",
@@ -316,7 +419,6 @@ func (m *Model) listTables() {
 
 	rows, err := m.db.Query(m.ctx, sqliteQuery)
 	if err != nil {
-		// Probably not SQLite (e.g. Postgres) – fall back to the driver’s ListTables.
 		names, err2 := m.db.ListTables(m.ctx)
 		if err2 != nil {
 			m.appendStyled("error listing tables: "+err2.Error(), errorStyle)
@@ -327,7 +429,6 @@ func (m *Model) listTables() {
 			return
 		}
 
-		// Build a generic single-column result set so we can reuse renderBoxTable.
 		rows = &db.Rows{
 			Columns: []db.Column{
 				{Name: "Table", Type: ""},
@@ -353,7 +454,7 @@ func (m *Model) listTables() {
 
 	lines := renderBoxTable(rows, maxColWidth)
 
-	m.appendStyled("List of relations", hintStyle)
+	m.appendStyled("List of relations", textStyle)
 	for i, line := range lines {
 		switch i {
 		case 1:
@@ -364,7 +465,7 @@ func (m *Model) listTables() {
 			m.appendLines(tableBodyStyle.Render(line))
 		}
 	}
-	m.appendStyled(fmt.Sprintf("(%d rows)", len(rows.Data)), hintStyle)
+	m.appendStyled(fmt.Sprintf("(%d rows)", len(rows.Data)), textStyle)
 }
 
 // Standard SELECT overview – boxed table
@@ -383,7 +484,7 @@ func (m *Model) runSQL(sqlStr string) {
 	}
 
 	if len(rows.Data) > 0 {
-		m.appendStyled(`Use \e [rowNumber] to expand a row (example: \e 1).`, hintStyle)
+		m.appendStyled(`Use /e [rowNumber] to expand a row (example: /e 1).`, textStyle)
 	}
 
 	maxColWidth := 40
@@ -399,17 +500,17 @@ func (m *Model) runSQL(sqlStr string) {
 		switch i {
 		case 1:
 			m.appendLines(tableHeaderStyle.Render(line))
-		case 0, 2, len(lines) - 1:
+		case 0, 2, len(lines)-1:
 			m.appendLines(tableBorderStyle.Render(line))
 		default:
 			m.appendLines(tableBodyStyle.Render(line))
 		}
 	}
 
-	m.appendStyled(fmt.Sprintf("(%d rows)", len(rows.Data)), hintStyle)
+	m.appendStyled(fmt.Sprintf("(%d rows)", len(rows.Data)), textStyle)
 }
 
-// \e / \e 3 – expand row
+// /e / /e 3 – expand row
 func (m *Model) expandRow(cmd string) {
 	if m.lastResult == nil || len(m.lastResult.Data) == 0 {
 		m.appendStyled("no previous result to expand", errorStyle)
@@ -423,7 +524,7 @@ func (m *Model) expandRow(cmd string) {
 	if len(parts) > 1 {
 		n, err := strconv.Atoi(parts[1])
 		if err != nil || n < 1 || n > len(m.lastResult.Data) {
-			m.appendStyled("usage: \\e [rowNumber]", errorStyle)
+			m.appendStyled("usage: /e [rowNumber]", errorStyle)
 			return
 		}
 		idx = n
@@ -438,7 +539,7 @@ func (m *Model) expandRow(cmd string) {
 		}
 	}
 
-	m.appendStyled(fmt.Sprintf("Row %d", idx), hintStyle)
+	m.appendStyled(fmt.Sprintf("Row %d", idx), textStyle)
 
 	for i, col := range m.lastResult.Columns {
 		key := padRight(col.Name, maxKey)
@@ -515,8 +616,8 @@ func formatValue(v any) string {
 	}
 }
 
-func Run(ctx context.Context, d db.DB) error {
-	m := NewModel(ctx, d)
+func Run(ctx context.Context, d db.DB, driverLabel string) error {
+	m := NewModel(ctx, d, driverLabel)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
@@ -534,14 +635,12 @@ func padToWidth(left, right string, width int) string {
 	minGap := 2
 	maxLen := width
 	if maxLen < len(left)+minGap {
-		// can't fit right side at all
 		if len(left) > width {
 			return left[:width]
 		}
 		return left
 	}
 
-	// space left for right side
 	spaceForRight := width - len(left) - minGap
 	if spaceForRight <= 0 {
 		if len(left) > width {
@@ -558,8 +657,7 @@ func padToWidth(left, right string, width int) string {
 	return left + gap + right
 }
 
-// boxed table rendering
-
+// boxed table rendering (text-based, but clean)
 func renderBoxTable(rows *db.Rows, maxColWidth int) []string {
 	n := len(rows.Columns)
 	if n == 0 {
