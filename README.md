@@ -10,7 +10,9 @@ The goal is a fast, keyboard‑driven way to inspect schemas and data without le
 
 - Interactive REPL with line editing
 - Box‑drawing table output
-- Row expansion (`\e [rowNumber]`)
+- Row expansion (`/e [rowNumber]`)
+- Vim‑style command history (Ctrl+J / Ctrl+K)
+- Driver‑aware prompt (`BINSQL:sqlite>`, `BINSQL:postgres>`, etc.)
 - Driver‑agnostic core with per‑database adapters
 - Support for:
   - **SQLite**
@@ -18,6 +20,7 @@ The goal is a fast, keyboard‑driven way to inspect schemas and data without le
   - **SQL Server** (including Azure AD via `fedauth=ActiveDirectoryAzCli`)
   - **MySQL**
 - Non‑interactive mode for one‑off queries (suitable for scripting)
+- Respects your terminal theme (uses ANSI foreground colors only)
 
 ---
 
@@ -142,36 +145,59 @@ binsql mysql "user:pass@tcp(localhost:3306)/mydb?parseTime=true&charset=utf8mb4"
 
 ---
 
-## Interactive commands
+## Interactive TUI
 
-Once connected (any driver), you get a prompt:
+Once connected (any driver), you get a header and prompt.
+
+Header (example):
 
 ```text
-BINSQL [sqlite]   \dt tables  ·  \e [n] expand  ·  \q quit
->>> 
+BINSQL [sqlite]   /dt tables  ·  /e [n] expand  ·  /q quit  ·  Ctrl+J/K history  ·  ? help
 ```
 
-Supported commands:
+Prompt (driver‑aware):
 
-- `\q` – quit
-- `\dt` – list tables (driver‑aware)
-- `\e [rowNumber]` – expand a row from the last result set
+```text
+BINSQL:sqlite> 
+BINSQL:postgres> 
+BINSQL:mssql> 
+BINSQL:mysql> 
+```
+
+### Meta commands
+
+Meta commands always start with `/`:
+
+- `/q` – quit
+- `/dt` – list tables (driver‑aware)
+- `/e [rowNumber]` – expand a row from the last result set
 
 Any other input is treated as SQL and sent to the connected database.
 
-### Examples
+### Keybindings
+
+- `Ctrl+J` / `Ctrl+K` – navigate command history (down/up, Vim‑style)
+- `Ctrl+U` / `Ctrl+D` – scroll output viewport up/down
+- `?` (on empty prompt) – open help screen
+- `esc` / `q` – close help screen
+- `Ctrl+C` – quit immediately
+
+---
+
+## Examples
 
 List tables:
 
 ```text
->>> \dt
+BINSQL [sqlite]   /dt tables  ·  /e [n] expand  ·  /q quit  ·  Ctrl+J/K history  ·  ? help
+BINSQL:sqlite> /dt
 List of relations
 ┌─────────────────────────────┐
 │ Table                       │
 ├─────────────────────────────┤
-│ public.languages            │
-│ public.documents            │
-│ public.media                │
+│ languages                   │
+│ documents                   │
+│ media                       │
 └─────────────────────────────┘
 (3 rows)
 ```
@@ -179,8 +205,8 @@ List of relations
 Select and expand a row:
 
 ```text
->>> select * from languages
-Use \e [rowNumber] to expand a row (example: \e 1).
+BINSQL:sqlite> select * from languages
+Use /e [rowNumber] to expand a row (example: /e 1).
 ┌────────┬────────┬──────────────┬─────────────┐
 │ id     │ code   │ name         │ isdefault   │
 ├────────┼────────┼──────────────┼─────────────┤
@@ -188,13 +214,18 @@ Use \e [rowNumber] to expand a row (example: \e 1).
 └────────┴────────┴──────────────┴─────────────┘
 (1 rows)
 
->>> \e 1
+BINSQL:sqlite> /e 1
 Row 1
-id        > ...
-code      > en-US
-name      > English (US)
-isdefault > true
+id        › ...
+code      › en-US
+name      › English (US)
+isdefault › true
 ```
+
+Command history (most recent first) with Vim‑style navigation:
+
+- Press `Ctrl+K` to move **up** through history
+- Press `Ctrl+J` to move **down** through history (towards newer/empty)
 
 ---
 
@@ -238,4 +269,3 @@ Adding a new database is mostly a matter of implementing that interface and upda
 ## License
 
 MIT.
-
