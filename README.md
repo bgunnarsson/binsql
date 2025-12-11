@@ -1,6 +1,6 @@
 # BINSQL
 
-`BINSQL` is a small terminal UI for exploring SQL databases. It supports SQLite, PostgreSQL, SQL Server (including Azure AD auth via Azure CLI), and MySQL from a single binary.
+`BINSQL` is a terminal UI for exploring SQL databases. It supports SQLite, PostgreSQL, SQL Server (including Azure AD auth via Azure CLI), and MySQL from a single binary.
 
 The goal is a fast, keyboard‑driven way to inspect schemas and data without leaving the terminal.
 
@@ -8,11 +8,15 @@ The goal is a fast, keyboard‑driven way to inspect schemas and data without le
 
 ## Features
 
-- Interactive REPL with line editing
-- Box‑drawing table output
-- Row expansion (`/e [rowNumber]`)
-- Vim‑style command history (Ctrl+J / Ctrl+K)
-- Driver‑aware prompt (`BINSQL:sqlite>`, `BINSQL:postgres>`, etc.)
+- Full‑screen terminal UI (TUI) with:
+  - **Tables pane** (list of tables)
+  - **Results grid** (auto‑sized columns, zebra striping)
+  - **Query editor**
+  - **Status bar**
+- Row detail view (expand the currently selected row)
+- Built‑in help overlay (`Ctrl+/`)
+- Vim‑style pane navigation with `Ctrl+h/j/k/l`
+- Driver‑aware connection header (`BINSQL SQLITE`, `BINSQL POSTGRES`, etc.)
 - Driver‑agnostic core with per‑database adapters
 - Support for:
   - **SQLite**
@@ -20,7 +24,8 @@ The goal is a fast, keyboard‑driven way to inspect schemas and data without le
   - **SQL Server** (including Azure AD via `fedauth=ActiveDirectoryAzCli`)
   - **MySQL**
 - Non‑interactive mode for one‑off queries (suitable for scripting)
-- Respects your terminal theme (uses ANSI foreground colors only)
+
+The UI uses a Catppuccin‑inspired dark theme; colors are chosen to sit nicely on typical dark terminals.
 
 ---
 
@@ -49,7 +54,7 @@ chmod +x scripts/build.sh
 ./scripts/build.sh
 ```
 
-This produces platform‑specific binaries in `./dist` (names like `binsql-darwin-arm64`, `binsql-linux-amd64`, etc.).
+This can produce platform‑specific binaries in `./dist` (names like `binsql-darwin-arm64`, `binsql-linux-amd64`, etc.).
 
 ---
 
@@ -65,8 +70,8 @@ Only `-q` is supported as a flag; everything else is positional.
 
 - First argument: **driver**
 - Second argument: **database path or DSN** (driver‑specific)
-- If `-q` is omitted and stdout is a TTY → interactive TUI
-- If `-q` is provided or stdout is not a TTY → non‑interactive, prints a single result table and exits
+- If `-q` is omitted and stdout is a TTY → interactive **TUI**
+- If `-q` is provided or stdout is not a TTY → **non‑interactive**; prints a single result table and exits
 
 ### Drivers
 
@@ -118,15 +123,15 @@ binsql mssql "sqlserver://user:pass@sql-server:1433?database=MyDb&encrypt=disabl
 
 1. Log in with Azure CLI:
 
-```bash
-az login
-```
+   ```bash
+   az login
+   ```
 
 2. Run `binsql` with `fedauth=ActiveDirectoryAzCli`:
 
-```bash
-PYTHONWARNINGS=ignore binsql mssql "server=xxx;database=xxx;encrypt=true;fedauth=ActiveDirectoryAzCli"
-```
+   ```bash
+   PYTHONWARNINGS=ignore binsql mssql "server=xxx;database=xxx;encrypt=true;fedauth=ActiveDirectoryAzCli"
+   ```
 
 Notes:
 
@@ -147,85 +152,94 @@ binsql mysql "user:pass@tcp(localhost:3306)/mydb?parseTime=true&charset=utf8mb4"
 
 ## Interactive TUI
 
-Once connected (any driver), you get a header and prompt.
+When you start `binsql` without `-q`, you get a full‑screen interface built with [`tview`](https://github.com/rivo/tview) and [`tcell`](https://github.com/gdamore/tcell).
 
-Header (example):
+### Layout
 
-```text
-BINSQL [sqlite]   /dt tables  ·  /e [n] expand  ·  /q quit  ·  Ctrl+J/K history  ·  ? help
-```
+The screen is split into four main areas:
 
-Prompt (driver‑aware):
+- **Connection header** (top‑left)
+  - Shows `BINSQL <DRIVER>` (for example `BINSQL SQLITE`, `BINSQL POSTGRES`).
+- **Tables pane** (left column)
+  - Lists tables for the current database.
+- **Results grid** (main area)
+  - Box‑drawing table with auto‑sized columns and zebra striping.
+- **Query input + Status bar** (bottom)
+  - Query box with prompt (`>`) and a status line with messages like:
+    - `Tables loaded. Use arrows + Enter, or type a query below.`
+    - `Query OK (42 rows, 3ms)`
 
-```text
-BINSQL:sqlite> 
-BINSQL:postgres> 
-BINSQL:mssql> 
-BINSQL:mysql> 
-```
+### Pane behaviour
 
-### Meta commands
+#### Tables pane
 
-Meta commands always start with `/`:
+- Press **Enter** on a table name to run:
 
-- `/q` – quit
-- `/dt` – list tables (driver‑aware)
-- `/e [rowNumber]` – expand a row from the last result set
+  ```sql
+  SELECT * FROM <table> LIMIT 100;
+  ```
 
-Any other input is treated as SQL and sent to the connected database.
+- The query is also written into the query input box so you can tweak it.
 
-### Keybindings
+#### Results grid
 
-- `Ctrl+J` / `Ctrl+K` – navigate command history (down/up, Vim‑style)
-- `Ctrl+U` / `Ctrl+D` – scroll output viewport up/down
-- `?` (on empty prompt) – open help screen
-- `esc` / `q` – close help screen
-- `Ctrl+C` – quit immediately
+- Arrow keys move the selection between cells.
+- Press **Enter** to open a **Row detail** overlay for the currently selected row:
+  - One column per section (name + value).
+  - Good for long text, JSON, or GUIDs that are truncated in the grid.
 
----
+#### Query input
 
-## Examples
+- Type any SQL and press **Enter** to run it.
+- Results appear in the grid, and the status bar shows row count + execution time.
 
-List tables:
+### Global keybindings
 
-```text
-BINSQL [sqlite]   /dt tables  ·  /e [n] expand  ·  /q quit  ·  Ctrl+J/K history  ·  ? help
-BINSQL:sqlite> /dt
-List of relations
-┌─────────────────────────────┐
-│ Table                       │
-├─────────────────────────────┤
-│ languages                   │
-│ documents                   │
-│ media                       │
-└─────────────────────────────┘
-(3 rows)
-```
+These work from anywhere in the main screen:
 
-Select and expand a row:
+- **Ctrl+Q** / **Ctrl+C** – quit
+- **Ctrl+R** – reload tables list
+- **Ctrl+/** – toggle help overlay
+- **Ctrl+:** – focus the query input from anywhere
 
-```text
-BINSQL:sqlite> select * from languages
-Use /e [rowNumber] to expand a row (example: /e 1).
-┌────────┬────────┬──────────────┬─────────────┐
-│ id     │ code   │ name         │ isdefault   │
-├────────┼────────┼──────────────┼─────────────┤
-│ ...    │ en-US  │ English (US) │ true        │
-└────────┴────────┴──────────────┴─────────────┘
-(1 rows)
+Vim‑style pane navigation:
 
-BINSQL:sqlite> /e 1
-Row 1
-id        › ...
-code      › en-US
-name      › English (US)
-isdefault › true
-```
+- **Ctrl+h** – focus **Tables** (left)
+- **Ctrl+l** – focus **Results** (right)
+- **Ctrl+j** – focus **Query** (down)
+- **Ctrl+k** – focus **Status** (up)
 
-Command history (most recent first) with Vim‑style navigation:
+### Overlays
 
-- Press `Ctrl+K` to move **up** through history
-- Press `Ctrl+J` to move **down** through history (towards newer/empty)
+Two overlays exist: **Row detail** and **Help**.
+
+- Close overlays with:
+  - **Esc**, **Enter**, **Ctrl+Q**, or **Ctrl+/**
+
+#### Row detail
+
+Opened with **Enter** while the results grid is focused.
+
+- Shows each column as:
+
+  ```text
+  columnName:
+    value
+  ```
+
+- Uses a scrollable text view, so long values are easy to read.
+
+#### Help screen
+
+Opened with **Ctrl+/** (or `Ctrl+?` on keyboards where that’s the same chord).
+
+It lists:
+
+- Global shortcuts
+- Pane‑specific behaviour
+- Notes about mouse support (scroll + click)
+
+Close with **Esc**, **Enter**, **Ctrl+Q**, or **Ctrl+/**.
 
 ---
 
@@ -236,10 +250,12 @@ When used in scripts or pipelines, `binsql` renders a single result and exits.
 Example:
 
 ```bash
-binsql -q "select count(*) as n from languages" sqlite ./cms.data.sqlite
+binsql -q "select count(*) as n from languages"   sqlite ./cms.data.sqlite
 ```
 
 Driver‑specific default list‑tables queries are used when `-q` is omitted but stdout is not a TTY.
+
+Output is a box‑drawing table similar to the TUI’s grid.
 
 ---
 
@@ -252,7 +268,8 @@ Each database has a small adapter implementing a common interface (`db.DB`):
 - `internal/db/mssql`
 - `internal/db/mysql`
 
-The app layer (`internal/app`) selects an adapter based on the chosen driver and DSN. The UI (`internal/ui`) is driver‑agnostic and only talks to the interface.
+The app layer (`internal/app`) selects an adapter based on the chosen driver and DSN.  
+The UI (`internal/ui`) is driver‑agnostic and only talks to that interface.
 
 Adding a new database is mostly a matter of implementing that interface and updating the driver enum/factory.
 
