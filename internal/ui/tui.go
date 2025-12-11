@@ -50,15 +50,15 @@ func Run(ctx context.Context, sdb db.DB, label string) error {
 	// Global keybindings – all stay on the UI goroutine.
 	state.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		frontName, _ := state.pages.GetFrontPage()
+		focus := state.app.GetFocus()
 
-		// When an overlay is open, ESC/Enter/q/? just close it.
+		// When an overlay is open, ESC/Enter/Ctrl+Q/Ctrl+/ close it.
 		if frontName == "rowDetail" || frontName == "help" {
 			switch {
 			case ev.Key() == tcell.KeyEsc,
 				ev.Key() == tcell.KeyEnter,
-				ev.Key() == tcell.KeyCtrlC,
-				ev.Rune() == 'q',
-				ev.Rune() == '?':
+				isCtrlKey(ev, tcell.KeyCtrlQ, 'q'),
+				isCtrlKey(ev, 0, '/'):
 				state.pages.RemovePage(frontName)
 				state.app.SetFocus(state.result)
 				return nil
@@ -66,7 +66,7 @@ func Run(ctx context.Context, sdb db.DB, label string) error {
 			return ev
 		}
 
-		// Vim-style pane navigation
+		// Vim-style pane navigation (Ctrl+h/j/k/l)
 		switch {
 		case isCtrlKey(ev, tcell.KeyCtrlH, 'h'): // left
 			state.app.SetFocus(state.tables)
@@ -83,28 +83,34 @@ func Run(ctx context.Context, sdb db.DB, label string) error {
 		}
 
 		switch {
-		case ev.Key() == tcell.KeyCtrlC:
+		// Quit: Ctrl+Q or Ctrl+C
+		case isCtrlKey(ev, tcell.KeyCtrlQ, 'q') || ev.Key() == tcell.KeyCtrlC:
 			state.app.Stop()
 			return nil
-		case ev.Rune() == 'q' || ev.Key() == tcell.KeyEsc:
-			state.app.Stop()
-			return nil
-		case ev.Rune() == ':':
+
+		// Focus query: Ctrl+:
+		// (Ctrl+Shift+; on a US layout – rune ':' with Ctrl)
+		case isCtrlKey(ev, 0, ':') && focus != state.query:
 			state.app.SetFocus(state.query)
 			return nil
-		case ev.Rune() == 'r':
+
+		// Reload tables: Ctrl+R
+		case isCtrlKey(ev, tcell.KeyCtrlR, 'r'):
 			_ = state.loadTables()
 			return nil
-		case ev.Rune() == '?':
+
+		// Help: Ctrl+/
+		case isCtrlKey(ev, 0, '/'):
 			state.toggleHelp()
 			return nil
-		case ev.Key() == tcell.KeyEnter:
-			// If focus is on result table, expand current row.
-			if state.app.GetFocus() == state.result {
-				state.expandCurrentRow()
-				return nil
-			}
+
+		// Row expand: Enter while focused on results
+		case ev.Key() == tcell.KeyEnter && focus == state.result:
+			state.expandCurrentRow()
+			return nil
 		}
+
+		// Let widgets handle the key normally.
 		return ev
 	})
 
@@ -114,25 +120,45 @@ func Run(ctx context.Context, sdb db.DB, label string) error {
 	return state.app.Run()
 }
 
+// Catppuccin Mocha theme.
+// - Borders (all, including tables): #595B72
+// - Titles (section captions): cyan #89DCEB
+// - BINSQL <driver> text keeps its own accent color in buildLayout.
 func (s *uiState) setupTheme() {
-	// Dark theme similar to Lazysql style.
-	tview.Styles.PrimitiveBackgroundColor = tcell.NewRGBColor(15, 15, 32)  // background
-	tview.Styles.ContrastBackgroundColor = tcell.NewRGBColor(36, 36, 64)   // panels
-	tview.Styles.MoreContrastBackgroundColor = tcell.NewRGBColor(60, 50, 96)
-	tview.Styles.BorderColor = tcell.NewRGBColor(122, 46, 92)
-	tview.Styles.PrimaryTextColor = tcell.NewRGBColor(229, 231, 245)
-	tview.Styles.SecondaryTextColor = tcell.NewRGBColor(139, 143, 167)
-	tview.Styles.TertiaryTextColor = tcell.NewRGBColor(118, 112, 178)
-	tview.Styles.TitleColor = tcell.NewRGBColor(211, 82, 255)
-	tview.Styles.GraphicsColor = tcell.NewRGBColor(228, 142, 255)
+	// Mocha base colors
+	// base:      #1E1E2E (30, 30, 46)
+	// surface0:  #313244 (49, 50, 68)
+	// surface1:  #45475A (69, 71, 90)
+	// text:      #CDD6F4 (205, 214, 244)
+	// subtext0:  #A6ADC8 (166, 173, 200)
+	// overlay2:  #9399B2 (147, 153, 178)
+	// borders:   #595B72 (89, 91, 114)
+	// cyan:      #89DCEB (137, 220, 235)
+
+	tview.Styles.PrimitiveBackgroundColor = tcell.NewRGBColor(30, 30, 46)    // base
+	tview.Styles.ContrastBackgroundColor = tcell.NewRGBColor(49, 50, 68)     // surface0
+	tview.Styles.MoreContrastBackgroundColor = tcell.NewRGBColor(69, 71, 90) // surface1
+
+	// all borders (frames, table borders, separators)
+	tview.Styles.BorderColor = tcell.NewRGBColor(89, 91, 114)
+
+	tview.Styles.PrimaryTextColor = tcell.NewRGBColor(205, 214, 244) // text
+	tview.Styles.SecondaryTextColor = tcell.NewRGBColor(166, 173, 200)
+	tview.Styles.TertiaryTextColor = tcell.NewRGBColor(147, 153, 178)
+
+	// section titles cyan
+	tview.Styles.TitleColor = tcell.NewRGBColor(137, 220, 235)
+
+	// graphics (lines / separators) same as border color
+	tview.Styles.GraphicsColor = tcell.NewRGBColor(89, 91, 114)
 }
 
 func (s *uiState) buildLayout() tview.Primitive {
-	// Connection header: "BINSQL <DRIVER>"
+	// Connection header: "BINSQL <DRIVER>" with existing accent color.
 	header := tview.NewTextView().
 		SetTextAlign(tview.AlignLeft).
 		SetDynamicColors(true).
-		SetText(fmt.Sprintf("[::b]BINSQL[-]  [purple]%s[-]", strings.ToUpper(s.label)))
+		SetText(fmt.Sprintf("[::b]BINSQL[-]  [#C0A1F0]%s[-]", strings.ToUpper(s.label)))
 
 	header.SetBorder(true)
 	header.SetBorderPadding(0, 0, 1, 1)
@@ -156,6 +182,13 @@ func (s *uiState) buildLayout() tview.Primitive {
 		s.query.SetText(sql)
 		s.runQuery(sql) // synchronous
 	})
+
+	// HELP BOX under tables, no title.
+	helpBox := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft).
+		SetText(" Help: Ctrl+?")
+	helpBox.SetBorder(true)
 
 	// RESULT TABLE
 	s.result = tview.NewTable().
@@ -191,7 +224,8 @@ func (s *uiState) buildLayout() tview.Primitive {
 	left := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(header, 3, 0, false).
-		AddItem(s.tables, 0, 1, true)
+		AddItem(s.tables, 0, 1, true).
+		AddItem(helpBox, 3, 0, false)
 
 	main := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(s.result, 0, 1, false).
@@ -294,14 +328,13 @@ func (s *uiState) renderRows(rows *db.Rows) {
 		}
 	}
 
-	// header
+	// header (no special background color – use base theme)
 	for colIdx, col := range rows.Columns {
 		headerText := padRight(col.Name, colWidths[colIdx])
 		cell := tview.NewTableCell(headerText).
 			SetAlign(tview.AlignLeft).
 			SetSelectable(false).
-			SetAttributes(tcell.AttrBold).
-			SetBackgroundColor(tview.Styles.ContrastBackgroundColor)
+			SetAttributes(tcell.AttrBold)
 		s.result.SetCell(0, colIdx, cell)
 	}
 
@@ -325,9 +358,9 @@ func (s *uiState) renderRows(rows *db.Rows) {
 				SetAlign(align).
 				SetSelectable(true)
 
-			// simple zebra striping
+			// zebra striping on a slightly darker Mocha background (mantle: #181825)
 			if rIdx%2 == 1 {
-				cell.SetBackgroundColor(tcell.NewRGBColor(20, 20, 40))
+				cell.SetBackgroundColor(tcell.NewRGBColor(24, 24, 37))
 			}
 
 			s.result.SetCell(rIdx+1, cIdx, cell)
@@ -380,7 +413,7 @@ func (s *uiState) expandCurrentRow() {
 
 	header := tview.NewTextView().
 		SetTextAlign(tview.AlignCenter).
-		SetText(" Row detail (ESC/Enter/q/? to close) ")
+		SetText(" Row detail (ESC/Enter/Ctrl+Q/Ctrl+/ to close) ")
 	header.SetDynamicColors(false)
 
 	layout := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -422,29 +455,29 @@ func (s *uiState) toggleHelp() {
 func (s *uiState) showHelp() {
 	const helpText = `
 [::b]Global[-]
-  q / ESC          Quit
-  Ctrl+C           Quit
-  ?                Toggle this help
+  Ctrl+Q / Ctrl+C   Quit
+  Ctrl+/            Toggle this help
 
 [::b]Navigation[-]
-  ↑ / ↓            Move in lists/tables
-  Ctrl+h           Focus tables (left)
-  Ctrl+l           Focus results (right)
-  Ctrl+j           Focus query (down)
-  Ctrl+k           Focus status (up)
+  ↑ / ↓             Move in lists/tables
+  Ctrl+h            Focus tables (left)
+  Ctrl+l            Focus results (right)
+  Ctrl+j            Focus query (down)
+  Ctrl+k            Focus status (up)
 
 [::b]Tables pane[-]
-  Enter            SELECT * FROM <table> LIMIT 100
+  Enter             SELECT * FROM <table> LIMIT 100
 
 [::b]Results pane[-]
-  Enter            Expand current row
+  Enter             Expand current row
 
 [::b]Query input[-]
-  Enter            Run SQL in the input
+  Enter             Run SQL in the input
+  Ctrl+:            Focus query from anywhere
 
 [::b]Notes[-]
   Mouse support is enabled (scroll, click).
-  Row/detail/help overlays close with ESC, Enter, q, or ?.`
+  Overlays close with ESC, Enter, Ctrl+Q, or Ctrl+/.`
 
 	txt := tview.NewTextView().
 		SetDynamicColors(true).
@@ -457,7 +490,7 @@ func (s *uiState) showHelp() {
 	header := tview.NewTextView().
 		SetTextAlign(tview.AlignCenter).
 		SetDynamicColors(true).
-		SetText("[::b]binsql help (ESC/Enter/q/? to close)[-]")
+		SetText("[::b]binsql help (ESC/Enter/Ctrl+Q/Ctrl+/ to close)[-]")
 
 	layout := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(header, 3, 0, false).
@@ -494,7 +527,7 @@ func (s *uiState) setStatus(msg string) {
 
 // isCtrlKey checks for Ctrl+<ch>, handling both KeyCtrlX and rune+modifier.
 func isCtrlKey(ev *tcell.EventKey, key tcell.Key, ch rune) bool {
-	if ev.Key() == key {
+	if key != 0 && ev.Key() == key {
 		return true
 	}
 	return ev.Rune() == ch && (ev.Modifiers()&tcell.ModCtrl) != 0
@@ -588,3 +621,4 @@ func looksNumeric(s string) bool {
 	}
 	return hasDigit
 }
+
