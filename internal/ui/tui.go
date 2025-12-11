@@ -3,751 +3,588 @@ package ui
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
-	textinput "github.com/charmbracelet/bubbles/textinput"
-	viewport "github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 
 	"github.com/bgunnarsson/binsql/internal/db"
 )
 
-// ANSI palette indices – actual colors come from the user's terminal theme.
-const (
-	colorFg      = "7" // default text
-	colorMuted   = "8" // dim / comments
-	colorAccent1 = "4" // title accent
-	colorAccent2 = "6" // prompts / meta / header
-	colorBorder  = "6" // table borders + body
-	colorError   = "1" // errors
-)
+type uiState struct {
+	ctx    context.Context
+	db     db.DB
+	label  string
+	app    *tview.Application
+	pages  *tview.Pages
+	tables *tview.List
 
-// Styles – foreground only, background is whatever the terminal uses.
-var (
-	baseStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorFg))
-
-	titleStyle = baseStyle.Copy().
-			Foreground(lipgloss.Color(colorAccent1)).
-			Bold(true)
-
-	dbBadgeStyle = baseStyle.Copy().
-			Foreground(lipgloss.Color(colorAccent2)).
-			Bold(true)
-
-	headerHelpStyle = baseStyle.Copy().
-			Foreground(lipgloss.Color(colorMuted))
-
-	// general body text
-	textStyle = baseStyle.Copy()
-
-	// muted hints (footer legend etc.)
-	hintStyle = baseStyle.Copy().
-			Foreground(lipgloss.Color(colorMuted))
-
-	metaEchoStyle = baseStyle.Copy().
-			Foreground(lipgloss.Color(colorAccent2))
-
-	errorStyle = baseStyle.Copy().
-			Foreground(lipgloss.Color(colorError))
-
-	tableBorderStyle = baseStyle.Copy().
-				Foreground(lipgloss.Color(colorBorder))
-
-	tableHeaderStyle = baseStyle.Copy().
-				Foreground(lipgloss.Color(colorAccent2)).
-				Bold(true)
-
-	// body cells same color as borders
-	tableBodyStyle = baseStyle.Copy().
-			Foreground(lipgloss.Color(colorBorder))
-
-	promptStyle = baseStyle.Copy().
-			Foreground(lipgloss.Color(colorAccent2)).
-			Bold(true)
-
-	inputTextStyle = baseStyle.Copy().
-			Foreground(lipgloss.Color(colorFg))
-
-	footerStyle = baseStyle.Copy().
-			Foreground(lipgloss.Color(colorMuted))
-
-	// No global fg/bg; let terminal + individual styles handle it.
-	rootStyle     = lipgloss.NewStyle()
-	viewportStyle = lipgloss.NewStyle()
-)
-
-type Mode int
-
-const (
-	ModeQuery Mode = iota
-	ModeHelp
-)
-
-type layout struct {
-	headerLines   int
-	promptLines   int
-	contentHeight int
+	result   *tview.Table
+	query    *tview.InputField
+	status   *tview.TextView
+	lastRows *db.Rows
 }
 
-func computeLayout(width, height int) layout {
-	const headerLines = 1
-	const promptLines = 2 // prompt + footer
-
-	used := headerLines + promptLines
-	contentHeight := height - used
-	if contentHeight < 3 {
-		contentHeight = 3
+// Run starts the interactive TUI using tview/tcell.
+func Run(ctx context.Context, sdb db.DB, label string) error {
+	state := &uiState{
+		ctx:   ctx,
+		db:    sdb,
+		label: label, // driver name, e.g. "sqlite"
+		app:   tview.NewApplication(),
 	}
 
-	return layout{
-		headerLines:   headerLines,
-		promptLines:   promptLines,
-		contentHeight: contentHeight,
-	}
-}
+	state.setupTheme()
+	root := state.buildLayout()
 
-// Model is the Bubble Tea TUI model.
-type Model struct {
-	ctx         context.Context
-	db          db.DB
-	mode        Mode
-	driverLabel string
+	state.app.
+		SetRoot(root, true).
+		EnableMouse(true)
 
-	history []string        // line-based output log (already styled)
-	input   textinput.Model // prompt
+	// initial focus on tables pane
+	state.app.SetFocus(state.tables)
 
-	width  int
-	height int
+	// Global keybindings – all stay on the UI goroutine.
+	state.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		frontName, _ := state.pages.GetFrontPage()
 
-	lastResult *db.Rows
-
-	cmdHistory []string
-	cmdIndex   int
-
-	vp viewport.Model // scrollable content area
-}
-
-func NewModel(ctx context.Context, d db.DB, driverLabel string) Model {
-	if driverLabel == "" {
-		driverLabel = "db"
-	}
-
-	ti := textinput.New()
-	ti.Placeholder = ""
-	ti.Prompt = fmt.Sprintf("BINSQL:%s> ", driverLabel)
-	ti.PromptStyle = promptStyle
-	ti.TextStyle = inputTextStyle
-	ti.Focus()
-
-	vp := viewport.New(0, 0)
-	vp.Style = viewportStyle
-
-	return Model{
-		ctx:         ctx,
-		db:          d,
-		mode:        ModeQuery,
-		driverLabel: driverLabel,
-		history:     []string{},
-		input:       ti,
-		vp:          vp,
-	}
-}
-
-func (m Model) Init() tea.Cmd {
-	return textinput.Blink
-}
-
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	handled := false
-
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		// Help mode short-circuit
-		if m.mode == ModeHelp {
-			switch msg.String() {
-			case "esc", "q":
-				m.mode = ModeQuery
-				m.refreshViewport()
-				handled = true
-			case "ctrl+c":
-				return m, tea.Quit
+		// When an overlay is open, ESC/Enter/q/? just close it.
+		if frontName == "rowDetail" || frontName == "help" {
+			switch {
+			case ev.Key() == tcell.KeyEsc,
+				ev.Key() == tcell.KeyEnter,
+				ev.Key() == tcell.KeyCtrlC,
+				ev.Rune() == 'q',
+				ev.Rune() == '?':
+				state.pages.RemovePage(frontName)
+				state.app.SetFocus(state.result)
+				return nil
 			}
+			return ev
 		}
 
-		if handled {
-			break
+		// Vim-style pane navigation
+		switch {
+		case isCtrlKey(ev, tcell.KeyCtrlH, 'h'): // left
+			state.app.SetFocus(state.tables)
+			return nil
+		case isCtrlKey(ev, tcell.KeyCtrlL, 'l'): // right
+			state.app.SetFocus(state.result)
+			return nil
+		case isCtrlKey(ev, tcell.KeyCtrlJ, 'j'): // down
+			state.app.SetFocus(state.query)
+			return nil
+		case isCtrlKey(ev, tcell.KeyCtrlK, 'k'): // up
+			state.app.SetFocus(state.status)
+			return nil
 		}
 
-		switch msg.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-
-		case "?":
-			// Open help only when prompt is empty
-			if strings.TrimSpace(m.input.Value()) == "" {
-				m.mode = ModeHelp
-				m.vp.SetContent(helpContent())
-				m.vp.GotoTop()
-				handled = true
+		switch {
+		case ev.Key() == tcell.KeyCtrlC:
+			state.app.Stop()
+			return nil
+		case ev.Rune() == 'q' || ev.Key() == tcell.KeyEsc:
+			state.app.Stop()
+			return nil
+		case ev.Rune() == ':':
+			state.app.SetFocus(state.query)
+			return nil
+		case ev.Rune() == 'r':
+			_ = state.loadTables()
+			return nil
+		case ev.Rune() == '?':
+			state.toggleHelp()
+			return nil
+		case ev.Key() == tcell.KeyEnter:
+			// If focus is on result table, expand current row.
+			if state.app.GetFocus() == state.result {
+				state.expandCurrentRow()
+				return nil
 			}
-
-		// History: Ctrl+J / Ctrl+K (vim-style), always active
-		case "ctrl+k":
-			m.historyPrev()
-			handled = true
-
-		case "ctrl+j":
-			m.historyNext()
-			handled = true
-
-		// Viewport scrolling: Ctrl+U / Ctrl+D
-		case "ctrl+u":
-			if m.vp.Height > 0 {
-				m.vp.LineUp(m.vp.Height / 2)
-			} else {
-				m.vp.LineUp(5)
-			}
-			handled = true
-
-		case "ctrl+d":
-			if m.vp.Height > 0 {
-				m.vp.LineDown(m.vp.Height / 2)
-			} else {
-				m.vp.LineDown(5)
-			}
-			handled = true
-
-		case "enter":
-			line := strings.TrimSpace(m.input.Value())
-			if line != "" {
-				m.pushCmd(line)
-				cmd = m.execute(line)
-			}
-			m.input.SetValue("")
-			m.input.CursorEnd()
-			handled = true
 		}
+		return ev
+	})
 
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+	// Initial data load (synchronous, safe before Run).
+	_ = state.loadTables()
 
-		l := computeLayout(msg.Width, msg.Height)
+	return state.app.Run()
+}
 
-		m.vp.Width = msg.Width
-		m.vp.Height = l.contentHeight
-		m.refreshViewport()
+func (s *uiState) setupTheme() {
+	// Dark theme similar to Lazysql style.
+	tview.Styles.PrimitiveBackgroundColor = tcell.NewRGBColor(15, 15, 32)  // background
+	tview.Styles.ContrastBackgroundColor = tcell.NewRGBColor(36, 36, 64)   // panels
+	tview.Styles.MoreContrastBackgroundColor = tcell.NewRGBColor(60, 50, 96)
+	tview.Styles.BorderColor = tcell.NewRGBColor(122, 46, 92)
+	tview.Styles.PrimaryTextColor = tcell.NewRGBColor(229, 231, 245)
+	tview.Styles.SecondaryTextColor = tcell.NewRGBColor(139, 143, 167)
+	tview.Styles.TertiaryTextColor = tcell.NewRGBColor(118, 112, 178)
+	tview.Styles.TitleColor = tcell.NewRGBColor(211, 82, 255)
+	tview.Styles.GraphicsColor = tcell.NewRGBColor(228, 142, 255)
+}
+
+func (s *uiState) buildLayout() tview.Primitive {
+	// Connection header: "BINSQL <DRIVER>"
+	header := tview.NewTextView().
+		SetTextAlign(tview.AlignLeft).
+		SetDynamicColors(true).
+		SetText(fmt.Sprintf("[::b]BINSQL[-]  [purple]%s[-]", strings.ToUpper(s.label)))
+
+	header.SetBorder(true)
+	header.SetBorderPadding(0, 0, 1, 1)
+	header.SetTitle(" Connection ")
+
+	// TABLE LIST
+	s.tables = tview.NewList().
+		ShowSecondaryText(false)
+	s.tables.SetBorder(true)
+	s.tables.SetTitle(" Tables ")
+	s.tables.SetDoneFunc(func() {
+		// ESC in list -> focus query.
+		s.app.SetFocus(s.query)
+	})
+	s.tables.SetSelectedFunc(func(index int, mainText string, secondaryText string, shortcut rune) {
+		table := mainText
+		if table == "" {
+			return
+		}
+		sql := fmt.Sprintf("SELECT * FROM %s LIMIT 100", table)
+		s.query.SetText(sql)
+		s.runQuery(sql) // synchronous
+	})
+
+	// RESULT TABLE
+	s.result = tview.NewTable().
+		SetBorders(true). // show grid
+		SetFixed(1, 0)
+	s.result.SetBorder(true)
+	s.result.SetTitle(" Results ")
+	s.result.SetSelectable(true, true) // move across cells
+
+	// QUERY INPUT
+	s.query = tview.NewInputField().
+		SetLabel("> ").
+		SetFieldWidth(0) // grow with window
+	s.query.SetBorder(true)
+	s.query.SetTitle(" Query (Enter to run) ")
+	s.query.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter {
+			sql := strings.TrimSpace(s.query.GetText())
+			if sql == "" {
+				return
+			}
+			s.runQuery(sql) // synchronous
+		}
+	})
+
+	// STATUS BAR
+	s.status = tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	s.status.SetBorder(true)
+	s.status.SetTitle(" Status ")
+
+	left := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(header, 3, 0, false).
+		AddItem(s.tables, 0, 1, true)
+
+	main := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(s.result, 0, 1, false).
+		AddItem(s.query, 3, 0, false).
+		AddItem(s.status, 3, 0, false)
+
+	content := tview.NewFlex().
+		AddItem(left, 30, 0, true).
+		AddItem(main, 0, 1, false)
+
+	s.pages = tview.NewPages().
+		AddPage("main", content, true, true)
+
+	return s.pages
+}
+
+func (s *uiState) loadTables() error {
+	s.setStatus("[yellow]Loading tables…[-]")
+
+	tables, err := s.db.ListTables(s.ctx)
+	if err != nil {
+		s.setStatus(fmt.Sprintf("[red]Error loading tables: %v[-]", err))
+		return err
 	}
 
-	var vpCmd tea.Cmd
-	m.vp, vpCmd = m.vp.Update(msg)
-	if vpCmd != nil {
-		cmd = tea.Batch(cmd, vpCmd)
-	}
-
-	if !handled {
-		var tiCmd tea.Cmd
-		m.input, tiCmd = m.input.Update(msg)
-		if tiCmd != nil {
-			cmd = tea.Batch(cmd, tiCmd)
+	s.tables.Clear()
+	for _, t := range tables {
+		name := strings.TrimSpace(t)
+		if name != "" {
+			s.tables.AddItem(name, "", 0, nil)
 		}
 	}
 
-	return m, cmd
-}
-
-func (m Model) View() string {
-	var b strings.Builder
-
-	headerLeft := titleStyle.Render("BINSQL") + " " +
-		dbBadgeStyle.Render("["+m.driverLabel+"]")
-
-	var headerRight string
-	switch m.mode {
-	case ModeHelp:
-		headerRight = headerHelpStyle.Render("HELP · esc/q to close")
-	default:
-		headerRight = headerHelpStyle.Render("/dt tables  ·  /e [n] expand  ·  /q quit  ·  Ctrl+J/K history  ·  ? help")
+	if s.tables.GetItemCount() == 0 {
+		s.setStatus("[gray]No tables found.[-]")
+	} else {
+		s.tables.SetCurrentItem(0)
+		s.setStatus("[green]Tables loaded. Use arrows + Enter, or type a query below.[-]")
 	}
 
-	header := padToWidth(headerLeft, headerRight, m.width)
-
-	b.WriteString(header)
-	b.WriteString("\n")
-
-	b.WriteString(m.vp.View())
-	b.WriteString("\n")
-
-	b.WriteString(m.input.View())
-	b.WriteString("\n")
-
-	b.WriteString(
-		footerStyle.Render("^C quit  ·  Ctrl+J/K history  ·  ? help  ·  Developed with <3 by @bgunnarsson"),
-	)
-	b.WriteString("\n")
-
-	return rootStyle.Render(b.String())
-}
-
-// ---------- help content ----------
-
-func helpContent() string {
-	var lines []string
-
-	// Title
-	lines = append(lines, titleStyle.Render(" BINSQL HELP "))
-	lines = append(lines, strings.Repeat("─", 40))
-
-	// Meta commands
-	sectionTitle := headerHelpStyle.Copy().Bold(true).Render(" Meta commands ")
-	lines = append(lines, "")
-	lines = append(lines, sectionTitle)
-	lines = append(lines, helpRow(`/dt`, "List tables"))
-	lines = append(lines, helpRow(`/e N`, "Expand row N from last result"))
-	lines = append(lines, helpRow(`/q`, "Quit binsql"))
-
-	// Keys
-	sectionTitle = headerHelpStyle.Copy().Bold(true).Render(" Keys ")
-	lines = append(lines, "")
-	lines = append(lines, sectionTitle)
-	lines = append(lines, helpRow("Ctrl+J / Ctrl+K", "Command history"))
-	lines = append(lines, helpRow("Ctrl+U / Ctrl+D", "Scroll output"))
-	lines = append(lines, helpRow("enter", "Execute SQL/meta command"))
-	lines = append(lines, helpRow("?", "Show this help (when prompt is empty)"))
-	lines = append(lines, helpRow("esc / q", "Close help"))
-	lines = append(lines, helpRow("ctrl+c", "Quit immediately"))
-
-	// Tips
-	sectionTitle = headerHelpStyle.Copy().Bold(true).Render(" Tips ")
-	lines = append(lines, "")
-	lines = append(lines, sectionTitle)
-	lines = append(lines, textStyle.Render("• Use /e 1, /e 2, ... to inspect wide rows"))
-	lines = append(lines, textStyle.Render("• Most SQL works as-is; meta commands always start with /"))
-	lines = append(lines, textStyle.Render("• History keeps recent commands – use Ctrl+J / Ctrl+K"))
-	lines = append(lines, textStyle.Render("• Scroll output with Ctrl+U / Ctrl+D"))
-
-	return strings.Join(lines, "\n")
-}
-
-// Render one help row: aligned command + description.
-func helpRow(cmd, desc string) string {
-	const cmdColWidth = 18
-
-	rawCmd := padRight(cmd, cmdColWidth)
-	styledCmd := promptStyle.Render(rawCmd)
-	styledDesc := textStyle.Render(desc)
-
-	return "  " + styledCmd + "  " + styledDesc
-}
-
-// ---------- history + viewport helpers ----------
-
-func (m *Model) refreshViewport() {
-	m.vp.SetContent(strings.Join(m.history, "\n"))
-	m.vp.GotoBottom()
-}
-
-func (m *Model) appendLines(lines ...string) {
-	m.history = append(m.history, lines...)
-	if len(m.history) > 1000 {
-		m.history = m.history[len(m.history)-1000:]
-	}
-	if m.vp.Width > 0 && m.vp.Height > 0 {
-		m.refreshViewport()
-	}
-}
-
-func (m *Model) appendStyled(line string, style lipgloss.Style) {
-	m.appendLines(style.Render(line))
-}
-
-// ---------- command execution ----------
-
-func (m *Model) execute(line string) tea.Cmd {
-	m.appendStyled(">>> "+line, metaEchoStyle)
-
-	if strings.HasPrefix(line, "/") {
-		return m.runMeta(line)
-	}
-
-	m.runSQL(line)
 	return nil
 }
 
-func (m *Model) runMeta(cmd string) tea.Cmd {
-	s := strings.TrimSpace(cmd)
+func (s *uiState) runQuery(sql string) {
+	start := time.Now()
+	s.setStatus(fmt.Sprintf("[yellow]Running query…[-] [gray]%s[-]", truncateInline(sql, 80)))
 
-	switch {
-	case s == `/q`:
-		m.appendStyled("Bye.", textStyle)
-		return tea.Quit
-
-	case s == `/dt`:
-		m.listTables()
-		return nil
-
-	case strings.HasPrefix(s, `/e`):
-		m.expandRow(s)
-		return nil
-
-	default:
-		m.appendStyled("Unknown command: "+cmd, errorStyle)
-		return nil
-	}
-}
-
-// /dt – boxed table of relations
-func (m *Model) listTables() {
-	const sqliteQuery = `
-		SELECT
-			'' AS "Schema",
-			name AS "Name",
-			CASE
-				WHEN name LIKE 'sqlite_%' THEN 'SYSTEM TABLE'
-				ELSE UPPER(type)
-			END AS "Type"
-		FROM sqlite_master
-		WHERE type IN ('table','view')
-		ORDER BY
-			CASE WHEN name LIKE 'sqlite_%' THEN 0 ELSE 1 END,
-			name;
-	`
-
-	rows, err := m.db.Query(m.ctx, sqliteQuery)
+	rows, err := s.db.Query(s.ctx, sql)
 	if err != nil {
-		names, err2 := m.db.ListTables(m.ctx)
-		if err2 != nil {
-			m.appendStyled("error listing tables: "+err2.Error(), errorStyle)
-			return
-		}
-		if len(names) == 0 {
-			m.appendLines("(no relations)")
-			return
-		}
-
-		rows = &db.Rows{
-			Columns: []db.Column{
-				{Name: "Table", Type: ""},
-			},
-			Data: make([]db.Row, len(names)),
-		}
-		for i, name := range names {
-			rows.Data[i] = db.Row{name}
-		}
-	}
-
-	if len(rows.Data) == 0 {
-		m.appendLines("(no relations)")
+		s.setStatus(fmt.Sprintf("[red]Query error:[-] %v", err))
 		return
 	}
 
-	maxColWidth := 40
-	if m.width > 0 {
-		if w := (m.width - 10) / len(rows.Columns); w > 8 {
-			maxColWidth = w
-		}
-	}
-
-	lines := renderBoxTable(rows, maxColWidth)
-
-	m.appendStyled("List of relations", textStyle)
-	for i, line := range lines {
-		switch i {
-		case 1:
-			m.appendLines(tableHeaderStyle.Render(line))
-		case 0, 2, len(lines)-1:
-			m.appendLines(tableBorderStyle.Render(line))
-		default:
-			m.appendLines(tableBodyStyle.Render(line))
-		}
-	}
-	m.appendStyled(fmt.Sprintf("(%d rows)", len(rows.Data)), textStyle)
+	elapsed := time.Since(start)
+	s.renderRows(rows)
+	s.setStatus(fmt.Sprintf(
+		"[green]Query OK[-] [gray](%d rows, %s)[-]",
+		len(rows.Data),
+		elapsed.Truncate(time.Millisecond),
+	))
 }
 
-// Standard SELECT overview – boxed table
-func (m *Model) runSQL(sqlStr string) {
-	rows, err := m.db.Query(m.ctx, sqlStr)
-	if err != nil {
-		m.appendStyled("error: "+err.Error(), errorStyle)
-		return
-	}
-
-	m.lastResult = rows
+func (s *uiState) renderRows(rows *db.Rows) {
+	s.result.Clear()
+	s.lastRows = rows
 
 	if len(rows.Columns) == 0 {
-		m.appendLines("(no columns)")
 		return
 	}
 
-	if len(rows.Data) > 0 {
-		m.appendStyled(`Use /e [rowNumber] to expand a row (example: /e 1).`, textStyle)
-	}
+	const maxColWidth = 40
 
-	maxColWidth := 40
-	if m.width > 0 {
-		if w := (m.width - 10) / len(rows.Columns); w > 8 {
-			maxColWidth = w
+	colCount := len(rows.Columns)
+	colWidths := make([]int, colCount)
+
+	// base width from headers
+	for i, col := range rows.Columns {
+		colWidths[i] = runeLen(col.Name)
+		if colWidths[i] > maxColWidth {
+			colWidths[i] = maxColWidth
 		}
 	}
 
-	lines := renderBoxTable(rows, maxColWidth)
-
-	for i, line := range lines {
-		switch i {
-		case 1:
-			m.appendLines(tableHeaderStyle.Render(line))
-		case 0, 2, len(lines)-1:
-			m.appendLines(tableBorderStyle.Render(line))
-		default:
-			m.appendLines(tableBodyStyle.Render(line))
+	// refine widths from data (up to some rows)
+	rowLimit := len(rows.Data)
+	if rowLimit > 200 {
+		rowLimit = 200
+	}
+	for r := 0; r < rowLimit; r++ {
+		row := rows.Data[r]
+		for c := 0; c < colCount && c < len(row); c++ {
+			text := formatValue(row[c])
+			l := runeLen(text)
+			if l > maxColWidth {
+				l = maxColWidth
+			}
+			if l > colWidths[c] {
+				colWidths[c] = l
+			}
 		}
 	}
 
-	m.appendStyled(fmt.Sprintf("(%d rows)", len(rows.Data)), textStyle)
-}
-
-// /e / /e 3 – expand row
-func (m *Model) expandRow(cmd string) {
-	if m.lastResult == nil || len(m.lastResult.Data) == 0 {
-		m.appendStyled("no previous result to expand", errorStyle)
-		return
+	// header
+	for colIdx, col := range rows.Columns {
+		headerText := padRight(col.Name, colWidths[colIdx])
+		cell := tview.NewTableCell(headerText).
+			SetAlign(tview.AlignLeft).
+			SetSelectable(false).
+			SetAttributes(tcell.AttrBold).
+			SetBackgroundColor(tview.Styles.ContrastBackgroundColor)
+		s.result.SetCell(0, colIdx, cell)
 	}
 
-	s := strings.TrimSpace(cmd)
-	parts := strings.Fields(s)
+	// data
+	for rIdx, row := range rows.Data {
+		for cIdx := 0; cIdx < colCount && cIdx < len(row); cIdx++ {
+			text := formatValue(row[cIdx])
 
-	idx := 1
-	if len(parts) > 1 {
-		n, err := strconv.Atoi(parts[1])
-		if err != nil || n < 1 || n > len(m.lastResult.Data) {
-			m.appendStyled("usage: /e [rowNumber]", errorStyle)
-			return
+			truncated := text
+			if runeLen(truncated) > maxColWidth {
+				truncated = truncateRunes(truncated, maxColWidth-1) + "…"
+			}
+			display := padRight(truncated, colWidths[cIdx])
+
+			align := tview.AlignLeft
+			if looksNumeric(text) {
+				align = tview.AlignRight
+			}
+
+			cell := tview.NewTableCell(display).
+				SetAlign(align).
+				SetSelectable(true)
+
+			// simple zebra striping
+			if rIdx%2 == 1 {
+				cell.SetBackgroundColor(tcell.NewRGBColor(20, 20, 40))
+			}
+
+			s.result.SetCell(rIdx+1, cIdx, cell)
 		}
-		idx = n
 	}
 
-	row := m.lastResult.Data[idx-1]
+	s.result.ScrollToBeginning()
+}
 
-	maxKey := 0
-	for _, c := range m.lastResult.Columns {
-		if l := len(c.Name); l > maxKey {
-			maxKey = l
+func (s *uiState) expandCurrentRow() {
+	if s.lastRows == nil || len(s.lastRows.Data) == 0 {
+		return
+	}
+
+	rowIdx, _ := s.result.GetSelection()
+	if rowIdx <= 0 {
+		return // header
+	}
+	rowIdx-- // adjust for header row
+
+	if rowIdx < 0 || rowIdx >= len(s.lastRows.Data) {
+		return
+	}
+
+	var b strings.Builder
+	b.Grow(256)
+
+	for i, col := range s.lastRows.Columns {
+		b.WriteString(col.Name)
+		b.WriteString(":\n")
+
+		val := ""
+		if i < len(s.lastRows.Data[rowIdx]) {
+			val = formatValue(s.lastRows.Data[rowIdx][i])
 		}
+		if val == "" {
+			val = "NULL"
+		}
+		b.WriteString("  ")
+		b.WriteString(val)
+		b.WriteString("\n\n")
 	}
 
-	m.appendStyled(fmt.Sprintf("Row %d", idx), textStyle)
+	text := tview.NewTextView().
+		SetText(b.String()).
+		SetScrollable(true).
+		SetWrap(true).
+		SetWordWrap(true)
+	text.SetDynamicColors(false)
 
-	for i, col := range m.lastResult.Columns {
-		key := padRight(col.Name, maxKey)
-		val := formatValue(row[i])
+	header := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetText(" Row detail (ESC/Enter/q/? to close) ")
+	header.SetDynamicColors(false)
 
-		line := tableHeaderStyle.Render(key) +
-			"  " +
-			tableBorderStyle.Render("›") +
-			"  " +
-			tableBodyStyle.Render(val)
+	layout := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(header, 3, 0, false).
+		AddItem(text, 0, 1, true)
 
-		m.appendLines(line)
-	}
+	frame := tview.NewFrame(layout).
+		SetBorders(0, 0, 1, 1, 1, 1)
+	frame.SetBorder(true).
+		SetTitle(" Row detail ").
+		SetTitleAlign(tview.AlignLeft)
+
+	// center-ish overlay
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(
+			tview.NewFlex().SetDirection(tview.FlexRow).
+				AddItem(nil, 0, 1, false).
+				AddItem(frame, 0, 3, true).
+				AddItem(nil, 0, 1, false),
+			0, 3, true,
+		).
+		AddItem(nil, 0, 1, false)
+
+	s.pages.AddAndSwitchToPage("rowDetail", modal, true)
+	s.app.SetFocus(text)
 }
 
-// ---------- command history ----------
-
-func (m *Model) pushCmd(line string) {
-	if line == "" {
+func (s *uiState) toggleHelp() {
+	frontName, _ := s.pages.GetFrontPage()
+	if frontName == "help" {
+		s.pages.RemovePage("help")
+		s.app.SetFocus(s.result)
 		return
 	}
-	n := len(m.cmdHistory)
-	if n == 0 || m.cmdHistory[n-1] != line {
-		m.cmdHistory = append(m.cmdHistory, line)
-	}
-	m.cmdIndex = len(m.cmdHistory)
+	s.showHelp()
 }
 
-func (m *Model) historyPrev() {
-	if len(m.cmdHistory) == 0 {
-		return
-	}
-	if m.cmdIndex > 0 {
-		m.cmdIndex--
-	}
-	m.input.SetValue(m.cmdHistory[m.cmdIndex])
-	m.input.CursorEnd()
+func (s *uiState) showHelp() {
+	const helpText = `
+[::b]Global[-]
+  q / ESC          Quit
+  Ctrl+C           Quit
+  ?                Toggle this help
+
+[::b]Navigation[-]
+  ↑ / ↓            Move in lists/tables
+  Ctrl+h           Focus tables (left)
+  Ctrl+l           Focus results (right)
+  Ctrl+j           Focus query (down)
+  Ctrl+k           Focus status (up)
+
+[::b]Tables pane[-]
+  Enter            SELECT * FROM <table> LIMIT 100
+
+[::b]Results pane[-]
+  Enter            Expand current row
+
+[::b]Query input[-]
+  Enter            Run SQL in the input
+
+[::b]Notes[-]
+  Mouse support is enabled (scroll, click).
+  Row/detail/help overlays close with ESC, Enter, q, or ?.`
+
+	txt := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft).
+		SetScrollable(true).
+		SetWrap(true).
+		SetWordWrap(true)
+	txt.SetText(helpText)
+
+	header := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetDynamicColors(true).
+		SetText("[::b]binsql help (ESC/Enter/q/? to close)[-]")
+
+	layout := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(header, 3, 0, false).
+		AddItem(txt, 0, 1, true)
+
+	frame := tview.NewFrame(layout).
+		SetBorders(0, 0, 1, 1, 1, 1)
+	frame.SetBorder(true).
+		SetTitle(" Help ").
+		SetTitleAlign(tview.AlignLeft)
+
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(
+			tview.NewFlex().SetDirection(tview.FlexRow).
+				AddItem(nil, 0, 1, false).
+				AddItem(frame, 0, 3, true).
+				AddItem(nil, 0, 1, false),
+			0, 3, true,
+		).
+		AddItem(nil, 0, 1, false)
+
+	s.pages.AddAndSwitchToPage("help", modal, true)
+	s.app.SetFocus(txt)
 }
 
-func (m *Model) historyNext() {
-	if len(m.cmdHistory) == 0 {
+// setStatus updates the status bar text.
+func (s *uiState) setStatus(msg string) {
+	if s.status == nil {
 		return
 	}
-
-	if m.cmdIndex < len(m.cmdHistory)-1 {
-		m.cmdIndex++
-		m.input.SetValue(m.cmdHistory[m.cmdIndex])
-		m.input.CursorEnd()
-		return
-	}
-
-	m.cmdIndex = len(m.cmdHistory)
-	m.input.SetValue("")
-	m.input.CursorEnd()
+	s.status.SetText(msg)
 }
 
-// ---------- misc helpers ----------
+// isCtrlKey checks for Ctrl+<ch>, handling both KeyCtrlX and rune+modifier.
+func isCtrlKey(ev *tcell.EventKey, key tcell.Key, ch rune) bool {
+	if ev.Key() == key {
+		return true
+	}
+	return ev.Rune() == ch && (ev.Modifiers()&tcell.ModCtrl) != 0
+}
 
 func formatValue(v any) string {
 	if v == nil {
-		return "<null>"
+		return "NULL"
 	}
-	switch t := v.(type) {
+	switch val := v.(type) {
 	case []byte:
-		s := string(t)
-		for _, r := range s {
-			if r < 32 && r != '\n' && r != '\t' {
-				return fmt.Sprintf("<blob %d bytes>", len(t))
-			}
+		if len(val) > 256 {
+			return fmt.Sprintf("[blob %d bytes]", len(val))
 		}
-		return s
+		return string(val)
 	default:
-		return fmt.Sprint(t)
+		return fmt.Sprint(val)
 	}
 }
 
-func Run(ctx context.Context, d db.DB, driverLabel string) error {
-	m := NewModel(ctx, d, driverLabel)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, err := p.Run()
-	return err
-}
-
-// padToWidth builds: left + spaces + right, clipped to width.
-func padToWidth(left, right string, width int) string {
-	if width <= 0 {
-		if left == "" {
-			return right
-		}
-		return left + "  " + right
-	}
-
-	minGap := 2
-	maxLen := width
-	if maxLen < len(left)+minGap {
-		if len(left) > width {
-			return left[:width]
-		}
-		return left
-	}
-
-	spaceForRight := width - len(left) - minGap
-	if spaceForRight <= 0 {
-		if len(left) > width {
-			return left[:width]
-		}
-		return left
-	}
-
-	if len(right) > spaceForRight {
-		right = right[:spaceForRight]
-	}
-
-	gap := strings.Repeat(" ", width-len(left)-len(right))
-	return left + gap + right
-}
-
-// boxed table rendering (text-based, but clean)
-func renderBoxTable(rows *db.Rows, maxColWidth int) []string {
-	n := len(rows.Columns)
-	if n == 0 {
-		return []string{"(no columns)"}
-	}
-	if maxColWidth <= 0 {
-		maxColWidth = 40
-	}
-
-	widths := make([]int, n)
-	for i, col := range rows.Columns {
-		w := len(col.Name)
-		if w > maxColWidth {
-			w = maxColWidth
-		}
-		widths[i] = w
-	}
-
-	for _, r := range rows.Data {
-		for i, cell := range r {
-			s := fmt.Sprint(cell)
-			if len(s) > maxColWidth {
-				s = s[:maxColWidth]
-			}
-			if len(s) > widths[i] {
-				widths[i] = len(s)
-			}
-		}
-	}
-
-	names := make([]string, n)
-	for i, c := range rows.Columns {
-		names[i] = c.Name
-	}
-
-	var out []string
-	out = append(out, buildBorder("┌", "┬", "┐", "─", widths))
-	out = append(out, buildRow(names, widths, "│", "│"))
-	out = append(out, buildBorder("├", "┼", "┤", "─", widths))
-	for _, r := range rows.Data {
-		cells := make([]string, n)
-		for i, cell := range r {
-			s := fmt.Sprint(cell)
-			if len(s) > maxColWidth {
-				s = s[:maxColWidth]
-			}
-			cells[i] = s
-		}
-		out = append(out, buildRow(cells, widths, "│", "│"))
-	}
-	out = append(out, buildBorder("└", "┴", "┘", "─", widths))
-
-	return out
-}
-
-func buildBorder(left, mid, right, fill string, widths []int) string {
-	var b strings.Builder
-	b.WriteString(left)
-	for i, w := range widths {
-		b.WriteString(strings.Repeat(fill, w+2))
-		if i < len(widths)-1 {
-			b.WriteString(mid)
-		}
-	}
-	b.WriteString(right)
-	return b.String()
-}
-
-func buildRow(cells []string, widths []int, left, right string) string {
-	var b strings.Builder
-	b.WriteString(left)
-	for i, cell := range cells {
-		w := widths[i]
-		if len(cell) > w {
-			cell = cell[:w]
-		}
-		b.WriteString(" ")
-		b.WriteString(padRight(cell, w))
-		b.WriteString(" ")
-		if i < len(widths)-1 {
-			b.WriteString("│")
-		}
-	}
-	b.WriteString(right)
-	return b.String()
-}
-
-func padRight(s string, w int) string {
-	if len(s) >= w {
+func truncateInline(s string, max int) string {
+	if max <= 0 || len(s) <= max {
 		return s
 	}
-	return s + strings.Repeat(" ", w-len(s))
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
+}
+
+// runeLen counts runes so we don’t under/over-pad UTF-8 text.
+func runeLen(s string) int {
+	return utf8.RuneCountInString(s)
+}
+
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if runeLen(s) <= n {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for _, r := range s {
+		if i >= n {
+			break
+		}
+		b.WriteRune(r)
+		i++
+	}
+	return b.String()
+}
+
+func padRight(s string, width int) string {
+	rl := runeLen(s)
+	if rl >= width {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + (width-rl))
+	b.WriteString(s)
+	for i := 0; i < width-rl; i++ {
+		b.WriteRune(' ')
+	}
+	return b.String()
+}
+
+func looksNumeric(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	hasDigit := false
+	for i, r := range s {
+		if r == '+' || r == '-' {
+			if i != 0 {
+				return false
+			}
+			continue
+		}
+		if r == '.' || r == ',' {
+			continue
+		}
+		if unicode.IsDigit(r) {
+			hasDigit = true
+			continue
+		}
+		return false
+	}
+	return hasDigit
 }
