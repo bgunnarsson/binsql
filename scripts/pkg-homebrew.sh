@@ -91,6 +91,25 @@ echo "Tag pushed. GitHub tarball should be available at:"
 echo "  ${TARBALL_URL}"
 echo
 
+# --- Step 1.5: ensure GitHub Release exists -----------------------------
+
+if command -v gh >/dev/null 2>&1; then
+  if gh release view "${TAG}" >/dev/null 2>&1; then
+    echo "GitHub release ${TAG} already exists."
+  else
+    echo "Creating GitHub release ${TAG} via gh..."
+    gh release create "${TAG}" \
+      --title "binsql ${VERSION}" \
+      --generate-notes
+    echo "GitHub release ${TAG} created."
+  fi
+else
+  echo "gh CLI not found; skipping GitHub Release creation for ${TAG}."
+  echo "Create a release for tag ${TAG} manually if you want it visible in the Releases UI."
+fi
+
+echo
+
 # --- Step 2: compute tarball sha256 -------------------------------------
 
 TMP_TGZ="$(mktemp)"
