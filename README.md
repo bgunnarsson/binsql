@@ -14,7 +14,7 @@ The goal is a fast, keyboard‑driven way to inspect schemas and data without le
   - **Query editor**
   - **Status bar**
 - Row detail view (expand the currently selected row)
-- Built‑in help overlay (`Ctrl+/`)
+- Built‑in help overlay (`Ctrl+/` or `Ctrl+?`)
 - Vim‑style pane navigation with `Ctrl+h/j/k/l`
 - Driver‑aware connection header (`BINSQL SQLITE`, `BINSQL POSTGRES`, etc.)
 - Driver‑agnostic core with per‑database adapters
@@ -199,7 +199,7 @@ These work from anywhere in the main screen:
 
 - **Ctrl+Q** / **Ctrl+C** – quit
 - **Ctrl+R** – reload tables list
-- **Ctrl+/** – toggle help overlay
+- **Ctrl+/** / **Ctrl+?** – toggle help overlay
 - **Ctrl+:** – focus the query input from anywhere
 
 Vim‑style pane navigation:
@@ -231,7 +231,7 @@ Opened with **Enter** while the results grid is focused.
 
 #### Help screen
 
-Opened with **Ctrl+/** (or `Ctrl+?` on keyboards where that’s the same chord).
+Opened with **Ctrl+/** (or `Ctrl+?` on keyboards where that’s the same key).
 
 It lists:
 
