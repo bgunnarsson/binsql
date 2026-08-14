@@ -4,16 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // register pgx stdlib driver
 
 	"github.com/bgunnarsson/binsql/internal/db"
+	"github.com/bgunnarsson/binsql/internal/db/sqlcore"
 )
 
 type PostgresDB struct {
-	db *sql.DB
+	*sqlcore.Core
 }
 
 func Open(dsn string) (*PostgresDB, error) {
@@ -39,25 +41,38 @@ func Open(dsn string) (*PostgresDB, error) {
 		return nil, err
 	}
 
-	return &PostgresDB{db: sqldb}, nil
+	return &PostgresDB{Core: &sqlcore.Core{SQL: sqldb, Conv: convert}}, nil
 }
 
-func (p *PostgresDB) Close() error {
-	if p.db == nil {
-		return nil
+func convert(v any, _ string) any {
+	switch x := v.(type) {
+	case []byte:
+		return string(x)
+	case time.Time:
+		return x.Format(time.RFC3339Nano)
+	default:
+		return x
 	}
-	return p.db.Close()
+}
+
+func (p *PostgresDB) Dialect() db.Dialect {
+	return db.Dialect{
+		Name:        "postgres",
+		Placeholder: func(n int) string { return "$" + strconv.Itoa(n) },
+		QuoteIdent:  quoteIdent,
+		SelectLimit: selectLimit,
+	}
 }
 
 func (p *PostgresDB) ListTables(ctx context.Context) ([]string, error) {
 	const q = `
 SELECT table_schema || '.' || table_name AS name
 FROM information_schema.tables
-WHERE table_type = 'BASE TABLE'
+WHERE table_type IN ('BASE TABLE', 'VIEW')
   AND table_schema NOT IN ('pg_catalog', 'information_schema')
 ORDER BY table_schema, table_name;
 `
-	rows, err := p.db.QueryContext(ctx, q)
+	rows, err := p.SQL.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -77,8 +92,8 @@ ORDER BY table_schema, table_name;
 	return out, nil
 }
 
-// DescribeTable returns column name + data type.
-// Accepts either "table" or "schema.table".
+// DescribeTable returns column name, type, nullability, default and primary
+// key membership. Accepts either "table" or "schema.table".
 func (p *PostgresDB) DescribeTable(ctx context.Context, table string) ([]db.Column, error) {
 	schema := "public"
 	name := table
@@ -88,13 +103,32 @@ func (p *PostgresDB) DescribeTable(ctx context.Context, table string) ([]db.Colu
 	}
 
 	const q = `
-SELECT column_name, data_type
-FROM information_schema.columns
-WHERE table_schema = $1
-  AND table_name = $2
-ORDER BY ordinal_position;
+SELECT
+  c.column_name,
+  c.data_type || CASE
+    WHEN c.character_maximum_length IS NOT NULL
+      THEN '(' || c.character_maximum_length || ')'
+    ELSE ''
+  END AS type,
+  c.is_nullable,
+  COALESCE(c.column_default, '') AS col_default,
+  COALESCE(pk.is_pk, false) AS is_pk
+FROM information_schema.columns c
+LEFT JOIN (
+  SELECT kcu.column_name, true AS is_pk
+  FROM information_schema.table_constraints tc
+  JOIN information_schema.key_column_usage kcu
+    ON kcu.constraint_name = tc.constraint_name
+   AND kcu.table_schema = tc.table_schema
+  WHERE tc.constraint_type = 'PRIMARY KEY'
+    AND tc.table_schema = $1
+    AND tc.table_name = $2
+) pk ON pk.column_name = c.column_name
+WHERE c.table_schema = $1
+  AND c.table_name = $2
+ORDER BY c.ordinal_position;
 `
-	rows, err := p.db.QueryContext(ctx, q, schema, name)
+	rows, err := p.SQL.QueryContext(ctx, q, schema, name)
 	if err != nil {
 		return nil, err
 	}
@@ -102,82 +136,39 @@ ORDER BY ordinal_position;
 
 	var cols []db.Column
 	for rows.Next() {
-		var colName, dataType string
-		if err := rows.Scan(&colName, &dataType); err != nil {
+		var colName, dataType, isNullable, colDefault string
+		var isPK bool
+		if err := rows.Scan(&colName, &dataType, &isNullable, &colDefault, &isPK); err != nil {
 			return nil, err
 		}
 		cols = append(cols, db.Column{
-			Name: colName,
-			Type: dataType,
+			Name:       colName,
+			Type:       dataType,
+			Nullable:   strings.EqualFold(isNullable, "YES"),
+			Default:    colDefault,
+			PrimaryKey: isPK,
 		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("table %q not found", table)
+	}
 	return cols, nil
 }
 
-func (p *PostgresDB) Query(ctx context.Context, sqlQuery string, args ...any) (*db.Rows, error) {
-	rows, err := p.db.QueryContext(ctx, sqlQuery, args...)
-	if err != nil {
-		return nil, err
+func selectLimit(table, where string, n int) string {
+	q := "SELECT * FROM " + table
+	if where != "" {
+		q += " WHERE " + where
 	}
-	defer rows.Close()
-
-	colNames, err := rows.Columns()
-	if err != nil {
-		return nil, err
+	if n > 0 {
+		q += fmt.Sprintf(" LIMIT %d", n)
 	}
-
-	colTypes, err := rows.ColumnTypes()
-	if err != nil {
-		return nil, err
-	}
-
-	header := make([]db.Column, len(colNames))
-	for i, name := range colNames {
-		typ := ""
-		if i < len(colTypes) && colTypes[i] != nil {
-			typ = strings.ToLower(colTypes[i].DatabaseTypeName())
-		}
-		header[i] = db.Column{
-			Name: name,
-			Type: typ,
-		}
-	}
-
-	var data []db.Row
-	for rows.Next() {
-		values := make([]any, len(colNames))
-		ptrs := make([]any, len(colNames))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, err
-		}
-
-		for i, v := range values {
-			switch x := v.(type) {
-			case []byte:
-				values[i] = string(x)
-			case time.Time:
-				values[i] = x.Format(time.RFC3339Nano)
-			default:
-				values[i] = x
-			}
-		}
-
-		data = append(data, db.Row(values))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return &db.Rows{
-		Columns: header,
-		Data:    data,
-	}, nil
+	return q
 }
 
+func quoteIdent(id string) string {
+	return `"` + strings.ReplaceAll(id, `"`, `""`) + `"`
+}

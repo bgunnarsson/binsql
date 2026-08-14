@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/bgunnarsson/binsql/internal/print"
+	"github.com/bgunnarsson/binsql/internal/render"
 )
 
 // defaultListQuery returns the driver-specific "list tables" SQL used
@@ -41,7 +41,6 @@ ORDER BY table_name;
 	}
 }
 
-
 func RunNonInteractive(ctx context.Context, driver Driver, dsn, query string) error {
 	if query == "" {
 		query = defaultListQuery(driver)
@@ -58,6 +57,11 @@ func RunNonInteractive(ctx context.Context, driver Driver, dsn, query string) er
 		return err
 	}
 
-	print.RenderTable(os.Stdout, rows, print.Options{MaxWidth: 60})
-	return nil
+	// NoFooter keeps this legacy path's output identical to what it printed
+	// before command mode existed.
+	return render.Rows(os.Stdout, render.Result{Rows: rows}, render.Options{
+		Format:   render.FormatTable,
+		MaxWidth: 60,
+		NoFooter: true,
+	})
 }

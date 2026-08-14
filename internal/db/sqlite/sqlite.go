@@ -10,10 +10,11 @@ import (
 	_ "modernc.org/sqlite" // register driver
 
 	"github.com/bgunnarsson/binsql/internal/db"
+	"github.com/bgunnarsson/binsql/internal/db/sqlcore"
 )
 
 type SqliteDB struct {
-	db *sql.DB
+	*sqlcore.Core
 }
 
 func Open(path string) (*SqliteDB, error) {
@@ -33,11 +34,20 @@ func Open(path string) (*SqliteDB, error) {
 		return nil, err
 	}
 
-	return &SqliteDB{db: sqldb}, nil
+	return &SqliteDB{Core: &sqlcore.Core{SQL: sqldb, Conv: convert}}, nil
 }
 
-func (s *SqliteDB) Close() error {
-	return s.db.Close()
+// convert leaves values alone: modernc/sqlite already returns int64, float64,
+// string and []byte, and the renderers know how to present each.
+func convert(v any, _ string) any { return v }
+
+func (s *SqliteDB) Dialect() db.Dialect {
+	return db.Dialect{
+		Name:        "sqlite",
+		Placeholder: func(int) string { return "?" },
+		QuoteIdent:  quoteIdent,
+		SelectLimit: selectLimit,
+	}
 }
 
 func (s *SqliteDB) ListTables(ctx context.Context) ([]string, error) {
@@ -51,7 +61,7 @@ func (s *SqliteDB) ListTables(ctx context.Context) ([]string, error) {
 		ORDER BY lower(name);
 	`
 
-	rows, err := s.db.QueryContext(ctx, q)
+	rows, err := s.SQL.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +80,7 @@ func (s *SqliteDB) ListTables(ctx context.Context) ([]string, error) {
 
 func (s *SqliteDB) DescribeTable(ctx context.Context, table string) ([]db.Column, error) {
 	q := fmt.Sprintf("PRAGMA table_info(%s);", quoteIdent(table))
-	rows, err := s.db.QueryContext(ctx, q)
+	rows, err := s.SQL.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -86,57 +96,31 @@ func (s *SqliteDB) DescribeTable(ctx context.Context, table string) ([]db.Column
 			return nil, err
 		}
 		cols = append(cols, db.Column{
-			Name: name,
-			Type: ctype,
+			Name:       name,
+			Type:       strings.ToLower(ctype),
+			Nullable:   notnull == 0,
+			Default:    dflt.String,
+			PrimaryKey: pk > 0,
 		})
-	}
-	return cols, rows.Err()
-}
-
-func (s *SqliteDB) Query(ctx context.Context, sqlStr string, args ...any) (*db.Rows, error) {
-	rows, err := s.db.QueryContext(ctx, sqlStr, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	colNames, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-	colTypes, err := rows.ColumnTypes()
-	if err != nil {
-		return nil, err
-	}
-
-	header := make([]db.Column, len(colNames))
-	for i := range colNames {
-		header[i] = db.Column{
-			Name: colNames[i],
-			Type: strings.ToUpper(colTypes[i].DatabaseTypeName()),
-		}
-	}
-
-	var data []db.Row
-	for rows.Next() {
-		raw := make([]any, len(colNames))
-		ptrs := make([]any, len(colNames))
-		for i := range raw {
-			ptrs[i] = &raw[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, err
-		}
-		data = append(data, db.Row(raw))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("table %q not found", table)
+	}
+	return cols, nil
+}
 
-	return &db.Rows{
-		Columns: header,
-		Data:    data,
-	}, nil
+func selectLimit(table, where string, n int) string {
+	q := "SELECT * FROM " + table
+	if where != "" {
+		q += " WHERE " + where
+	}
+	if n > 0 {
+		q += fmt.Sprintf(" LIMIT %d", n)
+	}
+	return q
 }
 
 // very basic identifier quoting – enough for sqlite
