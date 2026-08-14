@@ -5,6 +5,10 @@ APP="binsql"
 PKG="./cmd/binsql"   # change if your main is somewhere else
 OUT_DIR="./dist"
 
+# Stamped into the binary and reported by `binsql version`. Defaults to the
+# current git tag/commit, override with VERSION=x.y.z ./scripts/build.sh
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+
 mkdir -p "$OUT_DIR"
 
 # disable cgo to make cross-compiles trivial
@@ -24,10 +28,12 @@ build() {
   GOOS="$goos" GOARCH="$goarch" \
     go build \
       -trimpath \
-      -ldflags="-s -w" \
+      -ldflags="-s -w -X main.version=${VERSION}" \
       -o "${OUT_DIR}/${bin}${ext}" \
       "$PKG"
 }
+
+echo "building ${APP} ${VERSION}"
 
 # Apple Silicon
 build darwin arm64

@@ -23,7 +23,14 @@ The goal is a fast, keyboard‑driven way to inspect schemas and data without le
   - **PostgreSQL**
   - **SQL Server** (including Azure AD via `fedauth=ActiveDirectoryAzCli`)
   - **MySQL**
-- Non‑interactive mode for one‑off queries (suitable for scripting)
+- A scriptable **command mode** for automation and AI coding agents:
+  - `query` / `exec` / `tables` / `describe` / `schema` / `count` / `head`
+  - Output as table, JSON, JSONL, CSV, TSV, markdown or vertical
+  - Driver‑agnostic `?` bind parameters
+  - Transactional multi‑statement scripts, with `--dry-run`
+  - Saved connection profiles, including read‑only ones
+  - **Azure Key Vault** connection strings, so no credential is stored on disk
+  - Guardrails against unqualified `DELETE`/`UPDATE`, `DROP` and `TRUNCATE`
 
 The UI uses a Catppuccin‑inspired dark theme; colors are chosen to sit nicely on typical dark terminals.
 
@@ -60,13 +67,22 @@ This can produce platform‑specific binaries in `./dist` (names like `binsql-da
 
 ## Usage
 
-General form:
+`binsql` has two invocation styles:
 
 ```bash
-binsql [flags] <sqlite|postgres|mssql|mysql> <database-path-or-dsn>
+binsql <command> [flags] [arguments]        # command mode
+binsql [flags] <driver> <database-or-dsn>   # TUI / legacy form
 ```
 
-Only `-q` is supported as a flag; everything else is positional.
+They are told apart by the first positional argument: a driver name
+(`sqlite`, `postgres`, `mssql`, `mysql`) selects the original behaviour,
+anything else is treated as a command.
+
+**Command mode** is the scriptable interface — see
+[Command mode](#command-mode) below. It covers queries, writes, migrations
+and schema inspection, with machine‑readable output.
+
+**The legacy form** is unchanged:
 
 - First argument: **driver**
 - Second argument: **database path or DSN** (driver‑specific)
@@ -256,6 +272,324 @@ binsql -q "select count(*) as n from languages"   sqlite ./cms.data.sqlite
 Driver‑specific default list‑tables queries are used when `-q` is omitted but stdout is not a TTY.
 
 Output is a box‑drawing table similar to the TUI’s grid.
+
+This form is kept for backwards compatibility. For scripting, prefer
+[Command mode](#command-mode), which adds writes, transactions, bind
+parameters, schema inspection and JSON/CSV output.
+
+---
+
+## Command mode
+
+Command mode is the non‑interactive, scriptable half of `binsql`. It is
+designed to be driven by shell scripts, CI jobs and AI coding agents:
+predictable flags, machine‑readable output, and guardrails around anything
+destructive.
+
+```bash
+binsql <command> [flags] [arguments]
+```
+
+| Command | What it does |
+| --- | --- |
+| `query` | Run a read‑only query and print the result set |
+| `exec` | Run statements that modify data or schema |
+| `tables` | List tables and views |
+| `describe` | Show the columns of one table |
+| `schema` | Dump the schema of every table (or a subset) |
+| `count` | Count rows in a table |
+| `head` | Show the first rows of a table |
+| `conn` | Manage saved connection profiles |
+| `tui` | Launch the interactive terminal UI |
+| `version`, `help` | Version, and per‑command help |
+
+Run `binsql help <command>` for the full flag list of any command.
+
+### Connecting
+
+Every database‑touching command accepts the same connection flags:
+
+```
+-c, --conn NAME     use a saved profile
+-d, --driver NAME   sqlite | postgres | mssql | mysql
+-D, --dsn STRING    connection string or file path
+```
+
+The driver is **inferred from the DSN** when it is unambiguous, so
+`--dsn ./app.db`, `--dsn postgres://...` and `--dsn "user:pw@tcp(host)/db"`
+all work without `--driver`.
+
+A DSN may also be an **Azure Key Vault reference** — see
+[Azure Key Vault](#azure-key-vault):
+
+```bash
+binsql conn add prod --dsn "keyvault://my-vault/sql-connection-string"
+```
+
+Connections are resolved in this order:
+
+1. `--dsn` (with `--driver`, or inferred)
+2. `--conn NAME`
+3. `BINSQL_DSN` / `BINSQL_CONN` from the environment
+4. the profile marked as default
+
+Environment variables: `BINSQL_CONN`, `BINSQL_DRIVER`, `BINSQL_DSN`,
+`BINSQL_FORMAT`, `BINSQL_READONLY`, `BINSQL_CONFIG`, `BINSQL_SECRET_TTL`,
+`BINSQL_AZURE_CREDENTIAL`, `BINSQL_KEYVAULT_SUFFIX`.
+
+### Saved connections
+
+Profiles live in `~/.config/binsql/connections.json` (override with
+`BINSQL_CONFIG`), written with owner‑only permissions since a DSN usually
+contains a password. Passwords are masked whenever a DSN is printed.
+
+```bash
+binsql conn add local --dsn ./app.db
+binsql conn add prod  --dsn "postgres://u:pw@host/db" --readonly
+binsql conn default local
+binsql conn list
+binsql conn test prod
+```
+
+Mark production databases with `--readonly`. `binsql` then refuses every
+mutating statement on that profile, **before it even connects** — regardless
+of which command is used.
+
+### Azure Key Vault
+
+A profile can hold a *reference* to a secret instead of a connection string,
+so no credential is ever written to disk:
+
+```bash
+binsql conn add prod --dsn "keyvault://my-vault/sql-connection-string" --readonly
+```
+
+Accepted forms — the last is what the Azure portal's "Secret Identifier"
+button copies:
+
+```
+keyvault://my-vault/secret-name
+keyvault://my-vault/secret-name/version
+keyvault://my-vault.vault.usgovcloudapi.net/secret-name
+https://my-vault.vault.azure.net/secrets/secret-name
+```
+
+`conn add` reads the secret once to confirm you can reach it and to record
+which driver it points at, then stores only the reference:
+
+```json
+{
+  "prod": {
+    "driver": "postgres",
+    "dsn": "keyvault://my-vault/sql-connection-string",
+    "readonly": true
+  }
+}
+```
+
+Pass `--no-verify` (together with `--driver`) to register a profile without
+contacting Azure.
+
+#### Authentication
+
+Secrets are read with `DefaultAzureCredential`, which covers `az login` on a
+developer machine, a managed identity on Azure, and
+`AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_CLIENT_SECRET` in CI. The
+identity needs **Key Vault Secrets User** (or `get` on the secret).
+
+That default chain probes for a managed identity first, which on a laptop
+costs several seconds waiting for a timeout. If you authenticate with the
+Azure CLI, skip it:
+
+```bash
+export BINSQL_AZURE_CREDENTIAL=cli   # default | cli | env | managed
+```
+
+On this machine that took a vault fetch from ~6s down to ~2s.
+
+#### Caching
+
+A resolved secret is cached under the config directory for
+`--secret-ttl` (default 15 minutes), so a run of several commands pays the
+vault round-trip once.
+
+```bash
+binsql conn cache            # how many entries, where, and the TTL
+binsql conn cache --clear    # forget everything, including the local key
+```
+
+Entries are encrypted with AES-256-GCM under a key in the same directory,
+and both files are written `0600`. Be clear about what that buys: because
+the key sits next to the ciphertext, it protects against a secret being
+picked up *incidentally* — by a backup, a directory sync, a shared screen,
+or a `grep` across your home directory — not against someone who can already
+read your files as you. Secret names are hashed, so the cache does not
+disclose which vaults you use either.
+
+To keep secrets off the disk entirely:
+
+```bash
+binsql query --conn prod "..." --secret-ttl 0
+export BINSQL_SECRET_TTL=0        # or set it once
+```
+
+#### Azure SQL without a secret
+
+For Azure SQL you often need no stored credential at all — authenticate to
+the database directly with your Azure identity and skip Key Vault:
+
+```bash
+binsql conn add prod --driver mssql \
+  --dsn "server=my.database.windows.net;database=app;fedauth=ActiveDirectoryAzCli"
+```
+
+Key Vault is the answer where a real secret exists: PostgreSQL, MySQL, or
+SQL Server with SQL authentication.
+
+### Output formats
+
+```
+-o, --format FORMAT   table (default), json, jsonl, csv, tsv,
+                      vertical, markdown, raw, none
+    --max-rows N      print at most N rows (0 = all)
+    --max-width N     cap column width in table output
+    --no-header       omit the header row
+    --pretty          indent JSON
+```
+
+Data goes to **stdout**; status messages, warnings and errors go to
+**stderr**, so a pipeline never has to strip chatter out of its input. With
+`-o json` errors are emitted as JSON too, so a consumer sees one shape on
+both paths.
+
+`query` emits a stable envelope:
+
+```json
+{
+  "columns": [{"name": "id", "type": "integer", "nullable": false}],
+  "rows": [{"id": 1, "email": "a@example.com"}],
+  "row_count": 1,
+  "total_rows": 1,
+  "truncated": false,
+  "duration_ms": 0.8
+}
+```
+
+Numbers stay JSON numbers and `NULL` becomes `null`. Non‑text binary values
+are base64‑encoded with a `base64:` prefix. When `--max-rows` drops rows,
+`truncated` is `true` and `total_rows` still reports the real count — output
+is never silently shortened.
+
+### Queries
+
+```bash
+binsql query "select id, email from users order by id limit 20"
+binsql query "select * from orders where customer_id = ?" --arg int:31 -o json
+binsql query -f report.sql -o csv > report.csv
+echo "select count(*) from events" | binsql query -o raw
+```
+
+Bind values with `?` **regardless of driver** — placeholders are rewritten to
+`$1` for PostgreSQL and `@p1` for SQL Server. Question marks inside string
+literals and comments are left alone. Values are strings unless prefixed
+with a type:
+
+```
+--arg int:42   --arg float:1.5   --arg bool:true   --arg null:   --arg str:007
+```
+
+`query` refuses statements that would modify the database and points you at
+`exec` instead; `--allow-write` overrides it.
+
+### Changes
+
+```bash
+binsql exec "insert into users (email) values (?)" --arg a@example.com
+binsql exec "update users set active = 0 where id = ?" --arg int:9
+binsql exec -f migration.sql --dry-run
+binsql exec -f migration.sql
+```
+
+- Multiple statements separated by `;` run in order. Two or more are wrapped
+  in **one transaction** by default, so a failure part‑way through rolls the
+  whole batch back rather than leaving a half‑applied migration.
+- `--dry-run` runs the batch in a transaction and rolls it back, reporting
+  what it *would* have done. (MySQL commits DDL implicitly; `binsql` warns
+  when a dry run cannot actually undo the batch.)
+- `--tx` / `--no-tx` force transaction behaviour explicitly.
+- `SELECT`s inside a script still print their results, so mixed scripts work.
+
+Statement splitting understands string literals, quoted identifiers,
+comments, MySQL backticks and backslash escapes, SQL Server `[brackets]` and
+`GO` batches, and PostgreSQL `$$` dollar‑quoted bodies — a `;` inside any of
+those does not split the script.
+
+### Safety
+
+`binsql` refuses, unless `--force` is given:
+
+- `UPDATE` or `DELETE` with no `WHERE` clause
+- `DROP` or `TRUNCATE`
+
+and, on a `--readonly` profile or with `BINSQL_READONLY=1`, every mutating
+statement. Those checks run **before connecting**, so a mistake never
+reaches the database.
+
+Exit codes: `0` success, `1` runtime error, `2` usage error.
+
+### Inspecting schema
+
+```bash
+binsql tables
+binsql tables --like user
+binsql describe users
+binsql schema -o json --pretty     # every table, one call
+binsql count orders --where "status = 'open'"
+binsql head orders -n 20
+```
+
+`describe` reports column name, type, nullability, primary key and default
+for every supported driver. `head` and `count` build driver‑correct SQL, so
+`head` uses `TOP` on SQL Server and `LIMIT` elsewhere.
+
+### Driving binsql from an AI agent
+
+Command mode was built with tools like Claude Code in mind. A useful setup:
+
+```bash
+# once, per database
+binsql conn add myapp --dsn ./app.db
+binsql conn add prod  --dsn "postgres://..." --readonly
+```
+
+Then an agent can work against `--conn myapp` without ever handling the
+credentials — and with a `keyvault://` profile the credential is not on the
+machine at all, only the reference:
+
+```bash
+binsql conn add prod --dsn "keyvault://my-vault/prod-conn" --readonly
+```
+
+Recipes worth knowing:
+
+```bash
+binsql schema --conn myapp -o json          # whole schema in one call
+binsql query --conn myapp "<sql>" -o json --max-rows 50
+binsql exec  --conn myapp -f change.sql --dry-run   # verify, then rerun without --dry-run
+```
+
+Why it behaves well unattended:
+
+- **stdout is only data**, so JSON can be parsed directly.
+- **Errors are JSON** under `-o json`, and exit codes distinguish usage
+  mistakes (`2`) from runtime failures (`1`).
+- **`--max-rows` bounds output**, and reports `truncated` rather than
+  silently shortening a result.
+- **Writes are opt‑in**: `query` refuses them, `exec` blocks unqualified
+  `DELETE`/`UPDATE` and `DROP`/`TRUNCATE` without `--force`, and a
+  `--readonly` profile refuses them outright before connecting.
+- **`--dry-run` is a real transaction rollback**, so a migration can be
+  checked before it is applied.
 
 ---
 

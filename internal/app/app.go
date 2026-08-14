@@ -2,39 +2,25 @@ package app
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/bgunnarsson/binsql/internal/db"
-	"github.com/bgunnarsson/binsql/internal/db/mssql"
-	"github.com/bgunnarsson/binsql/internal/db/mysql"
-	"github.com/bgunnarsson/binsql/internal/db/postgres"
-	"github.com/bgunnarsson/binsql/internal/db/sqlite"
+	"github.com/bgunnarsson/binsql/internal/drivers"
 	"github.com/bgunnarsson/binsql/internal/ui"
 )
 
-type Driver string
+// Driver and the Driver* constants are re-exported from internal/drivers so
+// existing callers keep compiling.
+type Driver = drivers.Driver
 
 const (
-	DriverSqlite   Driver = "sqlite"
-	DriverPostgres Driver = "postgres"
-	DriverMssql    Driver = "mssql"
-	DriverMysql    Driver = "mysql"
+	DriverSqlite   = drivers.DriverSqlite
+	DriverPostgres = drivers.DriverPostgres
+	DriverMssql    = drivers.DriverMssql
+	DriverMysql    = drivers.DriverMysql
 )
 
-// central factory
 func openDB(driver Driver, dsn string) (db.DB, error) {
-	switch driver {
-	case "", DriverSqlite:
-		return sqlite.Open(dsn)
-	case DriverPostgres:
-		return postgres.Open(dsn)
-	case DriverMssql:
-		return mssql.Open(dsn)
-	case DriverMysql:
-		return mysql.Open(dsn)
-	default:
-		return nil, fmt.Errorf("unsupported driver %q", driver)
-	}
+	return drivers.Open(driver, dsn)
 }
 
 func RunInteractive(ctx context.Context, driver Driver, dsn string) error {
