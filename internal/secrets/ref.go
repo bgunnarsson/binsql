@@ -93,6 +93,60 @@ func Parse(dsn string, suffix string) (Ref, error) {
 	}
 }
 
+// VaultOnly reports whether a DSN names a Key Vault without identifying a
+// secret inside it — the easy mistake of pasting the vault's URL straight
+// from the portal. It returns the vault host so the caller can spell out the
+// complete form instead of failing with an unrelated complaint about drivers.
+func VaultOnly(dsn string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(dsn))
+	if err != nil {
+		return "", false
+	}
+
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		if !isVaultHost(u.Host) {
+			return "", false
+		}
+		// A complete identifier carries /secrets/<name>.
+		parts := splitPath(u.Path)
+		if len(parts) >= 2 && strings.EqualFold(parts[0], "secrets") {
+			return "", false
+		}
+		return u.Host, true
+
+	case "keyvault", "azkv":
+		if u.Host == "" || len(splitPath(u.Path)) > 0 {
+			return "", false
+		}
+		host := u.Host
+		if !strings.Contains(host, ".") {
+			host += "." + defaultSuffix
+		}
+		return host, true
+	}
+
+	return "", false
+}
+
+// isVaultHost matches Key Vault hosts across every Azure cloud, all of which
+// use a ".vault.<something>" suffix.
+func isVaultHost(host string) bool {
+	return strings.Contains(strings.ToLower(host), ".vault.")
+}
+
+// VaultName strips the DNS suffix from a vault host, giving the short name
+// that the Azure CLI expects for --vault-name.
+func VaultName(host string) string {
+	if i := strings.Index(strings.ToLower(host), ".vault."); i > 0 {
+		return host[:i]
+	}
+	if i := strings.Index(host, "."); i > 0 {
+		return host[:i]
+	}
+	return host
+}
+
 // VaultURL is the endpoint the Key Vault client connects to.
 func (r Ref) VaultURL() string { return "https://" + r.VaultHost + "/" }
 
