@@ -354,6 +354,11 @@ func driverFromNameOrDSN(name, dsn string) (drivers.Driver, error) {
 	if secrets.IsRef(dsn) {
 		return "", nil
 	}
+	// Naming the vault but not the secret is an easy slip, and complaining
+	// about drivers would send the reader looking in the wrong place.
+	if err := checkVaultOnly(dsn); err != nil {
+		return "", err
+	}
 	if d := drivers.Infer(dsn); d != "" {
 		return d, nil
 	}
@@ -516,4 +521,24 @@ func parseArg(raw string) (any, error) {
 		// Not a recognised prefix — it was just a value containing a colon.
 		return raw, nil
 	}
+}
+
+// checkVaultOnly rejects a DSN that names a Key Vault but no secret within
+// it. Pasting the vault URL is the natural mistake, and without this the
+// string is either blamed on driver inference or — worse, when --driver is
+// given — stored as though it were a real connection string.
+func checkVaultOnly(dsn string) error {
+	host, ok := secrets.VaultOnly(dsn)
+	if !ok {
+		return nil
+	}
+
+	name := secrets.VaultName(host)
+	return usagef(
+		"%s names a Key Vault but not a secret inside it — add the secret name:\n"+
+			"  --dsn \"keyvault://%s/<secret-name>\"\n"+
+			"  --dsn \"https://%s/secrets/<secret-name>\"\n\n"+
+			"list what is in that vault with:\n"+
+			"  az keyvault secret list --vault-name %s --query \"[].name\" -o tsv",
+		dsn, name, host, name)
 }

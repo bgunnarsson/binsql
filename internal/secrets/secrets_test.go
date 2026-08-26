@@ -130,6 +130,53 @@ func TestRefStringIsRoundTrippable(t *testing.T) {
 	}
 }
 
+func TestVaultOnly(t *testing.T) {
+	// Naming a vault but no secret — the mistake worth catching.
+	incomplete := map[string]string{
+		"https://kv-eimskip-prd.vault.azure.net":      "kv-eimskip-prd.vault.azure.net",
+		"https://kv-eimskip-prd.vault.azure.net/":     "kv-eimskip-prd.vault.azure.net",
+		"https://my-vault.vault.usgovcloudapi.net":    "my-vault.vault.usgovcloudapi.net",
+		"https://my-vault.vault.azure.net/secrets":    "my-vault.vault.azure.net",
+		"keyvault://my-vault":                         "my-vault.vault.azure.net",
+		"keyvault://my-vault.vault.usgovcloudapi.net": "my-vault.vault.usgovcloudapi.net",
+	}
+	for in, wantHost := range incomplete {
+		host, ok := VaultOnly(in)
+		if !ok || host != wantHost {
+			t.Errorf("VaultOnly(%q) = (%q, %v), want (%q, true)", in, host, ok, wantHost)
+		}
+	}
+
+	// Complete references and ordinary DSNs must not be flagged.
+	complete := []string{
+		"https://my-vault.vault.azure.net/secrets/conn",
+		"https://my-vault.vault.azure.net/secrets/conn/v1",
+		"keyvault://my-vault/conn",
+		"postgres://user:pw@host/db",
+		"./app.db",
+		"https://example.com",
+		"",
+	}
+	for _, in := range complete {
+		if host, ok := VaultOnly(in); ok {
+			t.Errorf("VaultOnly(%q) = (%q, true), want false", in, host)
+		}
+	}
+}
+
+func TestVaultName(t *testing.T) {
+	tests := map[string]string{
+		"kv-eimskip-prd.vault.azure.net":   "kv-eimskip-prd",
+		"my-vault.vault.usgovcloudapi.net": "my-vault",
+		"my-vault":                         "my-vault",
+	}
+	for in, want := range tests {
+		if got := VaultName(in); got != want {
+			t.Errorf("VaultName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // --- cache ---------------------------------------------------------------
 
 func newCache(t *testing.T, ttl time.Duration) *Cache {

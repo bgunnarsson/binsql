@@ -185,6 +185,13 @@ func runConnAdd(ctx context.Context, argv []string) error {
 		return usagef("--dsn is required")
 	}
 
+	// Check this before resolving the driver: passing --driver would
+	// otherwise skip inference altogether and save a vault URL as if it were
+	// a literal connection string, failing much later with a worse message.
+	if err := checkVaultOnly(*dsn); err != nil {
+		return err
+	}
+
 	driver, err := driverFromNameOrDSN(*driverName, *dsn)
 	if err != nil {
 		return err

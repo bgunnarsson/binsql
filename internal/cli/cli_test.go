@@ -302,6 +302,52 @@ func TestKeyVaultProfileNeedsDriverWhenUnverified(t *testing.T) {
 	}
 }
 
+// Pasting the vault URL without a secret name must be caught, and the error
+// must name the real problem rather than blaming driver inference.
+func TestVaultUrlWithoutSecretIsRejected(t *testing.T) {
+	newDB(t)
+	t.Setenv("BINSQL_DSN", "")
+
+	_, stderr, code := run(t, "conn", "add", "prod",
+		"--dsn", "https://kv-example.vault.azure.net", "--readonly")
+	if code != exitUsage {
+		t.Fatalf("exit = %d, want %d (%s)", code, exitUsage, stderr)
+	}
+	if !strings.Contains(stderr, "not a secret inside it") {
+		t.Errorf("error should explain the real problem: %s", stderr)
+	}
+	if strings.Contains(stderr, "cannot infer the driver") {
+		t.Errorf("error should not blame driver inference: %s", stderr)
+	}
+	if !strings.Contains(stderr, "az keyvault secret list --vault-name kv-example") {
+		t.Errorf("error should show how to list the secrets: %s", stderr)
+	}
+}
+
+// Passing --driver skips inference, so the guard has to run independently of
+// it — otherwise a vault URL gets stored as if it were a connection string.
+func TestVaultUrlRejectedEvenWithExplicitDriver(t *testing.T) {
+	newDB(t)
+	t.Setenv("BINSQL_DSN", "")
+
+	_, stderr, code := run(t, "conn", "add", "prod",
+		"--dsn", "https://kv-example.vault.azure.net/ConnectionStrings--Db",
+		"--driver", "mssql", "--readonly")
+	if code != exitUsage {
+		t.Fatalf("exit = %d, want %d — a vault URL was accepted as a DSN (%s)", code, exitUsage, stderr)
+	}
+	if !strings.Contains(stderr, "not a secret inside it") {
+		t.Errorf("unexpected error: %s", stderr)
+	}
+
+	// And nothing should have been written.
+	if data, err := os.ReadFile(os.Getenv("BINSQL_CONFIG")); err == nil {
+		if strings.Contains(string(data), "kv-example") {
+			t.Errorf("a bad profile was saved: %s", data)
+		}
+	}
+}
+
 func TestKeyVaultProfileStoresNoSecret(t *testing.T) {
 	newDB(t)
 	t.Setenv("BINSQL_DSN", "")
