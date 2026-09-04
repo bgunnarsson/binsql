@@ -21,3 +21,12 @@ go.work
 
 .DS_Store
 **/.DS_Store
+
+# Build output. scripts/build.sh writes platform binaries into dist/ and
+# scripts/release.sh packages them from there; both end up on the GitHub
+# releases page, which is where the README already sends people. The four
+# binaries here were tracked until 2026-09-04 because the rules below cover
+# *.exe and *.dylib and not extension-less Unix binaries, and notes.txt — a
+# scratch release transcript ending in `git add .` — was what committed them.
+/dist/
+/binsql
