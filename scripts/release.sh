@@ -18,6 +18,7 @@ DIST_DIR="dist"
 BIN_DARWIN_ARM64="binsql-darwin-arm64"
 BIN_DARWIN_AMD64="binsql-darwin-amd64"
 BIN_LINUX_AMD64="binsql-linux-amd64"
+BIN_LINUX_ARM64="binsql-linux-arm64"
 BIN_WINDOWS_AMD64="binsql-windows-amd64.exe"
 
 echo "==> Building binaries"
@@ -32,7 +33,7 @@ echo "==> Packaging archives for ${VERSION}"
 cd "$DIST_DIR"
 
 # Sanity check
-for f in "$BIN_DARWIN_ARM64" "$BIN_DARWIN_AMD64" "$BIN_LINUX_AMD64" "$BIN_WINDOWS_AMD64"; do
+for f in "$BIN_DARWIN_ARM64" "$BIN_DARWIN_AMD64" "$BIN_LINUX_AMD64" "$BIN_LINUX_ARM64" "$BIN_WINDOWS_AMD64"; do
   if [[ ! -f "$f" ]]; then
     echo "Missing expected binary: $f" >&2
     exit 1
@@ -44,6 +45,7 @@ rm -f \
   "binsql-${VERSION}-darwin-arm64.tar.gz" \
   "binsql-${VERSION}-darwin-amd64.tar.gz" \
   "binsql-${VERSION}-linux-amd64.tar.gz" \
+  "binsql-${VERSION}-linux-arm64.tar.gz" \
   "binsql-${VERSION}-windows-amd64.zip"
 
 # macOS
@@ -52,6 +54,7 @@ tar -czf "binsql-${VERSION}-darwin-amd64.tar.gz"  "$BIN_DARWIN_AMD64"
 
 # Linux
 tar -czf "binsql-${VERSION}-linux-amd64.tar.gz"   "$BIN_LINUX_AMD64"
+tar -czf "binsql-${VERSION}-linux-arm64.tar.gz"   "$BIN_LINUX_ARM64"
 
 # Windows
 zip -q "binsql-${VERSION}-windows-amd64.zip" "$BIN_WINDOWS_AMD64"
@@ -72,6 +75,7 @@ gh release create "${VERSION}" \
   "dist/binsql-${VERSION}-darwin-arm64.tar.gz" \
   "dist/binsql-${VERSION}-darwin-amd64.tar.gz" \
   "dist/binsql-${VERSION}-linux-amd64.tar.gz" \
+  "dist/binsql-${VERSION}-linux-arm64.tar.gz" \
   "dist/binsql-${VERSION}-windows-amd64.zip" \
   --title "${VERSION}" \
   --notes "Release ${VERSION}"
