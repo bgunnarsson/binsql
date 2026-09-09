@@ -104,11 +104,15 @@ project — which becomes a group in the sidebar:
 │ ▾  eimskip  2             │
 │   ▾  local  SQL Server    │
 │   ▸  prod  SQL Server  ro │
-│ ▾  osar  1                │
-│   ▸  prod  SQL Server  ro │
+│ ▸  osar  1                │
 │ ▸  scratch  SQLite        │
 ╰───────────────────────────╯
 ```
+
+Folders start closed, so a machine with a dozen clients on it opens to a list
+of clients rather than to every database at once. One that connects on its own
+— the `default`, or anything flagged `open_on_start` — opens its folder, so it
+is never working away out of sight.
 
 Folders are one level deep, and a connection is named `folder/name` everywhere
 it is referred to — `binsql eimskip/prod`, the `default` key, the command
