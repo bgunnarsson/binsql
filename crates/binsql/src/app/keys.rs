@@ -17,6 +17,15 @@ pub fn handle(app: &mut App, key: KeyEvent) {
     if key.kind != KeyEventKind::Press {
         return;
     }
+
+    // Quit is handled before anything else can claim it. Raw mode has already
+    // taken ⌃C away, so a modal that swallowed ⌃Q would leave no way out of
+    // the program at all.
+    if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.should_quit = true;
+        return;
+    }
+
     if app.overlay.is_some() {
         overlay(app, key);
         return;
@@ -37,9 +46,6 @@ fn global(app: &mut App, key: KeyEvent) -> bool {
     let alt = key.modifiers.contains(KeyModifiers::ALT);
 
     match (key.code, ctrl, alt) {
-        (KeyCode::Char('q'), true, _) => {
-            app.should_quit = true;
-        }
         (KeyCode::Char('k'), true, _) => {
             app.overlay = Some(Overlay::Palette(Palette::build(app)));
         }
@@ -168,14 +174,9 @@ fn results(app: &mut App, key: KeyEvent) {
 
 fn overlay(app: &mut App, key: KeyEvent) {
     match app.overlay.as_mut() {
-        Some(Overlay::Help) | Some(Overlay::Detail) => {
-            if matches!(
-                key.code,
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('?')
-            ) {
-                app.overlay = None;
-            }
-        }
+        // These two only display; the help screen says "any key closes this"
+        // and it has to be true, or the way out is a guess.
+        Some(Overlay::Help) | Some(Overlay::Detail) => app.overlay = None,
         Some(Overlay::Palette(palette)) => match key.code {
             KeyCode::Esc => app.overlay = None,
             KeyCode::Up => palette.move_selection(-1),

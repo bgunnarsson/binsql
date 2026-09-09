@@ -256,3 +256,53 @@ async fn a_key_vault_reference_says_so_instead_of_failing_obscurely() {
         "the reason should name Key Vault:\n{screen}"
     );
 }
+
+#[tokio::test]
+async fn ctrl_q_always_quits() {
+    // Raw mode disables ISIG, so ⌃C is gone and ⌃Q is the only way out. Every
+    // modal used to swallow it, which trapped people inside the program.
+    let path = fixture("quit");
+    let ctrl_q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+
+    let openers: [(&str, KeyEvent); 4] = [
+        (
+            "nothing open",
+            KeyEvent::new(KeyCode::Null, KeyModifiers::NONE),
+        ),
+        (
+            "command palette",
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        ),
+        ("help", KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE)),
+        (
+            "connection form",
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        ),
+    ];
+
+    for (what, opener) in openers {
+        let (mut app, _messages) = App::new(config(&path));
+        binsql::app::keys::handle(&mut app, opener);
+        binsql::app::keys::handle(&mut app, ctrl_q);
+        assert!(app.should_quit, "⌃Q did not quit with {what} open");
+    }
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn help_closes_on_any_key_as_it_claims() {
+    let path = fixture("helpclose");
+    let (mut app, _messages) = App::new(config(&path));
+
+    binsql::app::keys::handle(&mut app, KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
+    assert!(render(&mut app).contains("Any key closes this"));
+
+    press(&mut app, KeyCode::Char('x'));
+    assert!(
+        !render(&mut app).contains("Any key closes this"),
+        "help should have closed"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
