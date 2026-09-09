@@ -6,6 +6,7 @@ mod status;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders};
 
 use crate::app::App;
@@ -19,7 +20,7 @@ const EXPLORER_MAX: u16 = 46;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    frame.render_widget(Block::default().style(theme::app()), area);
+    frame.render_widget(Block::default().style(theme::body()), area);
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -56,15 +57,52 @@ fn draw_workspace(frame: &mut Frame, app: &mut App, area: Rect) {
     results::draw(frame, app, rows[2]);
 }
 
-/// The bordered frame every pane shares, so focus reads the same everywhere.
+/// The bordered frame every pane and overlay shares.
+///
+/// binvim's popup form: the title sits in the top border after a single dash,
+/// and a counter — rows, matches, position — sits at the right end of the same
+/// border rather than competing with the content for a line.
 pub fn pane(title: &str, focused: bool) -> Block<'static> {
-    Block::default()
+    framed(title, None, focused, theme::chrome())
+}
+
+/// A pane over the body surface rather than the chrome one: the editor and the
+/// result grid, which are content, not chrome.
+pub fn body_pane(title: &str, counter: Option<String>, focused: bool) -> Block<'static> {
+    framed(title, counter, focused, theme::body())
+}
+
+/// A pane with a counter at the right end of its top border.
+pub fn counted_pane(title: &str, counter: impl Into<String>, focused: bool) -> Block<'static> {
+    framed(title, Some(counter.into()), focused, theme::chrome())
+}
+
+fn framed(
+    title: &str,
+    counter: Option<String>,
+    focused: bool,
+    surface: ratatui::style::Style,
+) -> Block<'static> {
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme::border(focused))
-        .title(format!(" {title} "))
-        .title_style(theme::title(focused))
-        .style(theme::panel())
+        .title_top(Line::from(vec![
+            Span::styled("─", theme::border(focused)),
+            Span::styled(format!(" {title} "), theme::title(focused)),
+        ]))
+        .style(surface);
+
+    if let Some(counter) = counter {
+        block = block.title_top(
+            Line::from(vec![
+                Span::styled(format!(" {counter} "), theme::counter()),
+                Span::styled("─", theme::border(focused)),
+            ])
+            .right_aligned(),
+        );
+    }
+    block
 }
 
 /// Centres a box of the given size inside `area`, clamped to fit.

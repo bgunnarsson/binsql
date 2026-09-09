@@ -15,8 +15,8 @@ const GAP: u16 = 1;
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Pane::Results;
-    let title = title(app);
-    let block = ui::pane(&title, focused);
+    let (title, counter) = title(app);
+    let block = ui::body_pane(&title, counter, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -136,20 +136,16 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             // the background says where the cursor is.
             let mut style = value_style(value);
             if is_current_row && *index == grid.column {
-                style = style.bg(if focused {
-                    theme::SURFACE2
-                } else {
-                    theme::SURFACE1
-                });
+                style = style.bg(theme::cell_cursor(focused));
             } else if is_current_row {
-                style = style.bg(theme::SURFACE0);
+                style = style.bg(theme::row_cursor());
             }
 
             spans.push(Span::styled(text, style));
             spans.push(Span::styled(
                 " ",
                 if is_current_row {
-                    Style::default().bg(theme::SURFACE0)
+                    Style::default().bg(theme::row_cursor())
                 } else {
                     Style::default()
                 },
@@ -183,30 +179,34 @@ fn pad(text: &str, width: usize, right_align: bool) -> String {
     }
 }
 
-fn title(app: &App) -> String {
+/// The pane's title and the counter that sits at the right end of its border.
+/// Splitting them keeps the left end stable while the cursor moves.
+fn title(app: &App) -> (String, Option<String>) {
     let console = app.console();
-    match console.grid() {
-        Some(grid) => {
-            let position = format!("{}/{}", grid.row + 1, grid.rows());
-            let more = if grid.result.truncated {
-                " · more"
-            } else {
-                ""
-            };
-            let column = grid
-                .result
-                .columns
-                .get(grid.column)
-                .map(|c| format!(" · {} {}", c.name, c.type_name))
-                .unwrap_or_default();
-            format!(
-                "Results {position} · {} in {}{more}{column}",
-                plural(grid.rows(), "row"),
-                format_elapsed(grid.result.elapsed)
-            )
-        }
-        None => "Results".to_string(),
-    }
+    let Some(grid) = console.grid() else {
+        return ("Results".to_string(), None);
+    };
+
+    let column = grid
+        .result
+        .columns
+        .get(grid.column)
+        .map(|c| format!(" · {} {}", c.name, c.type_name))
+        .unwrap_or_default();
+    let more = if grid.result.truncated {
+        " · more"
+    } else {
+        ""
+    };
+
+    (
+        format!(
+            "Results · {} in {}{more}{column}",
+            plural(grid.rows(), "row"),
+            format_elapsed(grid.result.elapsed)
+        ),
+        Some(format!("{}/{}", grid.row + 1, grid.rows())),
+    )
 }
 
 fn plural(count: usize, noun: &str) -> String {

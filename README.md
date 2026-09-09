@@ -9,34 +9,34 @@ Version 3 is a rewrite in Rust. The Go implementation is archived under
 not been carried across.
 
 ```
-╭ Databases 2/3 ───────────╮ artist   +
-│▾ ● local  PostgreSQL     │╭ Query · local / app ───────────────────────────────────╮
-│  ▾ app  ·                ││SELECT * FROM "artist" LIMIT 500                        │
-│    ▾ public              ││                                                        │
-│      ▾ Tables  12        │╰────────────────────────────────────────────────────────╯
-│        artist            │╭ Results 1/3 · 3 rows in 0.24ms · id int4 ──────────────╮
-│        album             ││      id name             founded                       │
-│    ▸ Views  2            ││  1    1 Portishead          1991                       │
-│  ▸ analytics             ││  2    2 Boards of Canada    1986                       │
-│▾ ● prod  SQL Server  ro  ││  3    3 Autechre            NULL                       │
-│▸ ○ warehouse  MySQL      │╰────────────────────────────────────────────────────────╯
-╰──────────────────────────╯
- RESULTS  3 rows in 0.24ms   ⇥ panes · ⌃R run · ⌃K commands · F1 help · ⌃Q quit
+╭─ Databases ───────── 2/3 ─╮ artist   +
+│ ▾  local  PostgreSQL      │╭─ Query · local / app ─────────────────────────── 1/2 ─╮
+│   ▾  app  ·               ││SELECT * FROM "artist" LIMIT 500                       │
+│     ▾  public             │╰───────────────────────────────────────────────────────╯
+│       ▾ Tables  12        │╭─ Results · 3 rows in 0.24ms · id int4 ────────── 1/3 ─╮
+│▌        artist            ││      id name             founded                      │
+│          album            ││  1    1 Portishead          1991                      │
+│     ▸ Views  2            ││  2    2 Boards of Canada    1986                      │
+│   ▸  analytics            ││  3    3 Autechre            NULL                      │
+│ ▾  prod  SQL Server  ro   │╰───────────────────────────────────────────────────────╯
+│ ▸  warehouse  MySQL       │
+╰───────────────────────────╯
+ RESULTS  3 rows in 0.24ms      ⇥ panes · ⌃R run · ⌃K commands · ⌃Q quit
 ```
 
 `Enter` on a row opens it as a record, so a value too long for the grid is
 still readable:
 
 ```
-╭ Row 17 of 500 · comment nvarchar ────────────────────────────────╮
-│id        17                                                      │
-│delta     1                                                       │
-│entity    User                                                    │
-│comment   "binni@vettvangur.is" <binni@vettvangur.is> changed the  │
-│          publication schedule for the shipping page              │
-│reviewed  NULL                                                    │
-│↑↓ fields · ←→ record · Esc close                                 │
-╰──────────────────────────────────────────────────────────────────╯
+╭─ Row 17 of 500 · comment nvarchar ──────────────── 6 fields ─╮
+│id        17                                                  │
+│delta     1                                                   │
+│entity    User                                                │
+│comment   "binni@vettvangur.is" <binni@vettvangur.is> changed  │
+│          the publication schedule for the shipping page      │
+│reviewed  NULL                                                │
+│↑↓ fields · ←→ record · Esc close                             │
+╰──────────────────────────────────────────────────────────────╯
 ```
 
 ## Install
@@ -46,7 +46,10 @@ cargo build --release
 # the binary lands at target/release/binsql
 ```
 
-Rust 1.90 or newer.
+Rust 1.90 or newer, and a Nerd Font in your terminal — binsql draws the tree,
+the status line and the pane chrome with the same glyphs binvim does, and sits
+beside it in the same font. Without one the icons and powerline arrows render
+as boxes; nothing else is affected.
 
 ## Use
 
@@ -182,6 +185,27 @@ Two crates:
 - **`binsql`** — the terminal front end: `app` holds state and drives background
   work over a channel, `ui` draws it. The core is a library so a headless
   command mode can be added over the same guarantees.
+
+### Look
+
+The chrome is binvim's, on purpose — the two sit side by side in the same
+terminal and should not look like they came from different places. What is
+shared:
+
+- **Two surfaces.** The body — query buffer, result grid — is `#1e1e2e`;
+  chrome — the tree, the tab strip, the status line, every overlay — is
+  `#181825`, so chrome reads as layered above rather than painted in.
+- **binvim's twelve chrome roles**, same names and same values:
+  `foreground, dim, emphasis, surface, border, accent, accent_secondary,
+  chip_fg, error, warning, info, hint`. `theme.rs` is the only file that names
+  a colour; everything else asks for a role.
+- **A powerline status line.** A bright chip names the focused pane, one colour
+  per pane the way binvim gives one per mode, with `` between segments.
+- **binvim's popup form.** Title after a single dash in the top border, a
+  counter at the right end of the same border, and `▌` in `emphasis` down the
+  left of the selected row.
+- **Nerd Font glyphs** for servers, databases, schemas, tables, views, columns
+  and keys.
 
 A `Session` is a data source, not a database. Backends that cannot read across
 their own databases on one connection — Postgres — grow a second connection

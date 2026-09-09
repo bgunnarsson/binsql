@@ -30,6 +30,19 @@ fn frame_for(frame: &mut Frame, area: Rect, title: &str) -> Rect {
     inner
 }
 
+fn frame_for_counted(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    counter: impl Into<String>,
+) -> Rect {
+    frame.render_widget(Clear, area);
+    let block = ui::counted_pane(title, counter, true).style(theme::overlay());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    inner
+}
+
 fn help(frame: &mut Frame, area: Rect) {
     let area = ui::centered(area, 88, 90);
     let inner = frame_for(frame, area, "Help");
@@ -235,7 +248,7 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
                 spans = spans
                     .into_iter()
                     .map(|span| {
-                        let style = span.style.bg(theme::SURFACE0);
+                        let style = span.style.bg(theme::SURFACE);
                         Span::styled(span.content, style)
                     })
                     .collect();
@@ -250,7 +263,13 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
     let height = saturating_u16(lines.len() + BORDERS as usize + 1)
         .clamp((BORDERS + 2).min(ceiling), ceiling);
 
-    let inner = frame_for(frame, ui::centered_size(area, width, height), &title);
+    let fields = grid.result.columns.len();
+    let inner = frame_for_counted(
+        frame,
+        ui::centered_size(area, width, height),
+        &title,
+        format!("{fields} fields"),
+    );
     if inner.height < 2 {
         return;
     }
@@ -276,11 +295,6 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
         },
     );
 
-    let more = if max_scroll > 0 {
-        format!(" · {}/{}", scroll + 1, max_scroll + 1)
-    } else {
-        String::new()
-    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("↑↓", theme::key()),
@@ -288,7 +302,7 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::styled("←→", theme::key()),
             Span::styled(" record · ", theme::dim()),
             Span::styled("Esc", theme::key()),
-            Span::styled(format!(" close{more}"), theme::dim()),
+            Span::styled(" close", theme::dim()),
         ])),
         Rect {
             y: inner.y + inner.height - 1,
@@ -361,12 +375,25 @@ fn pad(text: &str, width: usize) -> String {
 }
 
 fn command_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
+    let matches = palette.matches();
     let area = ui::centered(area, 60, 60);
-    let inner = frame_for(frame, area, "Commands");
-    if inner.height < 2 {
+    let position = if matches.is_empty() {
+        0
+    } else {
+        palette.selected + 1
+    };
+    let inner = frame_for_counted(
+        frame,
+        area,
+        "Commands",
+        format!("{position}/{}", matches.len()),
+    );
+    if inner.height < 3 {
         return;
     }
 
+    // Prompt, a blank separator, then the list — the popup breathes rather
+    // than starting hard against its own border.
     let mut lines = vec![
         Line::from(vec![
             Span::styled("› ", theme::accent()),
@@ -376,7 +403,6 @@ fn command_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
         Line::from(""),
     ];
 
-    let matches = palette.matches();
     let room = inner.height.saturating_sub(2) as usize;
     let offset = ui::scroll_offset(0, palette.selected, room);
 
@@ -385,17 +411,22 @@ fn command_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
         let label = command.label();
         let hint = command.hint();
 
-        let mut spans = vec![
-            Span::styled(if selected { " ▸ " } else { "   " }, theme::accent()),
-            Span::styled(
-                ui::truncate(&label, inner.width.saturating_sub(12) as usize),
-                if selected {
-                    theme::selection(true)
-                } else {
-                    theme::cell_text()
-                },
-            ),
-        ];
+        let mut spans = vec![if selected {
+            Span::styled(theme::SELECTION_BAR.to_string(), theme::selection_bar(true))
+        } else {
+            Span::raw(" ")
+        }];
+        spans.push(Span::styled(" ", theme::selection(selected)));
+
+        let body = theme::cell_text();
+        spans.push(Span::styled(
+            ui::truncate(&label, inner.width.saturating_sub(12) as usize),
+            if selected {
+                body.patch(theme::selection(true))
+            } else {
+                body
+            },
+        ));
         if !hint.is_empty() {
             spans.push(Span::styled(format!("  {hint}"), theme::dim()));
         }

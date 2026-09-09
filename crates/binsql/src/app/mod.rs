@@ -683,8 +683,9 @@ impl App {
                 } else {
                     String::new()
                 };
+                let noun = if count == 1 { "row" } else { "rows" };
                 self.success(format!(
-                    "{count} rows in {}{suffix}",
+                    "{count} {noun} in {}{suffix}",
                     format_elapsed(elapsed)
                 ));
             }
