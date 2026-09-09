@@ -10,6 +10,7 @@ pub mod backend;
 pub mod config;
 pub mod error;
 pub mod schema;
+pub mod secrets;
 pub mod session;
 pub mod value;
 
@@ -18,5 +19,6 @@ pub use backend::{Backend, Dialect};
 pub use config::{Config, DataSource};
 pub use error::{Error, Result};
 pub use schema::{Catalog, ObjectKind, ObjectRef};
+pub use secrets::{Reference, Resolver};
 pub use session::Session;
 pub use value::{Column, ResultSet, Value};

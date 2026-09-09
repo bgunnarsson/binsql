@@ -8,6 +8,7 @@ use crate::backend::{Backend, Dialect};
 use crate::config::DataSource;
 use crate::error::{Error, Result};
 use crate::schema::ObjectRef;
+use crate::secrets::Resolver;
 use crate::value::{Column, ResultSet};
 
 /// One open data source.
@@ -25,12 +26,21 @@ pub struct Session {
 
 impl Session {
     pub async fn open(name: impl Into<String>, source: DataSource) -> Result<Session> {
+        Session::open_with(name, source, &Resolver::from_env()).await
+    }
+
+    /// Opens against a specific resolver. Tests use this to supply a cache
+    /// directory rather than the real one.
+    pub async fn open_with(
+        name: impl Into<String>,
+        source: DataSource,
+        resolver: &Resolver,
+    ) -> Result<Session> {
         let name = name.into();
-        if Backend::is_secret_reference(&source.dsn) {
-            return Err(Error::SecretReference { name });
-        }
-        let primary: Arc<dyn Adapter> =
-            Arc::from(adapter::connect(source.backend, &source.dsn).await?);
+        // The stored DSN may name a secret rather than hold one, so it is
+        // resolved before anything tries to parse it as a connection string.
+        let dsn = resolver.resolve(&source.dsn).await?;
+        let primary: Arc<dyn Adapter> = Arc::from(adapter::connect(source.backend, &dsn).await?);
         Ok(Session {
             name,
             source,
