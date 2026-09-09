@@ -459,3 +459,70 @@ fn box_width(line: &str) -> usize {
         + start;
     end - start + 1
 }
+
+/// Relative luminance, per WCAG.
+fn luminance(colour: ratatui::style::Color) -> f64 {
+    let ratatui::style::Color::Rgb(r, g, b) = colour else {
+        return 0.0;
+    };
+    let channel = |v: u8| {
+        let v = f64::from(v) / 255.0;
+        if v <= 0.039_28 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+fn contrast(fg: ratatui::style::Color, bg: ratatui::style::Color) -> f64 {
+    let (a, b) = (luminance(fg), luminance(bg));
+    let (lighter, darker) = if a > b { (a, b) } else { (b, a) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+#[tokio::test]
+async fn the_header_and_status_line_are_legible() {
+    // The hint strip was once `dim` on `surface`, a contrast of about 1.6 —
+    // present on screen and unreadable. Text with a background dark enough to
+    // hide it is a bug, not a style.
+    const FLOOR: f64 = 3.0;
+
+    let path = fixture("contrast");
+    let (mut app, _messages) = App::new(config(&path));
+
+    let mut terminal = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("terminal");
+    terminal
+        .draw(|frame| ui::draw(frame, &mut app))
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    let rows = [0u16, HEIGHT - 1];
+
+    for y in rows {
+        for x in 0..WIDTH {
+            let cell = &buffer[(x, y)];
+            let symbol = cell.symbol();
+            if symbol.trim().is_empty() {
+                continue;
+            }
+            // The powerline arrows are solid shapes, not glyphs read against a
+            // background: their two colours are the segments either side of
+            // them by design, so contrast does not apply.
+            if symbol == "\u{e0b0}" || symbol == "\u{e0b2}" {
+                continue;
+            }
+            let ratio = contrast(cell.fg, cell.bg);
+            assert!(
+                ratio >= FLOOR,
+                "row {y} col {x} {symbol:?} has contrast {ratio:.2} \
+                 (fg {:?} on bg {:?}), below {FLOOR}",
+                cell.fg,
+                cell.bg,
+            );
+        }
+    }
+
+    let _ = std::fs::remove_file(&path);
+}

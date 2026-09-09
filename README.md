@@ -9,8 +9,9 @@ Version 3 is a rewrite in Rust. The Go implementation is archived under
 not been carried across.
 
 ```
+ BINSQL   local   app  PostgreSQL                        2/3 connected
 ╭─ Databases ───────── 2/3 ─╮ artist   +
-│ ▾  local  PostgreSQL      │╭─ Query · local / app ─────────────────────────── 1/2 ─╮
+│ ▾  local  PostgreSQL      │╭─ Query ───────────────────────────────────────── 1/2 ─╮
 │   ▾  app  ·               ││SELECT * FROM "artist" LIMIT 500                       │
 │     ▾  public             │╰───────────────────────────────────────────────────────╯
 │       ▾ Tables  12        │╭─ Results · 3 rows in 0.24ms · id int4 ────────── 1/3 ─╮
@@ -21,7 +22,7 @@ not been carried across.
 │ ▾  prod  SQL Server  ro   │╰───────────────────────────────────────────────────────╯
 │ ▸  warehouse  MySQL       │
 ╰───────────────────────────╯
- RESULTS  3 rows in 0.24ms      ⇥ panes · ⌃R run · ⌃K commands · ⌃Q quit
+ RESULTS  3 rows in 0.24ms          ⇥ panes · ⌃R run · ⌃K commands · ⌃Q quit
 ```
 
 `Enter` on a row opens it as a record, so a value too long for the grid is
@@ -199,7 +200,8 @@ shared:
   `foreground, dim, emphasis, surface, border, accent, accent_secondary,
   chip_fg, error, warning, info, hint`. `theme.rs` is the only file that names
   a colour; everything else asks for a role.
-- **A powerline status line.** A bright chip names the focused pane, one colour
+- **Powerline header and status line.** The header answers "what am I connected
+  to" in one place; the status line's chip names the focused pane, one colour
   per pane the way binvim gives one per mode, with `` between segments.
 - **binvim's popup form.** Title after a single dash in the top border, a
   counter at the right end of the same border, and `▌` in `emphasis` down the
