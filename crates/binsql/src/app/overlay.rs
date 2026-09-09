@@ -6,6 +6,8 @@ use binsql_core::{Backend, DataSource};
 use super::App;
 
 pub enum Overlay {
+    /// Shown once at startup. Any key dismisses it.
+    Splash,
     Help,
     /// One row, every column stacked. The grid has to truncate to fit a line;
     /// this is where the values are actually readable.

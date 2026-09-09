@@ -68,6 +68,7 @@ async fn main() -> Result<()> {
     }
 
     let (mut app, mut messages) = App::new(config);
+    app.show_splash();
     match open_now {
         Some(name) => app.bind_console(&name),
         None => app.open_startup_sources(),

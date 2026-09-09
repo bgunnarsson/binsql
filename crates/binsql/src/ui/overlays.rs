@@ -13,6 +13,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     match &app.overlay {
         None => {}
+        Some(Overlay::Splash) => splash(frame, app, area),
         Some(Overlay::Help) => help(frame, area),
         // Takes `app` mutably: the renderer is what discovers how tall the
         // record is, and the scroll limit follows from that.
@@ -42,6 +43,106 @@ fn frame_for_counted(
     frame.render_widget(block, area);
     inner
 }
+
+/// The wordmark, in the ANSI-shadow shape a terminal splash is expected to
+/// wear. Every glyph here is single-width, so the block is exactly as wide as
+/// it looks.
+const WORDMARK: [&str; 6] = [
+    "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2557}  \u{2588}\u{2588}\u{2557} \u{2588}\u{2588}\u{2588}\u{2557}   \u{2588}\u{2588}\u{2557} \u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2557}  \u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2557}  \u{2588}\u{2588}\u{2557}     ",
+    "\u{2588}\u{2588}\u{2554}\u{2550}\u{2550}\u{2588}\u{2588}\u{2557} \u{2588}\u{2588}\u{2551} \u{2588}\u{2588}\u{2588}\u{2588}\u{2557}  \u{2588}\u{2588}\u{2551} \u{2588}\u{2588}\u{2554}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d} \u{2588}\u{2588}\u{2554}\u{2550}\u{2550}\u{2550}\u{2588}\u{2588}\u{2557} \u{2588}\u{2588}\u{2551}     ",
+    "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2554}\u{255d} \u{2588}\u{2588}\u{2551} \u{2588}\u{2588}\u{2554}\u{2588}\u{2588}\u{2557} \u{2588}\u{2588}\u{2551} \u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2557} \u{2588}\u{2588}\u{2551}   \u{2588}\u{2588}\u{2551} \u{2588}\u{2588}\u{2551}     ",
+    "\u{2588}\u{2588}\u{2554}\u{2550}\u{2550}\u{2588}\u{2588}\u{2557} \u{2588}\u{2588}\u{2551} \u{2588}\u{2588}\u{2551}\u{255a}\u{2588}\u{2588}\u{2557}\u{2588}\u{2588}\u{2551} \u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2588}\u{2588}\u{2551} \u{2588}\u{2588}\u{2551}\u{2584}\u{2584} \u{2588}\u{2588}\u{2551} \u{2588}\u{2588}\u{2551}     ",
+    "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2554}\u{255d} \u{2588}\u{2588}\u{2551} \u{2588}\u{2588}\u{2551} \u{255a}\u{2588}\u{2588}\u{2588}\u{2588}\u{2551} \u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2551} \u{255a}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2554}\u{255d} \u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2557}",
+    "\u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}  \u{255a}\u{2550}\u{255d} \u{255a}\u{2550}\u{255d}  \u{255a}\u{2550}\u{2550}\u{2550}\u{255d} \u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}  \u{255a}\u{2550}\u{2550}\u{2580}\u{2580}\u{2550}\u{255d}  \u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}",
+];
+
+/// The greeting, shown once at startup.
+///
+/// Sized to the wordmark, and falls back to plain text in a terminal too narrow
+/// to hold it — a splash that overflows its own box is worse than no splash.
+fn splash(frame: &mut Frame, app: &App, area: Rect) {
+    let wordmark_width = WORDMARK
+        .iter()
+        .map(|row| UnicodeWidthStr::width(*row))
+        .max()
+        .unwrap_or(0);
+    let roomy = area.width as usize >= wordmark_width + 8;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if roomy {
+        for row in WORDMARK {
+            lines.push(Line::from(Span::styled(row, theme::brand())));
+        }
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", theme::MARK), theme::brand()),
+            Span::styled("binsql", theme::title(true)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "a database IDE for the terminal",
+        theme::muted(),
+    )));
+    lines.push(Line::from(""));
+
+    let registered = app.config.len();
+    lines.push(Line::from(Span::styled(
+        match registered {
+            0 => "No data sources yet".to_string(),
+            1 => "1 data source registered".to_string(),
+            n => format!("{n} data sources registered"),
+        },
+        theme::muted(),
+    )));
+    lines.push(Line::from(""));
+
+    for (binding, what) in [
+        ("⌃N", "add a data source"),
+        ("⌃K", "commands"),
+        ("F1", "help"),
+    ] {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{binding:<4}"), theme::key()),
+            Span::styled(what, theme::muted()),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Any key to begin.", theme::dim())));
+
+    let content_width = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+
+    let width = saturating_u16(content_width + BORDERS as usize + PADDING * 2);
+    let height = saturating_u16(lines.len() + BORDERS as usize);
+    let inner = frame_for_counted(
+        frame,
+        ui::centered_size(area, width, height),
+        "binsql",
+        format!("v{}", env!("CARGO_PKG_VERSION")),
+    );
+
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x + PADDING as u16,
+            width: inner.width.saturating_sub(PADDING as u16 * 2),
+            ..inner
+        },
+    );
+}
+
+/// Breathing room either side of the splash's contents.
+const PADDING: usize = 2;
 
 fn help(frame: &mut Frame, area: Rect) {
     let area = ui::centered(area, 88, 90);

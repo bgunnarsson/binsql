@@ -719,3 +719,74 @@ fn distance(a: ratatui::style::Color, b: ratatui::style::Color) -> i32 {
         + (i32::from(ag) - i32::from(bg)).abs()
         + (i32::from(ab) - i32::from(bb)).abs()
 }
+
+#[tokio::test]
+async fn the_splash_greets_and_any_key_dismisses_it() {
+    let path = fixture("splash");
+    let (mut app, _messages) = App::new(config(&path));
+    app.show_splash();
+
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+
+    assert!(screen.contains("binsql"), "wordmark missing:\n{screen}");
+    assert!(
+        screen.contains("a database IDE for the terminal"),
+        "tagline missing:\n{screen}"
+    );
+    assert!(
+        screen.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))),
+        "version missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("1 data source registered"),
+        "should count what is registered, singular:\n{screen}"
+    );
+    assert!(
+        screen.contains("Any key to begin"),
+        "hint missing:\n{screen}"
+    );
+
+    press(&mut app, KeyCode::Char('x'));
+    assert!(app.overlay.is_none(), "any key should dismiss the splash");
+    assert!(
+        !render(&mut app).contains("Any key to begin"),
+        "the splash should be gone"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn the_splash_falls_back_in_a_narrow_terminal() {
+    let path = fixture("splashnarrow");
+    let (mut app, _messages) = App::new(config(&path));
+    app.show_splash();
+
+    // Narrower than the wordmark, which must not overflow its own box.
+    let mut terminal = Terminal::new(TestBackend::new(40, 24)).expect("terminal");
+    terminal
+        .draw(|frame| ui::draw(frame, &mut app))
+        .expect("draw");
+
+    let rows: Vec<String> = terminal
+        .backend()
+        .buffer()
+        .content()
+        .chunks(40)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+        .collect();
+
+    assert!(
+        rows.iter().any(|row| row.contains("binsql")),
+        "the plain wordmark should stand in:\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains('\u{2588}')),
+        "the block wordmark should not be drawn when it does not fit:\n{}",
+        rows.join("\n")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}

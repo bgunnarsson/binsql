@@ -136,6 +136,13 @@ impl App {
         (app, rx)
     }
 
+    /// Shows the greeting. Called when the app launches rather than when its
+    /// state is built, so a test drives the layout without dismissing a splash
+    /// first.
+    pub fn show_splash(&mut self) {
+        self.overlay = Some(Overlay::Splash);
+    }
+
     /// Connects the data sources marked to open at startup.
     pub fn open_startup_sources(&mut self) {
         let names = self.config.startup_sources();

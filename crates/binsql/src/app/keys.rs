@@ -175,8 +175,9 @@ fn results(app: &mut App, key: KeyEvent) {
 fn overlay(app: &mut App, key: KeyEvent) {
     match app.overlay.as_mut() {
         // The help screen says "any key closes this" and it has to be true,
-        // or the way out is a guess.
-        Some(Overlay::Help) => app.overlay = None,
+        // or the way out is a guess. The splash is the same: it is a greeting,
+        // not a prompt.
+        Some(Overlay::Help) | Some(Overlay::Splash) => app.overlay = None,
 
         Some(Overlay::Detail(detail)) => match key.code {
             KeyCode::Char('j') | KeyCode::Down => detail.scroll_by(1),
