@@ -2,7 +2,8 @@
 
 A database IDE for the terminal. Several databases open at once, a tree you can
 walk, tabbed query consoles, and a result grid — DataGrip's shape, without
-leaving the terminal.
+leaving the terminal. And the same databases without the UI, for a script or an
+agent: see [Command mode](#command-mode).
 
 Version 3 is a rewrite in Rust. The Go implementation is archived under
 [`_old/`](_old/) and still builds; see [Status](#status) for what has and has
@@ -63,6 +64,9 @@ binsql scratch                  # a bare name, when only one folder has it
 binsql ./app.db                 # open a DSN directly, driver inferred
 binsql --driver mysql "user:pass@tcp(host:3306)/app"
 ```
+
+A first argument that names a verb — `query`, `exec`, `inspect` — is
+[command mode](#command-mode) instead; anything else is a data source to open.
 
 Data sources live in `~/.config/binsql/connections.json`, honouring
 `BINSQL_CONFIG` and `XDG_CONFIG_HOME`. Add one from inside the app with `⌃N`
@@ -153,6 +157,74 @@ In the tree: `j`/`k` to move, `l`/`Space` to expand, `h` to collapse or step up,
 data source. In the grid: `hjkl` by cell, `g`/`G` and `0`/`$` for the edges,
 `Enter` opens the whole record with every column stacked and long values
 wrapped, where `←`/`→` step between records without closing it.
+
+## Command mode
+
+The same core without the terminal UI, for a script, a CI job or an agent:
+
+```sh
+binsql query "SELECT * FROM artist ORDER BY id"      # read
+binsql exec  -f migration.sql --dry-run              # write, and keep nothing
+binsql inspect                                       # what tables are there
+binsql inspect artist                                # what columns has it got
+```
+
+The verbs are few and the split between them is a safety boundary rather than a
+convenience. **`query` cannot write** — a mutating statement is refused before
+it is sent, so a script that only reads can say so in the command it runs, and
+whoever reads that script later can see it without reading the SQL. **`exec` is
+the verb that writes**, and it is transactional: two or more statements are one
+unit of work, so a failure part-way through leaves nothing behind.
+
+Every command takes the same connection flags. With none of them, the `default`
+data source is opened.
+
+| | |
+| --- | --- |
+| `-c, --conn NAME` | a saved data source, `folder/name` or a bare name |
+| `-D, --dsn STRING` | a connection string, used instead of a saved one |
+| `-d, --driver NAME` | `sqlite` \| `postgres` \| `mssql` \| `mysql` (default: inferred) |
+
+`BINSQL_CONN`, `BINSQL_DSN` and `BINSQL_DRIVER` say the same things through the
+environment, and a flag beats the variable.
+
+And the same output flags. `--format` decides the whole of what lands on
+stdout; nothing else is ever written there, so the structured formats can be
+piped straight into something that parses them.
+
+| | |
+| --- | --- |
+| `-o, --format NAME` | `table` (default), `json`, `jsonl`, `csv`, `tsv`, `vertical`, `markdown`, `raw`, `none` |
+| `--pretty` | indent JSON |
+| `--no-header` / `--no-footer` | leave out the header row, or the trailing count |
+
+```sh
+binsql query "SELECT * FROM users LIMIT 20" -o json --pretty
+binsql query -f report.sql --conn eimskip/prod -o csv > report.csv
+binsql exec "UPDATE users SET active = 0 WHERE id = 9"
+binsql inspect --conn scratch -o markdown
+```
+
+`query` takes `-f, --file FILE` (`-` for stdin, as does a bare pipe), `--limit N`
+to stop after N rows, and `--allow-write` for the rare statement that has to
+write from the reading verb.
+
+`exec` takes `-f, --file FILE`, and:
+
+| | |
+| --- | --- |
+| `--dry-run` | run the batch in a transaction and roll it back — it really executes, and nothing is kept |
+| `--tx` / `--no-tx` | force one transaction around the batch, or none |
+| `--force` | permit `UPDATE`/`DELETE` with no `WHERE`, and `DROP`/`TRUNCATE` |
+
+Without `--force`, the two statements most likely to be a mistake are refused
+before they are sent. `--dry-run` is transactional everywhere except MySQL DDL,
+which MySQL commits as it runs; binsql says so rather than letting a dry run
+imply otherwise.
+
+Exit codes are `0` for success, `1` for a database that said no, and `2` for a
+usage mistake — so a script can tell "you asked wrong" from "it did not work".
+⌃C cancels the running query the same way it does in the TUI.
 
 ## Databases
 
@@ -281,17 +353,22 @@ cargo test --workspace
 
 The suite includes an end-to-end test that connects to a real SQLite database,
 walks the tree, runs a query and renders the whole layout to a test backend, so
-the thing people look at is asserted rather than assumed.
+the thing people look at is asserted rather than assumed. Command mode is
+tested by running the built binary as a subprocess and reading its stdout, its
+stderr and its exit code, because those three are its whole interface.
 
 ## Status
 
-This rewrite is TUI-first. What works today is everything above. What has **not**
-been carried across from v2 yet:
+What works today is everything above. What has **not** been carried across from
+v2 yet:
 
-- **Command mode** (`binsql query`, `exec`, `inspect`, with JSON/CSV/markdown
-  output and `--dry-run`). The core is built as a library to take it, but the
-  verbs are not implemented — scripts and agents on v2 should keep using the
-  archived binary until they are.
+- **Bind arguments.** v2's `--arg` passed values as `?` placeholders, so a
+  script never built SQL by concatenation. Adding them means teaching the
+  adapters to bind parameters, which is a change to every one of them; until
+  then, command mode takes SQL and no values.
+- **Managing data sources from the command line.** v2 had `binsql conn add`.
+  In v3 a data source is added with ⌃N in the TUI, or by editing
+  `connections.json`.
 - **Managed identity and service-principal credentials** for Key Vault. The
   references themselves work; only the CLI credential is wired up, for the
   reason given under [Azure Key Vault references](#azure-key-vault-references).

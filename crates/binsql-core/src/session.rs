@@ -130,6 +130,29 @@ impl Session {
             .await
     }
 
+    /// Runs several statements as one transaction, committing at the end — or
+    /// rolling back, which is what makes a dry run a dry run: the statements
+    /// really execute, and then nothing is kept.
+    ///
+    /// The read-only guard sees the whole batch before any of it is sent, so a
+    /// script with one write in its middle never starts.
+    pub async fn run_transaction(
+        &self,
+        catalog: Option<&str>,
+        statements: &[String],
+        limit: Option<usize>,
+        commit: bool,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        for sql in statements {
+            self.guard_read_only(sql)?;
+        }
+        self.adapter_for(catalog)
+            .await?
+            .run_transaction(statements, limit, commit, cancel)
+            .await
+    }
+
     /// Refuses the whole script if any statement in it writes.
     ///
     /// Everything a script can be is checked, not just its first word: a

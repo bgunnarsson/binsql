@@ -16,6 +16,10 @@ use crate::value::{Column, ResultSet, Value};
 
 type Connection = tiberius::Client<Compat<TcpStream>>;
 
+/// Guarded, because a batch that failed before its `BEGIN` took effect would
+/// otherwise turn one error into two.
+const ROLLBACK: &str = "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION";
+
 pub struct MsSqlAdapter {
     /// tiberius drives one TDS connection and every call needs `&mut`, so the
     /// adapter serialises access rather than pooling. A terminal UI runs one
@@ -75,7 +79,7 @@ impl MsSqlAdapter {
         self.query(sql, limit, &CancellationToken::new()).await
     }
 
-    /// Runs a row-returning statement.
+    /// Runs one statement, taking the connection lock for it.
     ///
     /// A cancel here costs the connection. TDS carries an attention signal for
     /// exactly this, but tiberius does not expose one, and abandoning a result
@@ -89,93 +93,119 @@ impl MsSqlAdapter {
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
-        let start = Instant::now();
         let mut client = self.client.lock().await;
-        // Sending the batch is not the part worth interrupting — the waiting
-        // is, and that is the loop below, which notices a token cancelled in
-        // the meantime on its first turn.
-        let mut stream = client.simple_query(sql).await.map_err(Error::query)?;
-
-        let mut columns: Vec<Column> = Vec::new();
-        let mut rows: Vec<Vec<Value>> = Vec::new();
-        let mut truncated = false;
-        let mut cancelled = false;
-
-        loop {
-            let item = tokio::select! {
-                item = stream.try_next() => item.map_err(Error::query)?,
-                () = cancel.cancelled() => {
-                    cancelled = true;
-                    break;
-                }
-            };
-            let Some(item) = item else {
-                break;
-            };
-
-            match item {
-                QueryItem::Metadata(meta) => {
-                    if columns.is_empty() {
-                        columns = meta
-                            .columns()
-                            .iter()
-                            .map(|c| Column::new(c.name(), type_label(c.column_type())))
-                            .collect();
-                    }
-                }
-                QueryItem::Row(row) => {
-                    if columns.is_empty() {
-                        columns = row
-                            .columns()
-                            .iter()
-                            .map(|c| Column::new(c.name(), type_label(c.column_type())))
-                            .collect();
-                    }
-                    if limit.is_some_and(|max| rows.len() >= max) {
-                        truncated = true;
-                        break;
-                    }
-                    rows.push(decode_row(&row));
-                }
-            }
+        match run_one(&mut client, sql, limit, cancel).await? {
+            Some(result) => Ok(result),
+            None => self.cancelled(&mut client).await,
         }
-
-        // The stream borrows the client, so it has to go before the connection
-        // underneath it can be replaced.
-        drop(stream);
-        if cancelled {
-            return self.reconnect(&mut client).await;
-        }
-
-        Ok(ResultSet {
-            columns,
-            rows,
-            rows_affected: None,
-            elapsed: start.elapsed(),
-            truncated,
-        })
-    }
-
-    async fn execute(&self, sql: &str, cancel: &CancellationToken) -> Result<ResultSet> {
-        let start = Instant::now();
-        let mut client = self.client.lock().await;
-        let finished = tokio::select! {
-            result = client.execute(sql, &[]) => Some(result.map_err(Error::query)?),
-            () = cancel.cancelled() => None,
-        };
-        let Some(result) = finished else {
-            return self.reconnect(&mut client).await;
-        };
-        Ok(ResultSet::affected(result.total(), start.elapsed()))
     }
 
     /// Replaces the connection after a cancel and reports the cancel. A failure
     /// to reconnect is what the caller hears about instead, since that is the
     /// state the adapter is actually in.
-    async fn reconnect(&self, client: &mut Connection) -> Result<ResultSet> {
+    async fn cancelled<T>(&self, client: &mut Connection) -> Result<T> {
         *client = open(&self.config, &self.label).await?;
         Err(Error::Cancelled)
     }
+}
+
+/// Runs one statement on an already-locked connection, choosing between a
+/// query and an execute the way [`Adapter::run`] does. `None` means the cancel
+/// landed first; replacing the connection is the caller's to do, since only it
+/// knows whether a transaction has to go with it.
+async fn run_one(
+    client: &mut Connection,
+    sql: &str,
+    limit: Option<usize>,
+    cancel: &CancellationToken,
+) -> Result<Option<ResultSet>> {
+    if returns_rows(sql, Backend::MsSql) {
+        collect(client, sql, limit, cancel).await
+    } else {
+        execute_one(client, sql, cancel).await
+    }
+}
+
+async fn collect(
+    client: &mut Connection,
+    sql: &str,
+    limit: Option<usize>,
+    cancel: &CancellationToken,
+) -> Result<Option<ResultSet>> {
+    let start = Instant::now();
+    // Sending the batch is not the part worth interrupting — the waiting is,
+    // and that is the loop below, which notices a token cancelled in the
+    // meantime on its first turn.
+    let mut stream = client.simple_query(sql).await.map_err(Error::query)?;
+
+    let mut columns: Vec<Column> = Vec::new();
+    let mut rows: Vec<Vec<Value>> = Vec::new();
+    let mut truncated = false;
+    let mut cancelled = false;
+
+    loop {
+        let item = tokio::select! {
+            item = stream.try_next() => item.map_err(Error::query)?,
+            () = cancel.cancelled() => {
+                cancelled = true;
+                break;
+            }
+        };
+        let Some(item) = item else {
+            break;
+        };
+
+        match item {
+            QueryItem::Metadata(meta) => {
+                if columns.is_empty() {
+                    columns = meta
+                        .columns()
+                        .iter()
+                        .map(|c| Column::new(c.name(), type_label(c.column_type())))
+                        .collect();
+                }
+            }
+            QueryItem::Row(row) => {
+                if columns.is_empty() {
+                    columns = row
+                        .columns()
+                        .iter()
+                        .map(|c| Column::new(c.name(), type_label(c.column_type())))
+                        .collect();
+                }
+                if limit.is_some_and(|max| rows.len() >= max) {
+                    truncated = true;
+                    break;
+                }
+                rows.push(decode_row(&row));
+            }
+        }
+    }
+
+    if cancelled {
+        return Ok(None);
+    }
+
+    Ok(Some(ResultSet {
+        columns,
+        rows,
+        rows_affected: None,
+        elapsed: start.elapsed(),
+        truncated,
+    }))
+}
+
+async fn execute_one(
+    client: &mut Connection,
+    sql: &str,
+    cancel: &CancellationToken,
+) -> Result<Option<ResultSet>> {
+    let start = Instant::now();
+    let finished = tokio::select! {
+        result = client.execute(sql, &[]) => Some(result.map_err(Error::query)?),
+        () = cancel.cancelled() => None,
+    };
+    Ok(finished.map(|result| ResultSet::affected(result.total(), start.elapsed())))
 }
 
 /// Opens one TDS connection. `label` names the data source in a connect error,
@@ -350,11 +380,50 @@ impl Adapter for MsSqlAdapter {
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
-        if returns_rows(sql, Backend::MsSql) {
-            self.query(sql, limit, cancel).await
-        } else {
-            self.execute(sql, cancel).await
+        self.query(sql, limit, cancel).await
+    }
+
+    /// SQL Server spells its transaction control as statements rather than as
+    /// an API call, so the batch is bracketed by hand — under one lock, so
+    /// nothing else can slip a statement between the `BEGIN` and the `COMMIT`.
+    async fn run_transaction(
+        &self,
+        statements: &[String],
+        limit: Option<usize>,
+        commit: bool,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        let mut client = self.client.lock().await;
+        if run_one(&mut client, "BEGIN TRANSACTION", None, cancel)
+            .await?
+            .is_none()
+        {
+            return self.cancelled(&mut client).await;
         }
+
+        let mut results = Vec::with_capacity(statements.len());
+        for sql in statements {
+            match run_one(&mut client, sql, limit, cancel).await {
+                Ok(Some(result)) => results.push(result),
+                // A cancel takes the connection with it, and with the
+                // connection goes the transaction.
+                Ok(None) => return self.cancelled(&mut client).await,
+                Err(error) => {
+                    let _ = run_one(&mut client, ROLLBACK, None, &CancellationToken::new()).await;
+                    return Err(error);
+                }
+            }
+        }
+
+        let ending = if commit { "COMMIT" } else { ROLLBACK };
+        if run_one(&mut client, ending, None, &CancellationToken::new())
+            .await?
+            .is_none()
+        {
+            return self.cancelled(&mut client).await;
+        }
+
+        Ok(results)
     }
 
     async fn open_catalog(&self, _catalog: &str) -> Result<Option<Box<dyn Adapter>>> {

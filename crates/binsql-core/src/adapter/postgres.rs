@@ -268,6 +268,19 @@ impl Adapter for PostgresAdapter {
         self.run_on_own_connection(sql, limit, cancel).await
     }
 
+    async fn run_transaction(
+        &self,
+        statements: &[String],
+        limit: Option<usize>,
+        commit: bool,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        sqlx_common::run_transaction::<sqlx::Postgres>(
+            &self.pool, statements, limit, commit, decode, affected, cancel,
+        )
+        .await
+    }
+
     async fn open_catalog(&self, catalog: &str) -> Result<Option<Box<dyn Adapter>>> {
         if self.database.as_deref() == Some(catalog) {
             return Ok(None);

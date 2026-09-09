@@ -51,6 +51,21 @@ pub trait Adapter: Send + Sync {
         cancel: &CancellationToken,
     ) -> Result<ResultSet>;
 
+    /// Runs several statements as one transaction on one connection, ending it
+    /// with a commit or, for a dry run, a rollback. A statement that fails
+    /// takes the batch down with it and nothing is kept.
+    ///
+    /// This cannot be built out of [`Adapter::run`] from above: the pooled
+    /// adapters hand out a different connection per call, and a `BEGIN` on one
+    /// connection means nothing to the next.
+    async fn run_transaction(
+        &self,
+        statements: &[String],
+        limit: Option<usize>,
+        commit: bool,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<ResultSet>>;
+
     /// Opens a second connection when `catalog` cannot be reached from this
     /// one, and returns `None` when it can. Postgres is the reason this exists:
     /// its databases are not cross-readable on a single connection.

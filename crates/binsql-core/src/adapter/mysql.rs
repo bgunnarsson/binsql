@@ -270,6 +270,19 @@ impl Adapter for MySqlAdapter {
         self.run_on_own_connection(sql, limit, cancel).await
     }
 
+    async fn run_transaction(
+        &self,
+        statements: &[String],
+        limit: Option<usize>,
+        commit: bool,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        sqlx_common::run_transaction::<sqlx::MySql>(
+            &self.pool, statements, limit, commit, decode, affected, cancel,
+        )
+        .await
+    }
+
     async fn open_catalog(&self, _catalog: &str) -> Result<Option<Box<dyn Adapter>>> {
         // MySQL reads `db`.`table` across databases on one connection.
         Ok(None)

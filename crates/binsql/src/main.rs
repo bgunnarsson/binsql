@@ -6,7 +6,7 @@ use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 
 use binsql::app::{self, App, keys};
-use binsql::ui;
+use binsql::{cli, ui};
 
 const HELP: &str = "\
 binsql — a database IDE for the terminal
@@ -28,7 +28,15 @@ from inside the app with ⌃N.
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let Some(options) = parse_args(std::env::args().skip(1).collect())? else {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // A verb means command mode; anything else is a data source to open, so
+    // `binsql eimskip/prod` still means what it always did.
+    if args.first().is_some_and(|arg| cli::is_verb(arg)) {
+        std::process::exit(cli::main(args).await);
+    }
+
+    let Some(options) = parse_args(args)? else {
         return Ok(());
     };
 
@@ -46,8 +54,12 @@ async fn main() -> Result<()> {
                     .backend
                     .or_else(|| Backend::infer(&target))
                     .ok_or_else(|| {
+                        // Reached by a mistyped verb as readily as by a bad
+                        // DSN, so the message names both ways out.
                         anyhow::anyhow!(
-                            "Could not tell which driver {target} needs — pass --driver"
+                            "{target} is not a saved data source, and binsql cannot tell which \
+                             driver it needs as a connection string — pass --driver, or see \
+                             `binsql --help` for the commands"
                         )
                     })?;
                 // Not written to disk: an ad-hoc DSN is for this run only.
@@ -128,7 +140,7 @@ fn parse_args(args: Vec<String>) -> Result<Option<Options>> {
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "-h" | "--help" => {
-                print!("{HELP}");
+                print!("{HELP}\n{}", cli::HELP);
                 return Ok(None);
             }
             "-V" | "--version" => {

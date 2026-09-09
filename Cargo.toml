@@ -19,6 +19,7 @@ tokio = { version = "1", features = [
     "time",
     "net",
     "process",
+    "signal",
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
