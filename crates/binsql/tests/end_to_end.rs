@@ -854,3 +854,66 @@ async fn every_modal_hugs_its_content() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+/// A query nobody wants any more has to be stoppable from the keyboard, and the
+/// console has to come back ready for the next one.
+#[tokio::test]
+async fn ctrl_c_cancels_a_running_query() {
+    let path = fixture("cancel");
+    let (mut app, mut messages) = App::new(config(&path));
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+
+    // Long enough that it is still running two keystrokes later.
+    app.console_mut().set_sql(
+        "WITH RECURSIVE counter(x) AS (\
+           SELECT 1 UNION ALL SELECT x + 1 FROM counter WHERE x < 20000000\
+         ) SELECT count(*) FROM counter",
+    );
+    binsql::app::keys::handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+    );
+
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("Running"),
+        "no sign of the query:\n{screen}"
+    );
+    assert!(
+        screen.contains("⌃C"),
+        "the way out is not on screen:\n{screen}"
+    );
+
+    binsql::app::keys::handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    );
+    settle(&mut app, &mut messages).await;
+
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("Cancelled") || screen.contains("cancelled"),
+        "the cancel was not reported:\n{screen}"
+    );
+    assert!(
+        !app.console().is_running(),
+        "the console is still marked as running:\n{screen}"
+    );
+
+    // And the console takes the next query as though nothing had happened.
+    app.console_mut().set_sql("SELECT 1 AS after_cancel");
+    binsql::app::keys::handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+    );
+    settle(&mut app, &mut messages).await;
+
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("after_cancel"),
+        "the console did not recover:\n{screen}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}

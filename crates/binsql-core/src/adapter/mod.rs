@@ -5,6 +5,7 @@ mod sqlite;
 mod sqlx_common;
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::backend::Backend;
 use crate::error::Result;
@@ -36,7 +37,19 @@ pub trait Adapter: Send + Sync {
 
     /// Runs one statement. `limit` caps the rows pulled off the wire; the
     /// result is flagged truncated when the cap was reached.
-    async fn run(&self, sql: &str, limit: Option<usize>) -> Result<ResultSet>;
+    ///
+    /// Cancelling the token stops the query and yields [`Error::Cancelled`].
+    /// What that costs the server is the adapter's business: SQL Server has no
+    /// way to say "stop" down an open connection, so its adapter takes the
+    /// connection away instead, and Postgres and MySQL ask a second connection
+    /// to cancel the first. Whatever it takes, the connection is left fit to
+    /// run the next statement on.
+    async fn run(
+        &self,
+        sql: &str,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet>;
 
     /// Opens a second connection when `catalog` cannot be reached from this
     /// one, and returns `None` when it can. Postgres is the reason this exists:

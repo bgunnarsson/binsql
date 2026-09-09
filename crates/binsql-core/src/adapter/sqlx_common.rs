@@ -7,7 +7,8 @@
 use std::time::Instant;
 
 use futures_util::TryStreamExt;
-use sqlx::{Column as _, Database, Either, Executor, Pool, Row, TypeInfo as _};
+use sqlx::{Column as _, Database, Either, Executor, Row, TypeInfo as _};
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{Error, Result};
 use crate::value::{Column, ResultSet, Value};
@@ -17,16 +18,23 @@ use crate::value::{Column, ResultSet, Value};
 /// The row cap is applied while draining the stream rather than after, so a
 /// `SELECT *` against a hundred-million-row table costs the first page and
 /// nothing more.
+///
+/// A cancel stops the drain and drops the stream, which is what sqlx asks of a
+/// caller that wants out early: the pool tests the connection as it comes back
+/// and discards it if the interrupted query left it mid-conversation. Stopping
+/// the *server* is a separate matter and belongs to each adapter, since no two
+/// of them spell it the same way.
 pub async fn run<DB>(
-    pool: &Pool<DB>,
+    connection: &mut DB::Connection,
     sql: &str,
     limit: Option<usize>,
     decode: fn(&DB::Row, usize) -> Value,
     affected: fn(&DB::QueryResult) -> u64,
+    cancel: &CancellationToken,
 ) -> Result<ResultSet>
 where
     DB: Database,
-    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
 {
     let start = Instant::now();
     let mut columns: Vec<Column> = Vec::new();
@@ -35,8 +43,16 @@ where
     let mut truncated = false;
 
     {
-        let mut stream = sqlx::raw_sql(sql).fetch_many(pool);
-        while let Some(item) = stream.try_next().await.map_err(Error::query)? {
+        let mut stream = sqlx::raw_sql(sql).fetch_many(connection);
+        loop {
+            let item = tokio::select! {
+                item = stream.try_next() => item.map_err(Error::query)?,
+                () = cancel.cancelled() => return Err(Error::Cancelled),
+            };
+            let Some(item) = item else {
+                break;
+            };
+
             match item {
                 Either::Left(result) => {
                     let count = affected(&result);

@@ -47,3 +47,4 @@ getrandom = "0.4.3"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio-util = { version = "0.7" }

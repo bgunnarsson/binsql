@@ -7,8 +7,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use binsql_core::{Catalog, Column, Config, DataSource, ObjectKind, ObjectRef, ResultSet, Session};
+use binsql_core::{
+    Catalog, Column, Config, DataSource, Error, ObjectKind, ObjectRef, ResultSet, Session,
+};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio_util::sync::CancellationToken;
 
 use console::{Console, DEFAULT_LIMIT, Grid, Outcome};
 use overlay::Overlay;
@@ -87,7 +90,9 @@ pub enum Message {
     QueryFinished {
         console: u64,
         generation: u64,
-        result: Result<ResultSet, String>,
+        /// The core's own error, not a string: a cancelled query is a
+        /// different thing on screen from a failed one.
+        result: Result<ResultSet, Error>,
     },
 }
 
@@ -513,27 +518,42 @@ impl App {
         };
 
         let console = &mut self.consoles[index];
+        // A console runs one query at a time, so starting another calls off
+        // whatever the last one left running rather than racing it.
+        console.cancel_query();
         console.generation += 1;
         let generation = console.generation;
         let id = console.id;
         let catalog = console.catalog.clone();
+        let cancel = CancellationToken::new();
+        console.cancel = Some(cancel.clone());
         console.outcome = Outcome::Running;
 
         self.focus = Pane::Results;
-        self.info("Running…");
+        self.info("Running… ⌃C cancels");
 
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = session
-                .run(catalog.as_deref(), &sql, Some(DEFAULT_LIMIT))
-                .await
-                .map_err(|error| error.to_string());
+                .run_cancellable(catalog.as_deref(), &sql, Some(DEFAULT_LIMIT), &cancel)
+                .await;
             let _ = tx.send(Message::QueryFinished {
                 console: id,
                 generation,
                 result,
             });
         });
+    }
+
+    /// Calls off the query the active console is running.
+    ///
+    /// The console is free again as soon as this returns; what it costs the
+    /// server is the backend's business, and every one of them here is told to
+    /// stop in whatever way it understands.
+    pub fn cancel_query(&mut self) {
+        if self.console_mut().cancel_query() {
+            self.info("Cancelling…");
+        }
     }
 
     /// Points the active console at a data source, connecting if needed.
@@ -667,13 +687,14 @@ impl App {
         groups
     }
 
-    fn finish_query(&mut self, id: u64, generation: u64, result: Result<ResultSet, String>) {
+    fn finish_query(&mut self, id: u64, generation: u64, result: Result<ResultSet, Error>) {
         let Some(console) = self.consoles.iter_mut().find(|console| console.id == id) else {
             return;
         };
         if console.generation != generation {
             return;
         }
+        console.cancel = None;
 
         match result {
             Ok(result) if result.is_empty() && result.rows_affected.is_some() => {
@@ -704,7 +725,12 @@ impl App {
                     format_elapsed(elapsed)
                 ));
             }
+            Err(Error::Cancelled) => {
+                console.outcome = Outcome::Cancelled;
+                self.warn("Query cancelled");
+            }
             Err(error) => {
+                let error = error.to_string();
                 console.outcome = Outcome::Error(error.clone());
                 self.error(error);
             }

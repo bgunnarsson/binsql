@@ -35,7 +35,18 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         Outcome::Running => {
             frame.render_widget(
-                Paragraph::new(Span::styled("Running…", theme::warning())),
+                Paragraph::new(Line::from(vec![
+                    Span::styled("Running… ", theme::warning()),
+                    Span::styled("⌃C", theme::key()),
+                    Span::styled(" cancels", theme::dim()),
+                ])),
+                inner,
+            );
+            return;
+        }
+        Outcome::Cancelled => {
+            frame.render_widget(
+                Paragraph::new(Span::styled("Cancelled", theme::muted())),
                 inner,
             );
             return;

@@ -3,6 +3,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use sqlx::Row;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgQueryResult, PgRow, PgSslMode};
+use tokio_util::sync::CancellationToken;
 
 use super::Adapter;
 use super::sqlx_common::{self, decode_as, decode_fallback};
@@ -48,6 +49,54 @@ impl PostgresAdapter {
             version: version.map(shorten_version),
             database,
         })
+    }
+
+    /// Runs the statement on a connection of its own so that a cancel has
+    /// something to name. Postgres stops a running query only when a *second*
+    /// connection asks it to, by the first one's backend pid — closing the
+    /// socket does not do it, since a backend busy in a long scan is not
+    /// listening for the client to go away.
+    ///
+    /// It sits outside the `Adapter` impl because a boxed trait future cannot
+    /// hold a borrow of a pooled connection.
+    async fn run_on_own_connection(
+        &self,
+        sql: &str,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        let mut connection = self.pool.acquire().await.map_err(Error::query)?;
+        // One small round-trip per statement, and the price of being able to
+        // stop the large one that follows it.
+        let pid: Option<i32> = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *connection)
+            .await
+            .ok();
+
+        let result = sqlx_common::run::<sqlx::Postgres>(
+            &mut connection,
+            sql,
+            limit,
+            decode,
+            affected,
+            cancel,
+        )
+        .await;
+
+        if matches!(result, Err(Error::Cancelled))
+            && let Some(pid) = pid
+        {
+            // Best-effort by Postgres's own definition: `pg_cancel_backend`
+            // asks the backend to stop at its next opportunity rather than
+            // making it. Sent while the connection above is still checked out,
+            // so the pool is not left draining a query nobody is waiting for.
+            let _ = sqlx::query("SELECT pg_cancel_backend($1)")
+                .bind(pid)
+                .execute(&self.pool)
+                .await;
+        }
+
+        result
     }
 }
 
@@ -210,8 +259,13 @@ impl Adapter for PostgresAdapter {
             .collect())
     }
 
-    async fn run(&self, sql: &str, limit: Option<usize>) -> Result<ResultSet> {
-        sqlx_common::run(&self.pool, sql, limit, decode, affected).await
+    async fn run(
+        &self,
+        sql: &str,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        self.run_on_own_connection(sql, limit, cancel).await
     }
 
     async fn open_catalog(&self, catalog: &str) -> Result<Option<Box<dyn Adapter>>> {

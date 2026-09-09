@@ -5,6 +5,7 @@ use sqlx::Row;
 use sqlx::sqlite::{
     SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteQueryResult, SqliteRow,
 };
+use tokio_util::sync::CancellationToken;
 
 use super::Adapter;
 use super::sqlx_common::{self, decode_as, decode_fallback};
@@ -142,8 +143,18 @@ impl Adapter for SqliteAdapter {
             .collect())
     }
 
-    async fn run(&self, sql: &str, limit: Option<usize>) -> Result<ResultSet> {
-        sqlx_common::run(&self.pool, sql, limit, decode, affected).await
+    /// There is no server to call off: SQLite runs in this process, so dropping
+    /// the stream is the whole of a cancel. A statement already inside the
+    /// engine finishes its current step first, which for SQLite is short.
+    async fn run(
+        &self,
+        sql: &str,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        let mut connection = self.pool.acquire().await.map_err(Error::query)?;
+        sqlx_common::run::<sqlx::Sqlite>(&mut connection, sql, limit, decode, affected, cancel)
+            .await
     }
 
     async fn open_catalog(&self, _catalog: &str) -> Result<Option<Box<dyn Adapter>>> {

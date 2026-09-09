@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use binsql_core::{ResultSet, Value};
+use tokio_util::sync::CancellationToken;
 use tui_textarea::TextArea;
 use unicode_width::UnicodeWidthStr;
 
@@ -27,6 +28,8 @@ pub enum Outcome {
     /// Nothing has been run in this console yet.
     Idle,
     Running,
+    /// The query was called off. Not an error — nobody wanted the answer.
+    Cancelled,
     Rows(Grid),
     Affected {
         count: u64,
@@ -45,6 +48,9 @@ pub struct Console {
     pub catalog: Option<String>,
     pub editor: TextArea<'static>,
     pub outcome: Outcome,
+    /// Calls off the query this console is running. Held only while one is in
+    /// flight, so `is_running` and this stay one fact rather than two.
+    pub cancel: Option<CancellationToken>,
     /// Bumped on every run so a result that arrives after a newer one has
     /// started is discarded instead of overwriting it.
     pub generation: u64,
@@ -80,6 +86,7 @@ impl Console {
             catalog: None,
             editor,
             outcome: Outcome::Idle,
+            cancel: None,
             generation: 0,
         }
     }
@@ -153,6 +160,19 @@ impl Console {
 
     pub fn is_running(&self) -> bool {
         matches!(self.outcome, Outcome::Running)
+    }
+
+    /// Calls off the running query, if there is one. Returns whether there was:
+    /// the caller says so in the status bar, and saying "cancelled" when
+    /// nothing was running is worse than saying nothing.
+    pub fn cancel_query(&mut self) -> bool {
+        match self.cancel.take() {
+            Some(token) => {
+                token.cancel();
+                true
+            }
+            None => false,
+        }
     }
 }
 
