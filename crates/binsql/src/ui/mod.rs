@@ -1,5 +1,6 @@
 mod editor;
 mod explorer;
+mod header;
 mod overlays;
 pub(crate) mod results;
 mod status;
@@ -24,20 +25,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
         .split(area);
 
-    let explorer_width = (rows[0].width * EXPLORER_PERCENT / 100)
-        .clamp(EXPLORER_MIN.min(rows[0].width), EXPLORER_MAX);
+    let explorer_width = (rows[1].width * EXPLORER_PERCENT / 100)
+        .clamp(EXPLORER_MIN.min(rows[1].width), EXPLORER_MAX);
 
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(explorer_width), Constraint::Min(20)])
-        .split(rows[0]);
+        .split(rows[1]);
 
+    header::draw(frame, app, rows[0]);
     explorer::draw(frame, app, columns[0]);
     draw_workspace(frame, app, columns[1]);
-    status::draw(frame, app, rows[1]);
+    status::draw(frame, app, rows[2]);
 
     overlays::draw(frame, app, area);
 }

@@ -45,17 +45,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(&console.editor, inner);
 }
 
-/// The editor's title says what the console is pointed at, because that is the
-/// one thing you must know before pressing ⌃R.
+/// The header carries the connection, so the title only names the console —
+/// and says when this one points somewhere other than the header does, which
+/// is the case worth catching before pressing ⌃R.
 fn binding_title(app: &App) -> String {
-    let console = app.console();
-    match (&console.source, &console.catalog) {
-        (Some(source), Some(catalog)) => {
-            let read_only = app.config.get(source).is_some_and(|entry| entry.read_only);
-            let suffix = if read_only { " · read-only" } else { "" };
-            format!("Query · {source} / {catalog}{suffix}")
-        }
-        (Some(source), None) => format!("Query · {source}"),
-        _ => "Query · not connected".to_string(),
+    match &app.console().source {
+        Some(_) => "Query".to_string(),
+        None => "Query · not connected".to_string(),
     }
 }

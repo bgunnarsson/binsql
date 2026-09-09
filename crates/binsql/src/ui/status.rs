@@ -16,7 +16,16 @@ use crate::app::{App, Pane, Tone};
 use crate::theme;
 use crate::ui;
 
-const HINTS: &str = "⇥ panes · ⌃R run · ⌃K commands · F1 help · ⌃Q quit";
+/// Key, then what it does. Split so the key can carry the accent and the
+/// label a foreground bright enough to read — `dim` on `surface` is very
+/// nearly the same colour.
+const HINTS: [(&str, &str); 5] = [
+    ("⇥", "panes"),
+    ("⌃R", "run"),
+    ("⌃K", "commands"),
+    ("F1", "help"),
+    ("⌃Q", "quit"),
+];
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let pane_colour = pane_colour(app.focus);
@@ -50,11 +59,16 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         theme::powerline(message_colour, theme::CHROME_BG),
     ));
 
+    let hints = hint_spans();
     let used: usize = spans
         .iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum();
-    let hints_width = UnicodeWidthStr::width(HINTS) + 2;
+    let hints_width: usize = hints
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum::<usize>()
+        + 1;
     let room = (area.width as usize).saturating_sub(used);
 
     if room > hints_width {
@@ -66,16 +80,32 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             theme::PL_LEFT.to_string(),
             theme::powerline(theme::SURFACE, theme::CHROME_BG),
         ));
-        spans.push(Span::styled(
-            format!(" {HINTS} "),
-            theme::dim().bg(theme::SURFACE),
-        ));
+        spans.extend(hints);
     }
 
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(theme::status_bar()),
         area,
     );
+}
+
+/// The hint strip: accent keys against readable labels, both on `surface`.
+fn hint_spans() -> Vec<Span<'static>> {
+    let label = theme::muted().bg(theme::SURFACE);
+    let key = theme::key().bg(theme::SURFACE);
+
+    let mut spans = vec![Span::styled(" ", label)];
+    for (index, (binding, what)) in HINTS.iter().enumerate() {
+        if index > 0 {
+            // The separator takes the label's colour rather than `dim`: on
+            // `surface`, `dim` is very nearly the background.
+            spans.push(Span::styled(" · ", label));
+        }
+        spans.push(Span::styled(*binding, key));
+        spans.push(Span::styled(format!(" {what}"), label));
+    }
+    spans.push(Span::styled(" ", label));
+    spans
 }
 
 fn pane_name(pane: Pane) -> &'static str {
