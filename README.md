@@ -40,6 +40,9 @@ still readable:
 ╰──────────────────────────────────────────────────────────────╯
 ```
 
+binsql opens on a splash with the version, how many data sources are
+registered, and the three keys worth knowing. Any key dismisses it.
+
 ## Install
 
 ```sh
