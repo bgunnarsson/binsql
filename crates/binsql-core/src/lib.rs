@@ -1,0 +1,22 @@
+//! The driver-agnostic half of binsql.
+//!
+//! Everything a database differs about is resolved inside an [`adapter`]; what
+//! sits above this crate — today the TUI, later the command mode — works in
+//! [`Session`]s, [`ResultSet`]s and [`ObjectRef`]s and never learns which
+//! engine is on the other end.
+
+pub mod adapter;
+pub mod backend;
+pub mod config;
+pub mod error;
+pub mod schema;
+pub mod session;
+pub mod value;
+
+pub use adapter::Adapter;
+pub use backend::{Backend, Dialect};
+pub use config::{Config, DataSource};
+pub use error::{Error, Result};
+pub use schema::{Catalog, ObjectKind, ObjectRef};
+pub use session::Session;
+pub use value::{Column, ResultSet, Value};

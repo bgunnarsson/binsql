@@ -1,32 +1,21 @@
-### Go ###
+### Rust ###
+/target/
+**/*.rs.bk
 
-# Binaries for programs and plugins
+### Build output ###
+# scripts write platform binaries here; releases are served from GitHub.
+/dist/
+/binsql
+
+### macOS ###
+.DS_Store
+**/.DS_Store
+
+### Go (the archived v2 under _old/) ###
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
 go.work
-
-.DS_Store
-**/.DS_Store
-
-# Build output. scripts/build.sh writes platform binaries into dist/ and
-# scripts/release.sh packages them from there; both end up on the GitHub
-# releases page, which is where the README already sends people. The four
-# binaries here were tracked until 2026-09-04 because the rules below cover
-# *.exe and *.dylib and not extension-less Unix binaries, and notes.txt — a
-# scratch release transcript ending in `git add .` — was what committed them.
-/dist/
-/binsql

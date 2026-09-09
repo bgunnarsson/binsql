@@ -1,0 +1,44 @@
+[package]
+name = "binsql-core"
+description = "Driver-agnostic database core for binsql: adapters, introspection and query execution."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls-ring",
+    "postgres",
+    "mysql",
+    "sqlite",
+    "chrono",
+    "uuid",
+    "rust_decimal",
+    "json",
+] }
+tiberius = { version = "0.12", default-features = false, features = [
+    "tds73",
+    "rustls",
+    "chrono",
+    "rust_decimal",
+] }
+tokio-util = { version = "0.7", features = ["compat"] }
+
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+rust_decimal = "1"
+uuid = "1"
+dirs = "6"
+async-trait = "0.1.92"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
