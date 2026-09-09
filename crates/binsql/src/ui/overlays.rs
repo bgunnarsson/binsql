@@ -141,62 +141,87 @@ fn splash(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-/// Breathing room either side of the splash's contents.
+/// Breathing room either side of an overlay's contents.
 const PADDING: usize = 2;
 
+/// Renders one help section per heading, blank-separated, with no trailing gap.
+fn section_lines(sections: &[Section]) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for (heading, bindings) in sections {
+        lines.push(Line::from(Span::styled(
+            (*heading).to_string(),
+            theme::title(true),
+        )));
+        for (keys, description) in *bindings {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{keys:<13}"), theme::key()),
+                Span::styled(*description, theme::muted()),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+    lines.pop();
+    lines
+}
+
+/// The widest line in a block, in display columns — what a box has to be to
+/// hold it without cutting anything off.
+fn block_width(lines: &[Line<'_>]) -> usize {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 fn help(frame: &mut Frame, area: Rect) {
-    let area = ui::centered(area, 88, 90);
-    let inner = frame_for(frame, area, "Help");
+    // Two columns: the bindings do not fit down one, and a help screen that
+    // scrolls is a help screen nobody reads to the end of. "Anywhere" is the
+    // long section and gets a column to itself.
+    let left = section_lines(&SECTIONS[..1]);
+    let right = section_lines(&SECTIONS[1..]);
+
+    const GUTTER: u16 = 4;
+    let left_width = saturating_u16(block_width(&left));
+    let right_width = saturating_u16(block_width(&right));
+    let width = left_width + GUTTER + right_width + BORDERS + PADDING as u16 * 2;
+    let height = saturating_u16(left.len().max(right.len()) + 1) + BORDERS;
+
+    let inner = frame_for(frame, ui::centered_size(area, width, height), "Help");
     if inner.height < 3 {
         return;
     }
 
-    // Two columns: the bindings do not fit down one, and a help screen that
-    // scrolls is a help screen nobody reads to the end of.
     let columns = ratatui::layout::Layout::default()
         .direction(ratatui::layout::Direction::Horizontal)
         .constraints([
-            ratatui::layout::Constraint::Percentage(52),
-            ratatui::layout::Constraint::Percentage(48),
+            ratatui::layout::Constraint::Length(left_width),
+            ratatui::layout::Constraint::Length(GUTTER),
+            ratatui::layout::Constraint::Min(0),
         ])
         .split(Rect {
+            x: inner.x + PADDING as u16,
+            width: inner.width.saturating_sub(PADDING as u16 * 2),
             height: inner.height - 1,
             ..inner
         });
 
-    let split = 1; // "Anywhere" is the long one; it gets a column to itself.
-    for (index, area) in columns.iter().enumerate() {
-        let sections = if index == 0 {
-            &SECTIONS[..split]
-        } else {
-            &SECTIONS[split..]
-        };
-
-        let mut lines = Vec::new();
-        for (heading, bindings) in sections {
-            lines.push(Line::from(Span::styled(
-                (*heading).to_string(),
-                theme::title(true),
-            )));
-            let room = (area.width as usize).saturating_sub(15);
-            for (keys, description) in *bindings {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(format!("{keys:<13}"), theme::key()),
-                    Span::styled(ui::truncate(description, room), theme::muted()),
-                ]));
-            }
-            lines.push(Line::from(""));
-        }
-        frame.render_widget(Paragraph::new(lines), *area);
-    }
+    frame.render_widget(Paragraph::new(left), columns[0]);
+    frame.render_widget(Paragraph::new(right), columns[2]);
 
     frame.render_widget(
         Paragraph::new(Span::styled("Any key closes this.", theme::dim())),
         Rect {
+            x: inner.x + PADDING as u16,
             y: inner.y + inner.height - 1,
+            width: inner.width.saturating_sub(PADDING as u16 * 2),
             height: 1,
-            ..inner
         },
     );
 }
@@ -475,23 +500,18 @@ fn pad(text: &str, width: usize) -> String {
     format!("{}{}", text, " ".repeat(width.saturating_sub(used)))
 }
 
+/// The command palette, sized to what it is currently offering.
+///
+/// Pinned near the top rather than centred: the list shrinks as the query
+/// narrows it, and a centred box would slide the prompt up the screen under
+/// the cursor on every keystroke.
 fn command_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
+    const FROM_TOP: u16 = 4;
+    /// Enough of the list to choose from without the box owning the screen.
+    const MAX_ROWS: usize = 14;
+
     let matches = palette.matches();
-    let area = ui::centered(area, 60, 60);
-    let position = if matches.is_empty() {
-        0
-    } else {
-        palette.selected + 1
-    };
-    let inner = frame_for_counted(
-        frame,
-        area,
-        "Commands",
-        format!("{position}/{}", matches.len()),
-    );
-    if inner.height < 3 {
-        return;
-    }
+    let rows = matches.len().clamp(1, MAX_ROWS);
 
     // Prompt, a blank separator, then the list — the popup breathes rather
     // than starting hard against its own border.
@@ -504,24 +524,23 @@ fn command_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
         Line::from(""),
     ];
 
-    let room = inner.height.saturating_sub(2) as usize;
-    let offset = ui::scroll_offset(0, palette.selected, room);
-
-    for (index, command) in matches.iter().enumerate().skip(offset).take(room) {
+    let offset = ui::scroll_offset(0, palette.selected, rows);
+    for (index, command) in matches.iter().enumerate().skip(offset).take(rows) {
         let selected = index == palette.selected;
-        let label = command.label();
         let hint = command.hint();
 
-        let mut spans = vec![if selected {
-            Span::styled(theme::SELECTION_BAR.to_string(), theme::selection_bar(true))
-        } else {
-            Span::raw(" ")
-        }];
-        spans.push(Span::styled(" ", theme::selection(selected)));
+        let mut spans = vec![
+            if selected {
+                Span::styled(theme::SELECTION_BAR.to_string(), theme::selection_bar(true))
+            } else {
+                Span::raw(" ")
+            },
+            Span::styled(" ", theme::selection(selected)),
+        ];
 
         let body = theme::cell_text();
         spans.push(Span::styled(
-            ui::truncate(&label, inner.width.saturating_sub(12) as usize),
+            command.label(),
             if selected {
                 body.patch(theme::selection(true))
             } else {
@@ -538,17 +557,44 @@ fn command_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
         lines.push(Line::from(Span::styled("  No match", theme::dim())));
     }
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    let width =
+        saturating_u16(block_width(&lines) + BORDERS as usize + PADDING * 2).max(MIN_PALETTE_WIDTH);
+    let height = saturating_u16(lines.len()) + BORDERS;
+
+    let position = if matches.is_empty() {
+        0
+    } else {
+        palette.selected + 1
+    };
+    let inner = frame_for_counted(
+        frame,
+        ui::anchored_size(area, width, height, FROM_TOP),
+        "Commands",
+        format!("{position}/{}", matches.len()),
+    );
+    if inner.height < 2 {
+        return;
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x + PADDING as u16,
+            width: inner.width.saturating_sub(PADDING as u16 * 2),
+            ..inner
+        },
+    );
 }
 
+/// Wide enough that the box does not jump about as the query narrows the list.
+const MIN_PALETTE_WIDTH: u16 = 52;
+
 fn connect(frame: &mut Frame, form: &ConnectForm, area: Rect) {
-    let area = ui::centered(area, 66, 60);
     let title = if form.editing.is_some() {
         "Edit data source"
     } else {
         "New data source"
     };
-    let inner = frame_for(frame, area, title);
 
     let mut lines = Vec::new();
     for field in Field::ORDER {
@@ -575,9 +621,12 @@ fn connect(frame: &mut Frame, form: &ConnectForm, area: Rect) {
             ),
             Span::styled(if active { "▏" } else { "" }, theme::accent()),
         ]));
-        lines.push(Line::from(""));
     }
 
+    // One blank line before the footer, rather than one between every field:
+    // the label column already separates them, and a form that double-spaces
+    // six fields is mostly gaps.
+    lines.push(Line::from(""));
     if let Some(error) = &form.error {
         lines.push(Line::from(Span::styled(error.clone(), theme::danger())));
         lines.push(Line::from(""));
@@ -594,8 +643,28 @@ fn connect(frame: &mut Frame, form: &ConnectForm, area: Rect) {
         Span::styled(" cancel", theme::dim()),
     ]));
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    // A connection string is longer than any box worth opening, so the form
+    // takes a sensible width and lets the value scroll inside its field rather
+    // than stretching to hold it.
+    let width = saturating_u16(block_width(&lines) + BORDERS as usize + PADDING * 2).clamp(
+        MIN_FORM_WIDTH.min(area.width),
+        (area.width * 80 / 100).max(1),
+    );
+    let height = saturating_u16(lines.len()) + BORDERS;
+    let inner = frame_for(frame, ui::centered_size(area, width, height), title);
+
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        Rect {
+            x: inner.x + PADDING as u16,
+            width: inner.width.saturating_sub(PADDING as u16 * 2),
+            ..inner
+        },
+    );
 }
+
+/// Enough for the labels plus a connection string worth reading.
+const MIN_FORM_WIDTH: u16 = 64;
 
 fn checkbox(on: bool) -> String {
     if on {
