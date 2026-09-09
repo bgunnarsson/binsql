@@ -126,7 +126,8 @@ const SECTIONS: &[Section] = &[
     (
         "Query",
         &[
-            ("Esc", "Back to the database tree"),
+            ("Esc / ⇧Tab", "Leave the editor"),
+            ("Tab", "Indents, so it stays here"),
             ("⌃Z / ⌃Y", "Undo / redo"),
             ("Select text", "⌃R then runs only that"),
         ],
