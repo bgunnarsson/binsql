@@ -9,7 +9,7 @@ Version 3 is a rewrite in Rust. The Go implementation is archived under
 not been carried across.
 
 ```
- BINSQL   local   app  PostgreSQL                        2/3 connected
+ ✻ binsql  ·  local  ·  app  ·  PostgreSQL                    2/3 connected
 ╭─ Databases ───────── 2/3 ─╮ artist   +
 │ ▾  local  PostgreSQL      │╭─ Query ───────────────────────────────────────── 1/2 ─╮
 │   ▾  app  ·               ││SELECT * FROM "artist" LIMIT 500                       │
@@ -22,7 +22,7 @@ not been carried across.
 │ ▾  prod  SQL Server  ro   │╰───────────────────────────────────────────────────────╯
 │ ▸  warehouse  MySQL       │
 ╰───────────────────────────╯
- RESULTS  3 rows in 0.24ms          ⇥ panes · ⌃R run · ⌃K commands · ⌃Q quit
+ 3 rows in 0.24ms                ⇥ panes · ⌃R run · ⌃K commands · ⌃Q quit
 ```
 
 `Enter` on a row opens it as a record, so a value too long for the grid is
@@ -47,10 +47,9 @@ cargo build --release
 # the binary lands at target/release/binsql
 ```
 
-Rust 1.90 or newer, and a Nerd Font in your terminal — binsql draws the tree,
-the status line and the pane chrome with the same glyphs binvim does, and sits
-beside it in the same font. Without one the icons and powerline arrows render
-as boxes; nothing else is affected.
+Rust 1.90 or newer, and a Nerd Font in your terminal — binsql draws the tree
+and the pane chrome with the same glyphs binvim does, and sits beside it in the
+same font. Without one the icons render as boxes; nothing else is affected.
 
 ## Use
 
@@ -189,25 +188,27 @@ Two crates:
 
 ### Look
 
-The chrome is binvim's, on purpose — the two sit side by side in the same
-terminal and should not look like they came from different places. What is
-shared:
+Two borrowings, each for what it is good at.
+
+**Panes and overlays follow binvim**, which shares the terminal:
 
 - **Two surfaces.** The body — query buffer, result grid — is `#1e1e2e`;
-  chrome — the tree, the tab strip, the status line, every overlay — is
-  `#181825`, so chrome reads as layered above rather than painted in.
-- **binvim's twelve chrome roles**, same names and same values:
-  `foreground, dim, emphasis, surface, border, accent, accent_secondary,
-  chip_fg, error, warning, info, hint`. `theme.rs` is the only file that names
-  a colour; everything else asks for a role.
-- **Powerline header and status line.** The header answers "what am I connected
-  to" in one place; the status line's chip names the focused pane, one colour
-  per pane the way binvim gives one per mode, with `` between segments.
+  chrome — the tree, the tab strip, the header and status lines, every overlay
+  — is `#181825`, so chrome reads as layered above rather than painted in.
+- **binvim's chrome roles**, same names and values: `foreground, dim, emphasis,
+  surface, border, accent, accent_secondary, error, warning, hint`. `theme.rs`
+  is the only file that names a colour; everything else asks for a role.
 - **binvim's popup form.** Title after a single dash in the top border, a
   counter at the right end of the same border, and `▌` in `emphasis` down the
   left of the selected row.
 - **Nerd Font glyphs** for servers, databases, schemas, tables, views, columns
   and keys.
+
+**The header and status line follow Claude Code**, which is quieter: one mark in
+its coral `#d97757`, then plain text separated by `·`. These started as
+binvim's powerline segments with a chip naming the focused pane, which was a
+mistranslation — binvim's chips announce a *mode*, binsql has none, and the
+focused pane already says so with its border.
 
 A `Session` is a data source, not a database. Backends that cannot read across
 their own databases on one connection — Postgres — grow a second connection

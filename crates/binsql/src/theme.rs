@@ -1,9 +1,11 @@
 //! The palette, and the roles binsql assigns to it.
 //!
-//! The vocabulary is binvim's, deliberately: the same twelve chrome roles, the
-//! same Catppuccin Mocha values behind them, and the same rule that chrome sits
-//! on its own surface so it reads as layered above the body rather than painted
-//! into it. Anything here that looks like binvim is meant to.
+//! Two sources, each for what it is good at. The pane and overlay vocabulary is
+//! binvim's — its chrome roles, its Catppuccin Mocha values, and its rule that
+//! chrome sits on its own surface so it reads as layered above the body. The
+//! header and status line follow Claude Code instead: one coloured mark and
+//! otherwise quiet text. binvim's roles that only served its mode blocks are
+//! not here, because binsql has no modes to block out.
 //!
 //! Nothing outside this module names a colour. Widgets ask for a role — a
 //! focused border, a NULL cell, a selected row — so the whole UI can be
@@ -18,7 +20,7 @@ pub const BACKGROUND: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
 /// off `BACKGROUND` so chrome reads as sitting above the body.
 pub const CHROME_BG: Color = Color::Rgb(0x18, 0x18, 0x25);
 
-// ── Chrome palette — binvim's twelve keys ───────────────────────────
+// ── Chrome palette — binvim's roles ─────────────────────────────────
 /// Main text on chrome.
 pub const FOREGROUND: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
 /// Muted text: hints, types, row numbers.
@@ -29,15 +31,12 @@ pub const EMPHASIS: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
 pub const SURFACE: Color = Color::Rgb(0x45, 0x47, 0x5a);
 /// Borders and dividers.
 pub const BORDER: Color = Color::Rgb(0x58, 0x5b, 0x70);
-/// The prompt caret, the focused-pane chip.
+/// The prompt caret, and key names in hint text.
 pub const ACCENT: Color = Color::Rgb(0xfa, 0xb3, 0x87);
 /// A connected data source, a successful run.
 pub const ACCENT_SECONDARY: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
-/// Foreground on a bright chip.
-pub const CHIP_FG: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
 pub const ERROR: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 pub const WARNING: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
-pub const INFO: Color = Color::Rgb(0x89, 0xb4, 0xfa);
 pub const HINT: Color = Color::Rgb(0x89, 0xdc, 0xeb);
 
 // A few values the grid and tree colour by, beyond the twelve.
@@ -50,11 +49,13 @@ const SURFACE_HIGH: Color = Color::Rgb(0x58, 0x5b, 0x70);
 /// One step below, for the rest of the cursor's row.
 const SURFACE_LOW: Color = Color::Rgb(0x31, 0x32, 0x44);
 
-// ── Powerline ───────────────────────────────────────────────────────
-// Nerd Font glyphs, used directly: binvim assumes a Nerd Font in the terminal
-// and binsql sits beside it in the same one.
-pub const PL_RIGHT: char = '\u{e0b0}';
-pub const PL_LEFT: char = '\u{e0b2}';
+/// binsql's own mark, in Claude Code's brand coral. The header and the status
+/// line follow Claude Code rather than binvim: binvim's powerline chips exist
+/// to shout which *mode* you are in, and binsql has no modes — pane focus is
+/// already carried by the focused border, so a chip repeating it was noise
+/// wearing a borrowed uniform.
+pub const BRAND: Color = Color::Rgb(0xd9, 0x77, 0x57);
+pub const MARK: char = '✻';
 
 // ── Icons ───────────────────────────────────────────────────────────
 pub const ICON_SERVER: char = '\u{f233}';
@@ -105,6 +106,11 @@ pub fn accent() -> Style {
     Style::default().fg(ACCENT)
 }
 
+/// The product mark, and nothing else.
+pub fn brand() -> Style {
+    Style::default().fg(BRAND)
+}
+
 pub fn success() -> Style {
     Style::default().fg(ACCENT_SECONDARY)
 }
@@ -115,20 +121,6 @@ pub fn warning() -> Style {
 
 pub fn danger() -> Style {
     Style::default().fg(ERROR)
-}
-
-/// A bright chip: the pane name in the status line.
-pub fn chip(colour: Color) -> Style {
-    Style::default()
-        .bg(colour)
-        .fg(CHIP_FG)
-        .add_modifier(Modifier::BOLD)
-}
-
-/// The arrow between two powerline segments: the outgoing segment's colour
-/// drawn over the incoming one's.
-pub fn powerline(from: Color, to: Color) -> Style {
-    Style::default().fg(from).bg(to)
 }
 
 /// The background of a selected row. The `▌` bar carries the emphasis; the
