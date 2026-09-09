@@ -278,3 +278,89 @@ async fn help_closes_on_any_key_as_it_claims() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn enter_shows_the_whole_record_stacked() {
+    let path = fixture("rowdetail");
+    {
+        let session =
+            binsql_core::Session::open("seed", config(&path).get("demo").unwrap().clone())
+                .await
+                .expect("open seed session");
+        session
+            .run(
+                None,
+                "CREATE TABLE audit (id INTEGER PRIMARY KEY, delta INTEGER, entity TEXT, \
+                 comment TEXT, reviewed INTEGER)",
+                None,
+            )
+            .await
+            .expect("create table");
+        session
+            .run(
+                None,
+                "INSERT INTO audit (delta, entity, comment, reviewed) VALUES \
+                 (-1, 'User', '\"brynjolfur@vettvangur.is\" <brynjolfur@vettvangur.is> \
+                 changed the publication schedule for the shipping page', NULL), \
+                 (1, 'User', '\"binni@vettvangur.is\" <binni@vettvangur.is>', 1)",
+                None,
+            )
+            .await
+            .expect("insert rows");
+    }
+
+    let (mut app, mut messages) = App::new(config(&path));
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+
+    let mut guard = 0;
+    while !matches!(
+        app.tree.selected_id().and_then(|id| app.tree.find(id)).map(|n| n.kind.clone()),
+        Some(binsql::app::tree::NodeKind::Object { ref object }) if object.name == "audit"
+    ) {
+        press(&mut app, KeyCode::Char('j'));
+        guard += 1;
+        assert!(guard < 40, "never reached the audit table");
+    }
+    press(&mut app, KeyCode::Enter);
+    settle(&mut app, &mut messages).await;
+
+    // Open the record viewer on the first row.
+    press(&mut app, KeyCode::Enter);
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+
+    // Every column is present, labelled, not just the one under the cursor.
+    for column in ["id", "delta", "entity", "comment", "reviewed"] {
+        assert!(
+            screen.contains(column),
+            "column {column} missing:\n{screen}"
+        );
+    }
+    assert!(screen.contains("Row 1 of 2"), "title missing:\n{screen}");
+    assert!(
+        screen.contains("publication schedule"),
+        "the long value should wrap into view, not be truncated:\n{screen}"
+    );
+    assert!(screen.contains("NULL"), "null field missing:\n{screen}");
+
+    // Right steps to the next record without closing.
+    press(&mut app, KeyCode::Right);
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("Row 2 of 2"),
+        "did not step record:\n{screen}"
+    );
+    assert!(screen.contains("binni@vettvangur.is"), "{screen}");
+
+    // Esc closes it and leaves the grid on the row we walked to.
+    press(&mut app, KeyCode::Esc);
+    assert!(app.overlay.is_none(), "Esc should close the viewer");
+    assert_eq!(
+        app.console().grid().expect("grid").row,
+        1,
+        "stepping records should move the grid cursor with it"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}

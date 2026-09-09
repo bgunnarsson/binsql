@@ -1,7 +1,7 @@
 mod editor;
 mod explorer;
 mod overlays;
-mod results;
+pub(crate) mod results;
 mod status;
 
 use ratatui::Frame;

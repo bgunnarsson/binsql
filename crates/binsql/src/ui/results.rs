@@ -161,7 +161,9 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn value_style(value: &Value) -> Style {
+/// Shared with the row-detail overlay so a value is the same colour
+/// wherever it is shown.
+pub(crate) fn value_style(value: &Value) -> Style {
     match value {
         Value::Null => theme::cell_null(),
         Value::Bool(_) => theme::cell_bool(),

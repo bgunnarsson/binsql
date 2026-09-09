@@ -21,7 +21,22 @@ not been carried across.
 │▾ ● prod  SQL Server  ro  ││  3    3 Autechre            NULL                       │
 │▸ ○ warehouse  MySQL      │╰────────────────────────────────────────────────────────╯
 ╰──────────────────────────╯
- RESULTS  3 rows in 0.24ms      ⌃R run · ⌃K commands · ⌃T tab · F1 help · ⌃Q quit
+ RESULTS  3 rows in 0.24ms   ⇥ panes · ⌃R run · ⌃K commands · F1 help · ⌃Q quit
+```
+
+`Enter` on a row opens it as a record, so a value too long for the grid is
+still readable:
+
+```
+╭ Row 17 of 500 · comment nvarchar ────────────────────────────────╮
+│id        17                                                      │
+│delta     1                                                       │
+│entity    User                                                    │
+│comment   "binni@vettvangur.is" <binni@vettvangur.is> changed the  │
+│          publication schedule for the shipping page              │
+│reviewed  NULL                                                    │
+│↑↓ fields · ←→ record · Esc close                                 │
+╰──────────────────────────────────────────────────────────────────╯
 ```
 
 ## Install
@@ -88,7 +103,8 @@ one is opened.
 In the tree: `j`/`k` to move, `l`/`Space` to expand, `h` to collapse or step up,
 `Enter` to connect or open a table, `n`/`e`/`d` to add, edit or disconnect a
 data source. In the grid: `hjkl` by cell, `g`/`G` and `0`/`$` for the edges,
-`Enter` for the full value of a cell the grid had to truncate.
+`Enter` opens the whole record with every column stacked and long values
+wrapped, where `←`/`→` step between records without closing it.
 
 ## Databases
 

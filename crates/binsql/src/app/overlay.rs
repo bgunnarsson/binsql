@@ -1,4 +1,4 @@
-//! The things that draw on top of the layout: help, a cell's full value, the
+//! The things that draw on top of the layout: help, one record in full, the
 //! command palette, and the connection form.
 
 use binsql_core::{Backend, DataSource};
@@ -7,10 +7,36 @@ use super::App;
 
 pub enum Overlay {
     Help,
-    /// The selected result cell, in full. The grid truncates; this does not.
-    Detail,
+    /// One row, every column stacked. The grid has to truncate to fit a line;
+    /// this is where the values are actually readable.
+    Detail(RowDetail),
     Palette(Palette),
     Connect(ConnectForm),
+}
+
+/// Scroll position within the stacked row. A wide table is taller than the
+/// modal, so this is not optional.
+#[derive(Debug, Default)]
+pub struct RowDetail {
+    pub scroll: usize,
+    /// How far down it is worth scrolling, written by the renderer once it
+    /// knows how many lines the row wrapped to.
+    pub max_scroll: usize,
+}
+
+impl RowDetail {
+    pub fn scroll_by(&mut self, delta: isize) {
+        let next = self.scroll as isize + delta;
+        self.scroll = next.clamp(0, self.max_scroll as isize) as usize;
+    }
+
+    pub fn to_top(&mut self) {
+        self.scroll = 0;
+    }
+
+    pub fn to_bottom(&mut self) {
+        self.scroll = self.max_scroll;
+    }
 }
 
 // --- command palette ---
