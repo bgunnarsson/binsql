@@ -109,6 +109,52 @@ A connection string containing `fedauth=` authenticates with an Azure AD token
 instead of a password, exactly as it did in v2. The token comes from the Azure
 CLI, so `az` must be on `PATH` and `az login` must have been run.
 
+### Azure Key Vault references
+
+A data source can name a secret instead of holding one, so the config on disk
+need contain no credential at all:
+
+```json
+{
+  "connections": {
+    "prod": {
+      "driver": "mssql",
+      "dsn": "keyvault://kv-eimskip-prd/ConnectionStrings--umbracoDbDSN",
+      "readonly": true
+    }
+  }
+}
+```
+
+Accepted forms — `keyvault://` and `azkv://` are the same thing:
+
+```
+keyvault://my-vault/secret-name
+keyvault://my-vault/secret-name/version
+keyvault://my-vault.vault.azure.net/secret-name
+https://my-vault.vault.azure.net/secrets/secret-name[/version]
+```
+
+The reference is resolved just before connecting, and the result is cached for
+15 minutes so restarting binsql does not mean waiting on the vault again.
+Cached secrets are encrypted with AES-256-GCM under a key kept beside them, and
+both files are `0600`. Be clear about what that buys: because the key sits next
+to the ciphertext it guards against a secret being picked up incidentally — by
+a backup, a directory sync, a shared screen, a grep across your home directory
+— not against someone who can already read your files as you. The cache format
+is v2's, so both versions share it while both are installed.
+
+| Variable | Effect |
+| --- | --- |
+| `BINSQL_SECRET_TTL` | Cache lifetime in seconds. `0` resolves every time and writes nothing to disk. |
+| `BINSQL_KEYVAULT_SUFFIX` | Key Vault DNS suffix, for sovereign clouds. |
+
+Secrets are fetched through the Azure CLI, so this needs `az` and `az login`
+just as `fedauth=` does. **This is narrower than v2**, which linked the Azure
+SDK and could also use a managed identity or an `AZURE_CLIENT_ID` service
+principal via `BINSQL_AZURE_CREDENTIAL`. Those arms served CI, which is command
+mode's territory; they come back with it.
+
 ## Design
 
 Two crates:
@@ -144,11 +190,11 @@ been carried across from v2 yet:
   output and `--dry-run`). The core is built as a library to take it, but the
   verbs are not implemented — scripts and agents on v2 should keep using the
   archived binary until they are.
-- **Azure Key Vault references** in connection strings. v2 could store a Key
-  Vault reference instead of a credential; v3 reads the string literally. The
-  `fedauth=` path above needs no stored secret and is unaffected.
-- Exporting a result set, editing values in the grid, query history, and
-  filtering the tree.
+- **Managed identity and service-principal credentials** for Key Vault. The
+  references themselves work; only the CLI credential is wired up, for the
+  reason given under [Azure Key Vault references](#azure-key-vault-references).
+- Exporting a result set, editing values in the grid, query history, cancelling
+  a running query, and filtering the tree.
 
 ## Licence
 

@@ -230,34 +230,6 @@ async fn the_connection_form_reports_what_is_wrong() {
 }
 
 #[tokio::test]
-async fn a_key_vault_reference_says_so_instead_of_failing_obscurely() {
-    // v2 could store a reference in place of a credential. v3 cannot resolve
-    // one, and a config carried over from v2 will contain them, so the tree has
-    // to say what is wrong rather than let a driver fail on a bogus hostname.
-    let mut config = Config::default();
-    config.set(
-        "prod",
-        DataSource {
-            backend: Backend::MsSql,
-            dsn: "keyvault://my-vault/prod-dsn".into(),
-            description: String::new(),
-            read_only: true,
-            open_on_start: true,
-        },
-    );
-
-    let (mut app, mut messages) = App::new(config);
-    app.open_startup_sources();
-    settle(&mut app, &mut messages).await;
-
-    let screen = render(&mut app);
-    assert!(
-        screen.contains("Key Vault"),
-        "the reason should name Key Vault:\n{screen}"
-    );
-}
-
-#[tokio::test]
 async fn ctrl_q_always_quits() {
     // Raw mode disables ISIG, so ⌃C is gone and ⌃Q is the only way out. Every
     // modal used to swallow it, which trapped people inside the program.
