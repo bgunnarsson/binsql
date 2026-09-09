@@ -51,6 +51,17 @@ impl Backend {
         }
     }
 
+    /// Whether the connection string points at a secret instead of holding
+    /// one. The three forms are the ones v2 wrote, so a config carried over
+    /// from it is recognised rather than misread as a hostname.
+    pub fn is_secret_reference(dsn: &str) -> bool {
+        let lower = dsn.trim().to_ascii_lowercase();
+        lower.starts_with("keyvault://")
+            || lower.starts_with("azkv://")
+            // The secret identifier as copied from the Azure portal.
+            || (lower.starts_with("https://") && lower.contains("/secrets/"))
+    }
+
     /// Guesses the backend from the shape of a connection string. Deliberately
     /// conservative — `None` means "ask", not "invalid".
     pub fn infer(dsn: &str) -> Option<Backend> {
@@ -196,5 +207,29 @@ impl Dialect {
                 "SELECT * FROM ({normalized}) AS binsql_q LIMIT {limit}"
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognises_the_secret_reference_forms_v2_wrote() {
+        assert!(Backend::is_secret_reference("keyvault://my-vault/prod-dsn"));
+        assert!(Backend::is_secret_reference("azkv://my-vault/prod-dsn"));
+        assert!(Backend::is_secret_reference(
+            "https://my-vault.vault.azure.net/secrets/prod-dsn"
+        ));
+    }
+
+    #[test]
+    fn leaves_real_connection_strings_alone() {
+        assert!(!Backend::is_secret_reference(
+            "postgres://app@localhost/app"
+        ));
+        assert!(!Backend::is_secret_reference("/data/app.db"));
+        // An https host is only a reference when it names a secret.
+        assert!(!Backend::is_secret_reference("https://example.com/app"));
     }
 }
