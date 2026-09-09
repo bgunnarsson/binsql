@@ -50,7 +50,7 @@ const VERBS: [&str; 3] = ["query", "exec", "inspect"];
 /// Anything else is the TUI's, so `binsql eimskip/prod` still opens a data
 /// source named on the command line rather than being rejected as a bad verb.
 pub fn is_verb(name: &str) -> bool {
-    VERBS.contains(&name) || matches!(name, "q" | "run" | "describe" | "tables")
+    VERBS.contains(&name)
 }
 
 /// Runs a command and returns the process exit code.
@@ -59,9 +59,11 @@ pub async fn main(args: Vec<String>) -> i32 {
     let rest = args.into_iter().skip(1).collect();
 
     let outcome = match verb.as_str() {
-        "query" | "q" => query::run(rest).await,
-        "exec" | "run" => exec::run(rest).await,
-        "inspect" | "describe" | "tables" => inspect::run(rest).await,
+        "query" => query::run(rest).await,
+        "exec" => exec::run(rest).await,
+        "inspect" => inspect::run(rest).await,
+        // Unreachable through `main`, which checks `is_verb` first, but the
+        // two lists have to agree and this is where that would show.
         other => Err(usage(format!("unknown command {other}"))),
     };
 
@@ -82,8 +84,8 @@ pub async fn main(args: Vec<String>) -> i32 {
 
 pub const HELP: &str = "\
 COMMAND MODE
-    binsql query \"<sql>\"        run a read-only statement and print the result
-    binsql exec \"<sql>\"         run statements that change the database
+    binsql query \"<sql>\"       run a read-only statement and print the result
+    binsql exec \"<sql>\"        run statements that change the database
     binsql inspect [table]     list tables, or describe one
 
 CONNECTION
