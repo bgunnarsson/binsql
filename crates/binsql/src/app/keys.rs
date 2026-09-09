@@ -7,7 +7,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use tui_textarea::{Input, Key};
 
-use super::overlay::{Command, ConnectForm, Field, Overlay, Palette};
+use super::overlay::{Command, ConnectForm, Field, Overlay, Palette, RowDetail};
 use super::{App, Pane};
 
 /// How far ⌃D and ⌃U move.
@@ -166,7 +166,7 @@ fn results(app: &mut App, key: KeyEvent) {
         KeyCode::Char('G') | KeyCode::End => grid.last_row(),
         KeyCode::Char('0') => grid.first_column(),
         KeyCode::Char('$') => grid.last_column(),
-        KeyCode::Enter => app.overlay = Some(Overlay::Detail),
+        KeyCode::Enter => app.overlay = Some(Overlay::Detail(RowDetail::default())),
         KeyCode::Char('?') => app.overlay = Some(Overlay::Help),
         _ => {}
     }
@@ -174,9 +174,31 @@ fn results(app: &mut App, key: KeyEvent) {
 
 fn overlay(app: &mut App, key: KeyEvent) {
     match app.overlay.as_mut() {
-        // These two only display; the help screen says "any key closes this"
-        // and it has to be true, or the way out is a guess.
-        Some(Overlay::Help) | Some(Overlay::Detail) => app.overlay = None,
+        // The help screen says "any key closes this" and it has to be true,
+        // or the way out is a guess.
+        Some(Overlay::Help) => app.overlay = None,
+
+        Some(Overlay::Detail(detail)) => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => detail.scroll_by(1),
+            KeyCode::Char('k') | KeyCode::Up => detail.scroll_by(-1),
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                detail.scroll_by(HALF_PAGE)
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                detail.scroll_by(-HALF_PAGE)
+            }
+            KeyCode::PageDown => detail.scroll_by(HALF_PAGE * 2),
+            KeyCode::PageUp => detail.scroll_by(-HALF_PAGE * 2),
+            KeyCode::Char('g') | KeyCode::Home => detail.to_top(),
+            KeyCode::Char('G') | KeyCode::End => detail.to_bottom(),
+
+            // Left and right step between records without closing, which is
+            // the point of a row viewer when you are reading down a table.
+            KeyCode::Char('h') | KeyCode::Left => step_record(app, -1),
+            KeyCode::Char('l') | KeyCode::Right => step_record(app, 1),
+
+            _ => app.overlay = None,
+        },
         Some(Overlay::Palette(palette)) => match key.code {
             KeyCode::Esc => app.overlay = None,
             KeyCode::Up => palette.move_selection(-1),
@@ -207,6 +229,22 @@ fn overlay(app: &mut App, key: KeyEvent) {
             _ => {}
         },
         None => {}
+    }
+}
+
+/// Moves the grid cursor to the next or previous row and shows that record.
+/// The grid keeps the new position after the modal closes, so paging through
+/// records here does not lose your place.
+fn step_record(app: &mut App, delta: isize) {
+    let Some(grid) = app.console_mut().grid_mut() else {
+        return;
+    };
+    let before = grid.row;
+    grid.move_row(delta);
+    let moved = grid.row != before;
+
+    if moved && let Some(Overlay::Detail(detail)) = app.overlay.as_mut() {
+        detail.to_top();
     }
 }
 

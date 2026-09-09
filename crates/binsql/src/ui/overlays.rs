@@ -7,12 +7,16 @@ use crate::app::App;
 use crate::app::overlay::{ConnectForm, Field, Overlay, Palette};
 use crate::theme;
 use crate::ui;
+use crate::ui::results;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
+pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     match &app.overlay {
         None => {}
         Some(Overlay::Help) => help(frame, area),
-        Some(Overlay::Detail) => detail(frame, app, area),
+        // Takes `app` mutably: the renderer is what discovers how tall the
+        // record is, and the scroll limit follows from that.
+        Some(Overlay::Detail(_)) => detail(frame, app, area),
         Some(Overlay::Palette(palette)) => command_palette(frame, palette, area),
         Some(Overlay::Connect(form)) => connect(frame, form, area),
     }
@@ -120,7 +124,7 @@ const SECTIONS: &[Section] = &[
             ("⌃D / ⌃U", "Half page"),
             ("g / G", "First / last row"),
             ("0 / $", "First / last column"),
-            ("Enter", "Show the full value"),
+            ("Enter", "Open the whole record"),
         ],
     ),
     (
@@ -134,31 +138,190 @@ const SECTIONS: &[Section] = &[
     ),
 ];
 
-fn detail(frame: &mut Frame, app: &App, area: Rect) {
-    let area = ui::centered(area, 70, 60);
+/// The selected row with every column stacked, label beside value.
+///
+/// The grid can only give a value one line and truncates to fit; this is where
+/// a long comment or a wrapped connection string is actually readable.
+fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
+    let area = ui::centered(area, 80, 80);
 
-    let (title, body, style) = match app.console().grid() {
-        Some(grid) => {
-            let column = grid
-                .result
-                .columns
-                .get(grid.column)
-                .map(|c| format!("{} · {}", c.name, c.type_name))
-                .unwrap_or_else(|| "Value".to_string());
-            match grid.selected_value() {
-                Some(binsql_core::Value::Null) => (column, "NULL".to_string(), theme::cell_null()),
-                Some(value) => (column, value.to_text(), theme::cell_text()),
-                None => ("Value".into(), String::new(), theme::cell_text()),
-            }
-        }
-        None => ("Value".into(), String::new(), theme::cell_text()),
+    let Some(grid) = app.console().grid() else {
+        let inner = frame_for(frame, area, "Row");
+        frame.render_widget(
+            Paragraph::new(Span::styled("No rows.", theme::dim())),
+            inner,
+        );
+        return;
     };
 
+    // The focused column's type goes in the title rather than beside its
+    // value, where it would sit as an orphan line in the middle of the record.
+    let focused_column = grid
+        .result
+        .columns
+        .get(grid.column)
+        .map(|column| format!(" · {} {}", column.name, column.type_name))
+        .unwrap_or_default();
+    let title = format!("Row {} of {}{focused_column}", grid.row + 1, grid.rows());
     let inner = frame_for(frame, area, &title);
+    if inner.height < 2 {
+        return;
+    }
+
+    // The label column is as wide as the widest name, within reason — a table
+    // with one very long column name should not squeeze every value.
+    let label_width = grid
+        .result
+        .columns
+        .iter()
+        .map(|column| UnicodeWidthStr::width(column.name.as_str()))
+        .max()
+        .unwrap_or(0)
+        .clamp(6, 28);
+    let gap = 2;
+    let value_width = (inner.width as usize)
+        .saturating_sub(label_width + gap)
+        .max(8);
+
+    let Some(row) = grid.result.rows.get(grid.row) else {
+        return;
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (index, column) in grid.result.columns.iter().enumerate() {
+        let value = row.get(index);
+        // The column the grid cursor was on stays marked, so opening the row
+        // does not lose track of where you were.
+        let focused = index == grid.column;
+        let value_style = match value {
+            Some(value) => results::value_style(value),
+            None => theme::cell_text(),
+        };
+        let text = match value {
+            Some(binsql_core::Value::Null) => "NULL".to_string(),
+            Some(value) => value.to_text(),
+            None => String::new(),
+        };
+
+        for (offset, piece) in wrap(&text, value_width).into_iter().enumerate() {
+            let label = if offset == 0 {
+                pad(&ui::truncate(&column.name, label_width), label_width)
+            } else {
+                " ".repeat(label_width)
+            };
+            let mut spans = vec![
+                Span::styled(
+                    label,
+                    if focused {
+                        theme::title(true)
+                    } else {
+                        theme::muted()
+                    },
+                ),
+                Span::raw(" ".repeat(gap)),
+                Span::styled(piece, value_style),
+            ];
+            if focused {
+                spans = spans
+                    .into_iter()
+                    .map(|span| {
+                        let style = span.style.bg(theme::SURFACE0);
+                        Span::styled(span.content, style)
+                    })
+                    .collect();
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+
+    let body_height = inner.height.saturating_sub(1) as usize;
+    let max_scroll = lines.len().saturating_sub(body_height);
+
+    let scroll = match app.overlay.as_mut() {
+        Some(Overlay::Detail(detail)) => {
+            detail.max_scroll = max_scroll;
+            detail.scroll = detail.scroll.min(max_scroll);
+            detail.scroll
+        }
+        _ => 0,
+    };
+
+    let visible: Vec<Line> = lines.into_iter().skip(scroll).take(body_height).collect();
     frame.render_widget(
-        Paragraph::new(Span::styled(body, style)).wrap(Wrap { trim: false }),
-        inner,
+        Paragraph::new(visible),
+        Rect {
+            height: inner.height - 1,
+            ..inner
+        },
     );
+
+    let more = if max_scroll > 0 {
+        format!(" · {}/{}", scroll + 1, max_scroll + 1)
+    } else {
+        String::new()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("↑↓", theme::key()),
+            Span::styled(" fields · ", theme::dim()),
+            Span::styled("←→", theme::key()),
+            Span::styled(" record · ", theme::dim()),
+            Span::styled("Esc", theme::key()),
+            Span::styled(format!(" close{more}"), theme::dim()),
+        ])),
+        Rect {
+            y: inner.y + inner.height - 1,
+            height: 1,
+            ..inner
+        },
+    );
+}
+
+/// Wraps to `width` display columns, breaking between words where it can and
+/// mid-token when a token is longer than the line. Embedded newlines in the
+/// value are kept, since they are part of what makes a value worth opening.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for paragraph in text.split('\n') {
+        let paragraph = paragraph.trim_end_matches('\r');
+        if paragraph.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+
+        let mut line = String::new();
+        let mut used = 0;
+        for word in paragraph.split_inclusive(' ') {
+            let word_width = UnicodeWidthStr::width(word);
+
+            if used + word_width > width && used > 0 {
+                out.push(std::mem::take(&mut line));
+                used = 0;
+            }
+            // A single token wider than the line has to be split somewhere.
+            if word_width > width {
+                for ch in word.chars() {
+                    let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if used + ch_width > width && used > 0 {
+                        out.push(std::mem::take(&mut line));
+                        used = 0;
+                    }
+                    line.push(ch);
+                    used += ch_width;
+                }
+                continue;
+            }
+            line.push_str(word);
+            used += word_width;
+        }
+        out.push(line);
+    }
+    out
+}
+
+fn pad(text: &str, width: usize) -> String {
+    let used = UnicodeWidthStr::width(text);
+    format!("{}{}", text, " ".repeat(width.saturating_sub(used)))
 }
 
 fn command_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
