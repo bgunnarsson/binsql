@@ -144,10 +144,12 @@ impl Tree {
                             name: folder.to_string(),
                         },
                         // A folder's children are its config entries; there is
-                        // nothing behind it to fetch, so it starts loaded.
+                        // nothing behind it to fetch, so it starts loaded — but
+                        // closed, so a machine with a dozen clients on it opens
+                        // to a list of clients rather than every database at
+                        // once.
                         LoadState::Loaded,
                     );
-                    created.expanded = true;
                     created.children.push(node);
                     self.roots.push(created);
                 }
@@ -360,6 +362,17 @@ impl Tree {
             } = &mut node.kind
         {
             *flag = connected;
+        }
+
+        // Folders start closed, so a source that connects on its own — the
+        // default, or one flagged `open_on_start` — would otherwise be working
+        // away invisibly inside one.
+        if connected
+            && let Some(parent) = self.parent_of(id)
+            && let Some(folder) = self.find_mut(parent)
+            && matches!(folder.kind, NodeKind::Folder { .. })
+        {
+            folder.expanded = true;
         }
     }
 

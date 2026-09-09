@@ -593,3 +593,58 @@ async fn folders_group_the_sidebar() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn folders_start_closed() {
+    let dir = std::env::temp_dir().join(format!("binsql-closed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    for name in ["a.db", "b.db"] {
+        std::fs::write(dir.join(name), b"").expect("create database");
+    }
+
+    // Nothing opens on its own here: no `open_on_start`, and the default is
+    // ambiguous on purpose.
+    let raw = format!(
+        r#"{{
+            "default": "prod",
+            "connections": {{
+                "eimskip": {{
+                    "local": {{ "driver": "sqlite", "dsn": "{a}" }},
+                    "prod":  {{ "driver": "sqlite", "dsn": "{a}" }}
+                }},
+                "osar": {{ "prod": {{ "driver": "sqlite", "dsn": "{b}" }} }}
+            }}
+        }}"#,
+        a = dir.join("a.db").display(),
+        b = dir.join("b.db").display(),
+    );
+    let config: Config = serde_json::from_str(&raw).expect("config parses");
+
+    let (mut app, _messages) = App::new(config);
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+
+    assert!(screen.contains("eimskip"), "folders missing:\n{screen}");
+    assert!(screen.contains("osar"), "folders missing:\n{screen}");
+    assert!(
+        !screen.contains("local"),
+        "a closed folder should not show what is inside it:\n{screen}"
+    );
+    assert_eq!(
+        app.tree.visible().len(),
+        2,
+        "only the two folders should be visible"
+    );
+
+    // Opening one shows its connections and leaves the other alone.
+    press(&mut app, KeyCode::Char('l'));
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("local"),
+        "expanding should reveal:\n{screen}"
+    );
+    assert_eq!(app.tree.visible().len(), 4, "one folder open, one closed");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
