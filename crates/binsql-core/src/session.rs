@@ -3,12 +3,13 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::adapter::{self, Adapter, is_mutating};
+use crate::adapter::{self, Adapter};
 use crate::backend::{Backend, Dialect};
 use crate::config::DataSource;
 use crate::error::{Error, Result};
 use crate::schema::ObjectRef;
 use crate::secrets::Resolver;
+use crate::sql;
 use crate::value::{Column, ResultSet};
 
 /// One open data source.
@@ -107,13 +108,34 @@ impl Session {
         sql: &str,
         limit: Option<usize>,
     ) -> Result<ResultSet> {
-        if self.source.read_only && is_mutating(sql) {
-            return Err(Error::ReadOnly {
-                data_source: self.name.clone(),
-                statement: first_word(sql),
-            });
-        }
+        self.guard_read_only(sql)?;
         self.adapter_for(catalog).await?.run(sql, limit).await
+    }
+
+    /// Refuses the whole script if any statement in it writes.
+    ///
+    /// Everything a script can be is checked, not just its first word: a
+    /// comment above the statement, a second statement after a harmless first
+    /// one, and a `WITH` fronting a `DELETE` all used to read as a `SELECT`.
+    /// This runs before a connection is even chosen, so a refused script
+    /// reaches no server at all.
+    pub fn guard_read_only(&self, sql: &str) -> Result<()> {
+        if !self.source.read_only {
+            return Ok(());
+        }
+
+        let backend = self.backend();
+        let offender = sql::split(sql, backend)
+            .into_iter()
+            .find(|statement| statement.kind.mutates());
+
+        match offender {
+            Some(statement) => Err(Error::ReadOnly {
+                data_source: self.name.clone(),
+                statement: sql::summarize(&statement.sql, backend, 80),
+            }),
+            None => Ok(()),
+        }
     }
 
     pub async fn catalogs(&self) -> Result<Vec<crate::schema::Catalog>> {
@@ -140,11 +162,4 @@ impl Session {
             .columns(object)
             .await
     }
-}
-
-fn first_word(sql: &str) -> String {
-    sql.split_whitespace()
-        .next()
-        .unwrap_or("statement")
-        .to_ascii_uppercase()
 }

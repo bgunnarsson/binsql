@@ -120,3 +120,65 @@ async fn read_only_sources_refuse_writes() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+/// Every one of these reads as a `SELECT` — or as nothing at all — if the guard
+/// only looks at the first word of the script. Each is run against a real
+/// database and the table is counted afterwards, so a statement that slipped
+/// through would show up as a row that is no longer there.
+#[tokio::test]
+async fn a_write_cannot_be_disguised_from_the_read_only_guard() {
+    let path = temp_database("readonly-disguised");
+    let writable = Session::open("seed", source(&path, false))
+        .await
+        .expect("open session");
+    writable
+        .run(None, "CREATE TABLE t (a INTEGER)", None)
+        .await
+        .expect("create table");
+    writable
+        .run(None, "INSERT INTO t (a) VALUES (1), (2), (3)", None)
+        .await
+        .expect("seed rows");
+
+    let guarded = Session::open("prod", source(&path, true))
+        .await
+        .expect("open read-only session");
+
+    let disguises = [
+        "/* ticket-421 */ DELETE FROM t",
+        "-- tidying up\nDELETE FROM t",
+        "SELECT 1; DELETE FROM t",
+        "SELECT 1;\n-- and then\nDROP TABLE t",
+        "WITH doomed AS (SELECT a FROM t) DELETE FROM t WHERE a IN (SELECT a FROM doomed)",
+        "   \n\tUPDATE t SET a = 0",
+    ];
+
+    for sql in disguises {
+        let error = guarded
+            .run(None, sql, None)
+            .await
+            .expect_err("refused: {sql}");
+        assert!(
+            error.to_string().contains("read-only"),
+            "{sql} — got {error}"
+        );
+    }
+
+    let survivors = guarded
+        .run(None, "SELECT count(*) FROM t", None)
+        .await
+        .expect("count rows");
+    assert_eq!(survivors.rows[0][0], Value::Int(3), "rows were written");
+
+    // The refusal is aimed at what writes, not at everything long or unusual.
+    for sql in [
+        "-- yesterday's numbers\nSELECT count(*) FROM t",
+        "SELECT 1; SELECT 2",
+        "WITH counted AS (SELECT count(*) AS n FROM t) SELECT n FROM counted",
+        "SELECT 'DELETE FROM t' AS not_a_statement",
+    ] {
+        guarded.run(None, sql, None).await.expect(sql);
+    }
+
+    let _ = std::fs::remove_file(&path);
+}

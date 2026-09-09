@@ -276,7 +276,7 @@ impl Adapter for MsSqlAdapter {
     }
 
     async fn run(&self, sql: &str, limit: Option<usize>) -> Result<ResultSet> {
-        if returns_rows(sql) {
+        if returns_rows(sql, Backend::MsSql) {
             self.query(sql, limit).await
         } else {
             self.execute(sql).await
