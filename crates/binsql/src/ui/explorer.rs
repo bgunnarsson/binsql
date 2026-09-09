@@ -13,12 +13,12 @@ use crate::ui;
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Pane::Explorer;
     let connected = app.sessions.len();
-    let total = app.config.connections.len();
+    let total = app.config.len();
     let block = ui::counted_pane("Databases", format!("{connected}/{total}"), focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if app.config.connections.is_empty() {
+    if app.config.is_empty() {
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(Span::styled("No data sources yet.", theme::muted())),
@@ -85,6 +85,18 @@ fn render_node(
     spans.push(Span::styled(expander, theme::dim()));
 
     match &node.kind {
+        NodeKind::Folder { name } => {
+            spans.push(Span::styled(
+                format!("{} ", theme::ICON_FOLDER),
+                theme::node_folder(),
+            ));
+            spans.push(Span::styled(name.clone(), theme::node_folder()));
+            spans.push(Span::styled(
+                format!("  {}", node.children.len()),
+                theme::dim(),
+            ));
+        }
+
         NodeKind::Source { name, connected } => {
             let glyph_style = if *connected {
                 theme::success()
@@ -97,7 +109,11 @@ fn render_node(
                 format!("{} ", theme::ICON_SERVER),
                 glyph_style,
             ));
-            spans.push(Span::styled(name.clone(), theme::node_source(*connected)));
+            let leaf = binsql_core::config::split_qualified(name).1;
+            spans.push(Span::styled(
+                leaf.to_string(),
+                theme::node_source(*connected),
+            ));
 
             if let Some(source) = app.config.get(name) {
                 spans.push(Span::styled(

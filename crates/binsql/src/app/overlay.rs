@@ -107,15 +107,15 @@ impl Palette {
             Command::Refresh,
         ];
 
-        for name in app.config.names() {
-            if app.sessions.contains_key(name) {
+        for (name, _) in app.config.iter() {
+            if app.sessions.contains_key(&name) {
                 commands.push(Command::BindConsole(name.clone()));
                 commands.push(Command::Disconnect(name.clone()));
             } else {
                 commands.push(Command::Connect(name.clone()));
             }
             commands.push(Command::EditDataSource(name.clone()));
-            commands.push(Command::RemoveDataSource(name.clone()));
+            commands.push(Command::RemoveDataSource(name));
         }
 
         commands.push(Command::Help);
@@ -176,6 +176,7 @@ fn is_subsequence(needle: &str, haystack: &str) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
+    Folder,
     Name,
     Dsn,
     Backend,
@@ -184,7 +185,8 @@ pub enum Field {
 }
 
 impl Field {
-    pub const ORDER: [Field; 5] = [
+    pub const ORDER: [Field; 6] = [
+        Field::Folder,
         Field::Name,
         Field::Dsn,
         Field::Backend,
@@ -194,6 +196,7 @@ impl Field {
 
     pub fn label(self) -> &'static str {
         match self {
+            Field::Folder => "Folder",
             Field::Name => "Name",
             Field::Dsn => "Connection string",
             Field::Backend => "Driver",
@@ -204,6 +207,8 @@ impl Field {
 }
 
 pub struct ConnectForm {
+    /// Groups the connection in the sidebar. Empty leaves it at the top level.
+    pub folder: String,
     pub name: String,
     pub dsn: String,
     /// `None` means "work it out from the connection string", which is right
@@ -220,19 +225,22 @@ pub struct ConnectForm {
 impl ConnectForm {
     pub fn new() -> ConnectForm {
         ConnectForm {
+            folder: String::new(),
             name: String::new(),
             dsn: String::new(),
             backend: None,
             read_only: false,
             open_on_start: false,
-            field: Field::Name,
+            field: Field::Folder,
             error: None,
             editing: None,
         }
     }
 
-    pub fn editing(name: &str, source: &DataSource) -> ConnectForm {
+    pub fn editing(id: &str, source: &DataSource) -> ConnectForm {
+        let (folder, name) = binsql_core::config::split_qualified(id);
         ConnectForm {
+            folder: folder.unwrap_or_default().to_string(),
             name: name.to_string(),
             dsn: source.dsn.clone(),
             backend: Some(source.backend),
@@ -240,7 +248,7 @@ impl ConnectForm {
             open_on_start: source.open_on_start,
             field: Field::Name,
             error: None,
-            editing: Some(name.to_string()),
+            editing: Some(id.to_string()),
         }
     }
 
@@ -297,6 +305,7 @@ impl ConnectForm {
 
     pub fn push(&mut self, ch: char) {
         match self.field {
+            Field::Folder => self.folder.push(ch),
             Field::Name => self.name.push(ch),
             Field::Dsn => self.dsn.push(ch),
             Field::ReadOnly | Field::OpenOnStart if ch == ' ' => self.toggle(),
@@ -306,6 +315,9 @@ impl ConnectForm {
 
     pub fn backspace(&mut self) {
         match self.field {
+            Field::Folder => {
+                self.folder.pop();
+            }
             Field::Name => {
                 self.name.pop();
             }
@@ -322,6 +334,15 @@ impl ConnectForm {
         if name.is_empty() {
             return Err("A data source needs a name".into());
         }
+        let folder = self.folder.trim();
+        if name.contains(binsql_core::config::SEPARATOR)
+            || folder.contains(binsql_core::config::SEPARATOR)
+        {
+            return Err(format!(
+                "'{}' separates the folder from the name, so neither may contain it",
+                binsql_core::config::SEPARATOR
+            ));
+        }
         let dsn = self.dsn.trim();
         if dsn.is_empty() {
             return Err("A data source needs a connection string".into());
@@ -331,7 +352,7 @@ impl ConnectForm {
         })?;
 
         Ok((
-            name.to_string(),
+            binsql_core::config::qualify(Some(folder).filter(|f| !f.is_empty()), name),
             DataSource {
                 backend,
                 dsn: dsn.to_string(),
@@ -378,6 +399,24 @@ mod tests {
         let (name, source) = form.build().expect("valid form");
         assert_eq!(name, "local");
         assert_eq!(source.backend, Backend::Postgres);
+    }
+
+    #[test]
+    fn a_folder_qualifies_the_saved_name() {
+        let mut form = ConnectForm::new();
+        form.folder = "eimskip".into();
+        form.name = "prod".into();
+        form.dsn = "sqlserver://host/db".into();
+        let (id, _) = form.build().expect("valid form");
+        assert_eq!(id, "eimskip/prod");
+    }
+
+    #[test]
+    fn the_separator_is_refused_inside_a_name() {
+        let mut form = ConnectForm::new();
+        form.name = "eimskip/prod".into();
+        form.dsn = "sqlserver://host/db".into();
+        assert!(form.build().is_err());
     }
 
     #[test]

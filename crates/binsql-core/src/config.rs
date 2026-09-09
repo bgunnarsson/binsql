@@ -1,8 +1,12 @@
 //! Saved data sources.
 //!
-//! The on-disk shape is the v2 `connections.json` unchanged, so an existing
-//! `~/.config/binsql/connections.json` opens without migration. Everything v3
-//! adds is an optional field with a default.
+//! A connection can sit at the top level, as v2 wrote them, or inside a named
+//! folder — a client, a project — so `eimskip/prod` and `osar/prod` can both
+//! exist. Both shapes are read from the same file and both are written back the
+//! way they were found, so an existing `connections.json` opens unchanged.
+//!
+//! A folder is one level deep on purpose. Nesting further would buy a tree that
+//! nobody has asked to navigate and a key format that has to escape itself.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -32,12 +36,59 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// What one key under `connections` holds: either a connection, or a folder of
+/// them.
+///
+/// `untagged` tries `Source` first, so a v2 file — whose values are connection
+/// objects — still parses as connections rather than as folders of nothing. A
+/// malformed connection fails both arms and is reported, rather than being
+/// quietly read as an empty folder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Entry {
+    Source(Box<DataSource>),
+    Folder(BTreeMap<String, DataSource>),
+}
+
+/// Separates a folder from the connection inside it, in a qualified name like
+/// `eimskip/prod`. A connection name may not contain it.
+pub const SEPARATOR: char = '/';
+
+/// The qualified name a folder and a connection make together.
+pub fn qualify(folder: Option<&str>, name: &str) -> String {
+    match folder {
+        Some(folder) => format!("{folder}{SEPARATOR}{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// Splits `eimskip/prod` back into its parts. A name with no separator is a
+/// top-level connection.
+pub fn split_qualified(id: &str) -> (Option<&str>, &str) {
+    match id.split_once(SEPARATOR) {
+        Some((folder, name)) => (Some(folder), name),
+        None => (None, id),
+    }
+}
+
+/// One row of the sidebar, before anything is connected.
+pub enum Listing<'a> {
+    Source {
+        id: String,
+        source: &'a DataSource,
+    },
+    Folder {
+        name: &'a str,
+        sources: Vec<(String, &'a DataSource)>,
+    },
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
     #[serde(default)]
-    pub connections: BTreeMap<String, DataSource>,
+    pub connections: BTreeMap<String, Entry>,
 }
 
 impl Config {
@@ -100,42 +151,145 @@ impl Config {
         Ok(())
     }
 
-    pub fn get(&self, name: &str) -> Option<&DataSource> {
-        self.connections.get(name)
+    /// Looks a connection up by its qualified name — `prod`, or
+    /// `eimskip/prod`.
+    pub fn get(&self, id: &str) -> Option<&DataSource> {
+        match split_qualified(id) {
+            (None, name) => match self.connections.get(name)? {
+                Entry::Source(source) => Some(source),
+                Entry::Folder(_) => None,
+            },
+            (Some(folder), name) => match self.connections.get(folder)? {
+                Entry::Folder(sources) => sources.get(name),
+                Entry::Source(_) => None,
+            },
+        }
     }
 
-    pub fn names(&self) -> impl Iterator<Item = &String> {
-        self.connections.keys()
+    /// Every connection, qualified, in the order the sidebar shows them.
+    pub fn iter(&self) -> impl Iterator<Item = (String, &DataSource)> {
+        self.connections.iter().flat_map(
+            |(key, entry)| -> Box<dyn Iterator<Item = (String, &DataSource)>> {
+                match entry {
+                    Entry::Source(source) => {
+                        Box::new(std::iter::once((key.clone(), source.as_ref())))
+                    }
+                    Entry::Folder(sources) => Box::new(
+                        sources
+                            .iter()
+                            .map(move |(name, source)| (qualify(Some(key), name), source)),
+                    ),
+                }
+            },
+        )
     }
 
-    pub fn set(&mut self, name: impl Into<String>, source: DataSource) {
-        self.connections.insert(name.into(), source);
+    pub fn len(&self) -> usize {
+        self.iter().count()
     }
 
-    /// Removes a data source, clearing the default if it pointed there.
-    pub fn remove(&mut self, name: &str) -> bool {
-        let removed = self.connections.remove(name).is_some();
-        if removed && self.default.as_deref() == Some(name) {
+    pub fn is_empty(&self) -> bool {
+        self.iter().next().is_none()
+    }
+
+    /// The top level, folders intact, for building the sidebar.
+    pub fn listing(&self) -> Vec<Listing<'_>> {
+        self.connections
+            .iter()
+            .map(|(key, entry)| match entry {
+                Entry::Source(source) => Listing::Source {
+                    id: key.clone(),
+                    source: source.as_ref(),
+                },
+                Entry::Folder(sources) => Listing::Folder {
+                    name: key,
+                    sources: sources
+                        .iter()
+                        .map(|(name, source)| (qualify(Some(key), name), source))
+                        .collect(),
+                },
+            })
+            .collect()
+    }
+
+    /// Adds or replaces a connection at a qualified name, creating the folder
+    /// if it is new.
+    pub fn set(&mut self, id: &str, source: DataSource) {
+        match split_qualified(id) {
+            (None, name) => {
+                self.connections
+                    .insert(name.to_string(), Entry::Source(Box::new(source)));
+            }
+            (Some(folder), name) => {
+                let entry = self
+                    .connections
+                    .entry(folder.to_string())
+                    .or_insert_with(|| Entry::Folder(BTreeMap::new()));
+                // A folder name that collides with a top-level connection
+                // becomes a folder; the connection it replaces was addressed by
+                // a name that now means something else.
+                if !matches!(entry, Entry::Folder(_)) {
+                    *entry = Entry::Folder(BTreeMap::new());
+                }
+                if let Entry::Folder(sources) = entry {
+                    sources.insert(name.to_string(), source);
+                }
+            }
+        }
+    }
+
+    /// Removes a connection, dropping the folder if that emptied it and
+    /// clearing the default if it pointed there.
+    pub fn remove(&mut self, id: &str) -> bool {
+        let removed = match split_qualified(id) {
+            (None, name) => matches!(self.connections.remove(name), Some(Entry::Source(_))),
+            (Some(folder), name) => {
+                let Some(Entry::Folder(sources)) = self.connections.get_mut(folder) else {
+                    return false;
+                };
+                let removed = sources.remove(name).is_some();
+                if sources.is_empty() {
+                    self.connections.remove(folder);
+                }
+                removed
+            }
+        };
+
+        if removed && self.default.as_deref() == Some(id) {
             self.default = None;
         }
         removed
     }
 
+    /// Turns what someone typed into a qualified name: an exact match first,
+    /// then a connection whose leaf name is unique across every folder, so
+    /// `binsql prod` still works when only one folder has one.
+    pub fn resolve(&self, needle: &str) -> Option<String> {
+        if self.get(needle).is_some() {
+            return Some(needle.to_string());
+        }
+        let mut matches = self
+            .iter()
+            .map(|(id, _)| id)
+            .filter(|id| split_qualified(id).1 == needle);
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
+    }
+
     /// The data sources to connect at startup: those flagged `open_on_start`,
     /// or the default one when nothing is flagged.
-    pub fn startup_sources(&self) -> Vec<&String> {
-        let flagged: Vec<&String> = self
-            .connections
+    pub fn startup_sources(&self) -> Vec<String> {
+        let flagged: Vec<String> = self
             .iter()
             .filter(|(_, source)| source.open_on_start)
-            .map(|(name, _)| name)
+            .map(|(id, _)| id)
             .collect();
         if !flagged.is_empty() {
             return flagged;
         }
         self.default
-            .as_ref()
-            .filter(|name| self.connections.contains_key(*name))
+            .as_deref()
+            .and_then(|name| self.resolve(name))
             .into_iter()
             .collect()
     }
@@ -294,5 +448,176 @@ mod tests {
         assert!(source.read_only);
         assert!(!source.open_on_start);
         assert_eq!(config.startup_sources(), vec!["local"]);
+    }
+
+    const FOLDERED: &str = r#"{
+        "default": "eimskip/prod",
+        "connections": {
+            "eimskip": {
+                "prod": { "driver": "mssql", "dsn": "keyvault://kv-eimskip-prd/dsn", "readonly": true },
+                "local": { "driver": "mssql", "dsn": "keyvault://kv-eimskip-local/dsn" }
+            },
+            "osar": {
+                "prod": { "driver": "mssql", "dsn": "keyvault://kv-osar-prd/dsn", "readonly": true }
+            },
+            "scratch": { "driver": "sqlite", "dsn": "/tmp/scratch.db" }
+        }
+    }"#;
+
+    #[test]
+    fn reads_folders_and_loose_connections_together() {
+        let config: Config = serde_json::from_str(FOLDERED).expect("parses");
+
+        assert_eq!(config.len(), 4);
+        assert_eq!(
+            config.get("eimskip/prod").expect("in a folder").dsn,
+            "keyvault://kv-eimskip-prd/dsn"
+        );
+        assert_eq!(
+            config.get("scratch").expect("top level").backend,
+            Backend::Sqlite
+        );
+
+        // The same leaf name in two folders is two different connections.
+        assert_ne!(
+            config.get("eimskip/prod").unwrap().dsn,
+            config.get("osar/prod").unwrap().dsn
+        );
+
+        // A folder is not a connection, and a connection is not a folder.
+        assert!(config.get("eimskip").is_none());
+        assert!(config.get("scratch/prod").is_none());
+    }
+
+    #[test]
+    fn resolves_a_bare_name_only_when_it_is_unambiguous() {
+        let config: Config = serde_json::from_str(FOLDERED).expect("parses");
+
+        assert_eq!(
+            config.resolve("eimskip/prod").as_deref(),
+            Some("eimskip/prod")
+        );
+        assert_eq!(config.resolve("scratch").as_deref(), Some("scratch"));
+        // `local` exists in one folder only.
+        assert_eq!(config.resolve("local").as_deref(), Some("eimskip/local"));
+        // `prod` exists in two, so it names nothing on its own.
+        assert_eq!(config.resolve("prod"), None);
+        assert_eq!(config.resolve("nothing"), None);
+    }
+
+    #[test]
+    fn the_default_may_be_qualified() {
+        let config: Config = serde_json::from_str(FOLDERED).expect("parses");
+        assert_eq!(config.startup_sources(), vec!["eimskip/prod"]);
+    }
+
+    #[test]
+    fn a_folder_round_trips_through_the_file() {
+        let config: Config = serde_json::from_str(FOLDERED).expect("parses");
+        let written = serde_json::to_string(&config).expect("serialises");
+        let reread: Config = serde_json::from_str(&written).expect("re-parses");
+
+        assert_eq!(reread.len(), 4);
+        assert_eq!(
+            reread.get("osar/prod").expect("still in its folder").dsn,
+            "keyvault://kv-osar-prd/dsn"
+        );
+        assert!(reread.get("scratch").is_some(), "still top level");
+    }
+
+    #[test]
+    fn set_creates_a_folder_and_remove_drops_an_empty_one() {
+        let mut config = Config::default();
+        config.set(
+            "osar/prod",
+            DataSource {
+                backend: Backend::MsSql,
+                dsn: "keyvault://kv/dsn".into(),
+                description: String::new(),
+                read_only: true,
+                open_on_start: false,
+            },
+        );
+        assert!(config.get("osar/prod").is_some());
+        assert!(matches!(
+            config.connections.get("osar"),
+            Some(Entry::Folder(_))
+        ));
+
+        assert!(config.remove("osar/prod"));
+        assert!(
+            !config.connections.contains_key("osar"),
+            "an emptied folder should not linger"
+        );
+    }
+
+    #[test]
+    fn listing_keeps_folders_whole() {
+        let config: Config = serde_json::from_str(FOLDERED).expect("parses");
+        let listing = config.listing();
+        assert_eq!(listing.len(), 3, "two folders and one loose connection");
+
+        match &listing[0] {
+            Listing::Folder { name, sources } => {
+                assert_eq!(*name, "eimskip");
+                assert_eq!(sources.len(), 2);
+                assert_eq!(sources[0].0, "eimskip/local");
+            }
+            Listing::Source { .. } => panic!("eimskip is a folder"),
+        }
+        assert!(matches!(
+            &listing[2],
+            Listing::Source { id, .. } if id == "scratch"
+        ));
+    }
+
+    /// The shape as it was actually handed over, verbatim, including the
+    /// `default` that no longer names one thing.
+    #[test]
+    fn the_folder_shape_as_written_by_hand() {
+        let raw = r#"{
+  "default": "prod",
+  "connections": {
+    "eimskip":{
+      "prod": {
+        "driver": "mssql",
+        "dsn": "keyvault://kv-eimskip-prd/ConnectionStrings--umbracoDbDSN",
+        "readonly": true
+      },
+      "local": {
+        "driver": "mssql",
+        "dsn": "keyvault://kv-eimskip-local/ConnectionStrings--umbracoDbDSN",
+        "readonly": true
+      }
+    },
+    "osar":{
+      "prod": {
+        "driver": "mssql",
+        "dsn": "keyvault://kv-osar-prd/ConnectionStrings--umbracoDbDSN",
+        "readonly": true
+      },
+      "local": {
+        "driver": "mssql",
+        "dsn": "keyvault://kv-osar-local/ConnectionStrings--umbracoDbDSN",
+        "readonly": true
+      }
+    }
+  }
+}"#;
+        let config: Config = serde_json::from_str(raw).expect("parses");
+        assert_eq!(config.len(), 4);
+        assert_eq!(config.listing().len(), 2, "two folders");
+        assert!(config.get("osar/local").unwrap().read_only);
+
+        // "prod" now names two connections, so it names neither. Nothing opens
+        // on start rather than something arbitrary opening.
+        assert_eq!(config.resolve("prod"), None);
+        assert!(config.startup_sources().is_empty());
+    }
+
+    #[test]
+    fn a_malformed_connection_is_reported_not_read_as_a_folder() {
+        let raw = r#"{ "connections": { "broken": { "driver": "postgres" } } }"#;
+        assert!(serde_json::from_str::<Config>(raw).is_err());
     }
 }

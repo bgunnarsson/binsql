@@ -9,17 +9,17 @@ Version 3 is a rewrite in Rust. The Go implementation is archived under
 not been carried across.
 
 ```
- ✻ binsql  ·  local  ·  app  ·  PostgreSQL                    2/3 connected
+ ✻ binsql  ·  acme/local  ·  app  ·  PostgreSQL               2/3 connected
 ╭─ Databases ───────── 2/3 ─╮ artist   +
-│ ▾  local  PostgreSQL      │╭─ Query ───────────────────────────────────────── 1/2 ─╮
-│   ▾  app  ·               ││SELECT * FROM "artist" LIMIT 500                       │
-│     ▾  public             │╰───────────────────────────────────────────────────────╯
-│       ▾ Tables  12        │╭─ Results · 3 rows in 0.24ms · id int4 ────────── 1/3 ─╮
-│▌        artist            ││      id name             founded                      │
-│          album            ││  1    1 Portishead          1991                      │
-│     ▸ Views  2            ││  2    2 Boards of Canada    1986                      │
-│   ▸  analytics            ││  3    3 Autechre            NULL                      │
-│ ▾  prod  SQL Server  ro   │╰───────────────────────────────────────────────────────╯
+│ ▾  acme  2                │╭─ Query ───────────────────────────────────────── 1/2 ─╮
+│   ▾  local  PostgreSQL    ││SELECT * FROM "artist" LIMIT 500                       │
+│     ▾  app  ·             │╰───────────────────────────────────────────────────────╯
+│       ▾  public           │╭─ Results · 3 rows in 0.24ms · id int4 ────────── 1/3 ─╮
+│         ▾ Tables  12      ││      id name             founded                      │
+│▌          artist          ││  1    1 Portishead          1991                      │
+│            album          ││  2    2 Boards of Canada    1986                      │
+│         ▸ Views  2        ││  3    3 Autechre            NULL                      │
+│   ▸  prod  SQL Server  ro │╰───────────────────────────────────────────────────────╯
 │ ▸  warehouse  MySQL       │
 ╰───────────────────────────╯
  3 rows in 0.24ms                ⇥ panes · ⌃R run · ⌃K commands · ⌃Q quit
@@ -55,33 +55,67 @@ same font. Without one the icons render as boxes; nothing else is affected.
 
 ```sh
 binsql                          # open the saved data sources
-binsql local                    # open one saved data source by name
+binsql eimskip/prod             # open one saved data source
+binsql scratch                  # a bare name, when only one folder has it
 binsql ./app.db                 # open a DSN directly, driver inferred
 binsql --driver mysql "user:pass@tcp(host:3306)/app"
 ```
 
 Data sources live in `~/.config/binsql/connections.json`, honouring
-`BINSQL_CONFIG` and `XDG_CONFIG_HOME`. **A v2 config opens unchanged** — the
-file format is the same, and everything v3 adds is optional. Add a data source
-from inside the app with `⌃N` rather than editing the file.
+`BINSQL_CONFIG` and `XDG_CONFIG_HOME`. Add one from inside the app with `⌃N`
+rather than editing the file.
+
+A connection can sit at the top level, or inside a **folder** — a client, a
+project — which becomes a group in the sidebar:
 
 ```json
 {
-  "default": "local",
+  "default": "eimskip/prod",
   "connections": {
-    "local": {
-      "driver": "postgres",
-      "dsn": "postgres://app@localhost:5432/app",
-      "open_on_start": true
+    "eimskip": {
+      "prod": {
+        "driver": "mssql",
+        "dsn": "keyvault://kv-eimskip-prd/ConnectionStrings--umbracoDbDSN",
+        "readonly": true
+      },
+      "local": {
+        "driver": "mssql",
+        "dsn": "keyvault://kv-eimskip-local/ConnectionStrings--umbracoDbDSN"
+      }
     },
-    "prod": {
-      "driver": "mssql",
-      "dsn": "server=tcp:db.example.net,1433;database=app;fedauth=ActiveDirectoryDefault",
-      "readonly": true
+    "osar": {
+      "prod": {
+        "driver": "mssql",
+        "dsn": "keyvault://kv-osar-prd/ConnectionStrings--umbracoDbDSN",
+        "readonly": true
+      }
+    },
+    "scratch": {
+      "driver": "sqlite",
+      "dsn": "/tmp/scratch.db",
+      "open_on_start": true
     }
   }
 }
 ```
+
+```
+╭─ Databases ───────── 1/4 ─╮
+│ ▾  eimskip  2             │
+│   ▾  local  SQL Server    │
+│   ▸  prod  SQL Server  ro │
+│ ▾  osar  1                │
+│   ▸  prod  SQL Server  ro │
+│ ▸  scratch  SQLite        │
+╰───────────────────────────╯
+```
+
+Folders are one level deep, and a connection is named `folder/name` everywhere
+it is referred to — `binsql eimskip/prod`, the `default` key, the command
+palette. A bare name still works when only one folder has it, so `binsql
+scratch` and `binsql local` are fine above but `binsql prod` is not: it names
+two things, so it names neither. **A v2 config opens unchanged** — connections
+written at the top level stay there, and everything v3 adds is optional.
 
 `readonly` refuses every mutating statement on that data source before anything
 reaches the server — how a production database should be registered.
