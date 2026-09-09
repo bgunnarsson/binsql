@@ -648,3 +648,74 @@ async fn folders_start_closed() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The colour of the cell at a position, as the buffer holds it.
+fn cell_colours(app: &mut App, x: u16, y: u16) -> (ratatui::style::Color, ratatui::style::Color) {
+    let mut terminal = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("terminal");
+    terminal.draw(|frame| ui::draw(frame, app)).expect("draw");
+    let cell = &terminal.backend().buffer()[(x, y)];
+    (cell.fg, cell.bg)
+}
+
+#[tokio::test]
+async fn an_open_modal_dims_what_is_behind_it() {
+    let path = fixture("scrim");
+    let (mut app, _messages) = App::new(config(&path));
+
+    // A cell in the header, well away from any modal.
+    let (bright_fg, _) = cell_colours(&mut app, 1, 0);
+
+    binsql::app::keys::handle(&mut app, KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
+    let (dimmed_fg, _) = cell_colours(&mut app, 1, 0);
+
+    assert_ne!(
+        bright_fg, dimmed_fg,
+        "the layout behind a modal should recede"
+    );
+
+    // It moved toward the background rather than to some other colour.
+    let background = ratatui::style::Color::Rgb(0x1e, 0x1e, 0x2e);
+    assert!(
+        distance(dimmed_fg, background) < distance(bright_fg, background),
+        "dimming should move a colour toward the background: \
+         {bright_fg:?} -> {dimmed_fg:?}"
+    );
+
+    // The modal itself is drawn after the scrim, so it keeps its own colours.
+    let screen = render(&mut app);
+    let help_row = screen
+        .lines()
+        .position(|line| line.contains("Anywhere"))
+        .expect("help drawn");
+    let mut terminal = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("terminal");
+    terminal
+        .draw(|frame| ui::draw(frame, &mut app))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let title = (0..WIDTH)
+        .map(|x| &buffer[(x, help_row as u16)])
+        .find(|cell| cell.symbol() == "A")
+        .expect("the Anywhere heading");
+    assert_eq!(
+        title.fg,
+        ratatui::style::Color::Rgb(0xb4, 0xbe, 0xfe),
+        "the modal should not be dimmed by its own scrim"
+    );
+
+    // Closing it puts everything back.
+    press(&mut app, KeyCode::Esc);
+    let (restored_fg, _) = cell_colours(&mut app, 1, 0);
+    assert_eq!(restored_fg, bright_fg, "closing should restore the layout");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+fn distance(a: ratatui::style::Color, b: ratatui::style::Color) -> i32 {
+    let (ratatui::style::Color::Rgb(ar, ag, ab), ratatui::style::Color::Rgb(br, bg, bb)) = (a, b)
+    else {
+        return i32::MAX;
+    };
+    (i32::from(ar) - i32::from(br)).abs()
+        + (i32::from(ag) - i32::from(bg)).abs()
+        + (i32::from(ab) - i32::from(bb)).abs()
+}

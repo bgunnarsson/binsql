@@ -239,6 +239,9 @@ Two borrowings, each for what it is good at.
 - **binvim's popup form.** Title after a single dash in the top border, a
   counter at the right end of the same border, and `▌` in `emphasis` down the
   left of the selected row.
+- **A scrim behind open modals.** Everything else blends toward the background
+  while a modal is up, so the modal is plainly the thing being talked to and
+  the layout stays as context rather than as competition.
 - **Nerd Font glyphs** for servers, databases, schemas, tables, views, columns
   and keys.
 

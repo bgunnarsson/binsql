@@ -45,7 +45,30 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_workspace(frame, app, columns[1]);
     status::draw(frame, app, rows[2]);
 
+    // Everything recedes behind an open modal, so the modal is plainly the
+    // thing being talked to and the layout stays as context rather than as
+    // competition.
+    if app.overlay.is_some() {
+        recede(frame, area, theme::SCRIM);
+    }
     overlays::draw(frame, app, area);
+}
+
+/// Blends every cell in `area` toward the background.
+///
+/// Done to the finished buffer rather than by restyling each widget: the
+/// alternative is every draw function taking a "dimmed" flag and remembering to
+/// honour it, which is the sort of thing that is correct on the day it is
+/// written and wrong a month later.
+fn recede(frame: &mut Frame, area: Rect, amount: f32) {
+    let buffer = frame.buffer_mut();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buffer[(x, y)];
+            cell.fg = theme::recede(cell.fg, amount);
+            cell.bg = theme::recede(cell.bg, amount);
+        }
+    }
 }
 
 fn draw_workspace(frame: &mut Frame, app: &mut App, area: Rect) {
