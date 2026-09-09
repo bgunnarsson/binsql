@@ -8,6 +8,16 @@ pub enum Error {
     #[error("unrecognised connection string: {0}")]
     UnknownBackend(String),
 
+    /// The connection string points at a secret rather than holding one. v2
+    /// resolved these against Azure Key Vault; v3 does not yet, and saying so
+    /// is far better than handing the reference to a driver, which fails
+    /// somewhere deep in DNS with nothing to act on.
+    #[error(
+        "{name} stores an Azure Key Vault reference, which binsql 3 cannot resolve yet. \
+         Use the v2 binary in _old/, or replace the reference with the connection string."
+    )]
+    SecretReference { name: String },
+
     #[error("connecting to {name}: {source}")]
     Connect {
         name: String,

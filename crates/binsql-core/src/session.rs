@@ -26,6 +26,9 @@ pub struct Session {
 impl Session {
     pub async fn open(name: impl Into<String>, source: DataSource) -> Result<Session> {
         let name = name.into();
+        if Backend::is_secret_reference(&source.dsn) {
+            return Err(Error::SecretReference { name });
+        }
         let primary: Arc<dyn Adapter> =
             Arc::from(adapter::connect(source.backend, &source.dsn).await?);
         Ok(Session {
