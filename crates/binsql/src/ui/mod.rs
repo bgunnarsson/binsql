@@ -79,6 +79,21 @@ pub fn centered(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
     }
 }
 
+/// Centres a box of an explicit size, clamped to fit `area`.
+///
+/// For overlays whose height follows their content: a record with four fields
+/// should not be given the same modal as one with forty.
+pub fn centered_size(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    }
+}
+
 /// Cuts a string to `width` display columns, marking that it was cut.
 pub fn truncate(text: &str, width: usize) -> String {
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};

@@ -87,6 +87,12 @@ fn help(frame: &mut Frame, area: Rect) {
     );
 }
 
+/// Narrow enough for a two-column record, wide enough for the modal's own
+/// title and footer.
+const MIN_DETAIL_WIDTH: u16 = 46;
+/// The two edges of a bordered box, in either direction.
+const BORDERS: u16 = 2;
+
 type Section = (&'static str, &'static [(&'static str, &'static str)]);
 
 const SECTIONS: &[Section] = &[
@@ -142,15 +148,21 @@ const SECTIONS: &[Section] = &[
 ///
 /// The grid can only give a value one line and truncates to fit; this is where
 /// a long comment or a wrapped connection string is actually readable.
+///
+/// The box is sized to the record, not to the screen. A table with four short
+/// columns opens a small modal; a wide one grows until it hits the screen and
+/// then scrolls.
 fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
-    let area = ui::centered(area, 80, 80);
-
     let Some(grid) = app.console().grid() else {
-        let inner = frame_for(frame, area, "Row");
+        let inner = frame_for(frame, ui::centered_size(area, 24, 3), "Row");
         frame.render_widget(
             Paragraph::new(Span::styled("No rows.", theme::dim())),
             inner,
         );
+        return;
+    };
+
+    let Some(row) = grid.result.rows.get(grid.row) else {
         return;
     };
 
@@ -163,10 +175,6 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|column| format!(" · {} {}", column.name, column.type_name))
         .unwrap_or_default();
     let title = format!("Row {} of {}{focused_column}", grid.row + 1, grid.rows());
-    let inner = frame_for(frame, area, &title);
-    if inner.height < 2 {
-        return;
-    }
 
     // The label column is as wide as the widest name, within reason — a table
     // with one very long column name should not squeeze every value.
@@ -179,13 +187,19 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
         .unwrap_or(0)
         .clamp(6, 28);
     let gap = 2;
-    let value_width = (inner.width as usize)
-        .saturating_sub(label_width + gap)
-        .max(8);
 
-    let Some(row) = grid.result.rows.get(grid.row) else {
-        return;
-    };
+    let widest_value = row
+        .iter()
+        .map(|value| UnicodeWidthStr::width(field_text(value).as_str()))
+        .max()
+        .unwrap_or(0);
+    let ceiling = (area.width * 88 / 100).max(1);
+    let floor = MIN_DETAIL_WIDTH.min(ceiling);
+    let wanted = saturating_u16(label_width + gap + widest_value + BORDERS as usize);
+    let width = wanted.clamp(floor, ceiling);
+    let value_width = (width as usize)
+        .saturating_sub(BORDERS as usize + label_width + gap)
+        .max(8);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (index, column) in grid.result.columns.iter().enumerate() {
@@ -197,11 +211,7 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
             Some(value) => results::value_style(value),
             None => theme::cell_text(),
         };
-        let text = match value {
-            Some(binsql_core::Value::Null) => "NULL".to_string(),
-            Some(value) => value.to_text(),
-            None => String::new(),
-        };
+        let text = value.map(field_text).unwrap_or_default();
 
         for (offset, piece) in wrap(&text, value_width).into_iter().enumerate() {
             let label = if offset == 0 {
@@ -232,6 +242,17 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
             }
             lines.push(Line::from(spans));
         }
+    }
+
+    // Height follows the wrapped line count, which is only known now: one row
+    // per line, plus the footer and the two borders.
+    let ceiling = (area.height * 88 / 100).max(BORDERS + 2);
+    let height = saturating_u16(lines.len() + BORDERS as usize + 1)
+        .clamp((BORDERS + 2).min(ceiling), ceiling);
+
+    let inner = frame_for(frame, ui::centered_size(area, width, height), &title);
+    if inner.height < 2 {
+        return;
     }
 
     let body_height = inner.height.saturating_sub(1) as usize;
@@ -275,6 +296,21 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
             ..inner
         },
     );
+}
+
+/// One field's value as text. NULL is spelled out here so it is styled and
+/// measured like any other value.
+fn field_text(value: &binsql_core::Value) -> String {
+    match value {
+        binsql_core::Value::Null => "NULL".to_string(),
+        other => other.to_text(),
+    }
+}
+
+/// A very long value would overflow a `u16`; it is going to be clamped to the
+/// screen anyway.
+fn saturating_u16(value: usize) -> u16 {
+    u16::try_from(value).unwrap_or(u16::MAX)
 }
 
 /// Wraps to `width` display columns, breaking between words where it can and
