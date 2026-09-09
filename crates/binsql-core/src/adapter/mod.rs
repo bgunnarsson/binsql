@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use crate::backend::Backend;
 use crate::error::Result;
 use crate::schema::{Catalog, ObjectRef};
+use crate::sql;
 use crate::value::{Column, ResultSet};
 
 /// One live connection to one database, with every backend difference already
@@ -57,54 +58,17 @@ pub async fn connect(backend: Backend, dsn: &str) -> Result<Box<dyn Adapter>> {
 /// Whether a statement is expected to return rows.
 ///
 /// The sqlx adapters do not need this — their result stream reports which it
-/// got — but tiberius takes different calls for the two cases, and the
-/// read-only guard wants the answer before anything is sent.
-pub fn returns_rows(sql: &str) -> bool {
-    let head = sql
-        .trim_start()
-        .trim_start_matches(|c: char| c == '(' || c.is_whitespace());
-    let word: String = head
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect::<String>()
-        .to_ascii_lowercase();
-
-    match word.as_str() {
-        "select" | "with" | "show" | "pragma" | "explain" | "describe" | "desc" | "values"
-        | "table" => true,
+/// got — but tiberius takes different calls for the two cases and has to
+/// choose before anything is sent.
+pub fn returns_rows(sql: &str, backend: Backend) -> bool {
+    // A parenthesised `(SELECT …)` is still a select; the lexer reads the
+    // paren as code and the keyword after it as the first word.
+    match sql::classify(sql, backend) {
+        sql::Kind::Read => true,
         // `INSERT … RETURNING` and friends do return rows.
-        "insert" | "update" | "delete" => sql.to_ascii_lowercase().contains("returning"),
+        sql::Kind::Write => sql::has_keyword(sql, backend, "RETURNING"),
         _ => false,
     }
-}
-
-/// Whether a statement writes. Used by the read-only guard, which refuses
-/// before opening a transaction rather than rolling one back.
-pub fn is_mutating(sql: &str) -> bool {
-    let head = sql.trim_start();
-    let word: String = head
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect::<String>()
-        .to_ascii_lowercase();
-
-    matches!(
-        word.as_str(),
-        "insert"
-            | "update"
-            | "delete"
-            | "drop"
-            | "truncate"
-            | "alter"
-            | "create"
-            | "replace"
-            | "merge"
-            | "grant"
-            | "revoke"
-            | "call"
-            | "exec"
-            | "execute"
-    )
 }
 
 #[cfg(test)]
@@ -113,19 +77,17 @@ mod tests {
 
     #[test]
     fn classifies_row_returning_statements() {
-        assert!(returns_rows("SELECT 1"));
-        assert!(returns_rows("  with x as (select 1) select * from x"));
-        assert!(returns_rows("(SELECT 1)"));
-        assert!(returns_rows("INSERT INTO t VALUES (1) RETURNING id"));
-        assert!(!returns_rows("INSERT INTO t VALUES (1)"));
-        assert!(!returns_rows("UPDATE t SET a = 1"));
-    }
-
-    #[test]
-    fn classifies_writes() {
-        assert!(is_mutating("DELETE FROM t"));
-        assert!(is_mutating("  truncate table t"));
-        assert!(!is_mutating("SELECT * FROM t"));
-        assert!(!is_mutating("EXPLAIN SELECT 1"));
+        let mssql = Backend::MsSql;
+        assert!(returns_rows("SELECT 1", mssql));
+        assert!(returns_rows(
+            "  with x as (select 1) select * from x",
+            mssql
+        ));
+        assert!(returns_rows("(SELECT 1)", mssql));
+        assert!(returns_rows("INSERT INTO t VALUES (1) RETURNING id", mssql));
+        assert!(!returns_rows("INSERT INTO t VALUES (1)", mssql));
+        assert!(!returns_rows("UPDATE t SET a = 1", mssql));
+        // A comment used to hide the keyword from the old first-word reading.
+        assert!(returns_rows("/* daily */ SELECT 1", mssql));
     }
 }
