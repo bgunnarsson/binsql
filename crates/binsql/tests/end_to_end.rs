@@ -790,3 +790,67 @@ async fn the_splash_falls_back_in_a_narrow_terminal() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn every_modal_hugs_its_content() {
+    // Each of these used to take a fixed percentage of the screen whatever was
+    // in it, so a six-field form opened a box two thirds of the terminal tall.
+    let path = fixture("hug");
+
+    let cases: [(&str, KeyEvent, &str); 3] = [
+        (
+            "help",
+            KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),
+            "Help",
+        ),
+        (
+            "palette",
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            "Commands",
+        ),
+        (
+            "connection form",
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+            "New data source",
+        ),
+    ];
+
+    for (what, opener, title) in cases {
+        let (mut app, _messages) = App::new(config(&path));
+        binsql::app::keys::handle(&mut app, opener);
+        let screen = render(&mut app);
+
+        let rows: Vec<&str> = screen.lines().collect();
+        let top = rows
+            .iter()
+            .position(|line| line.contains(title))
+            .unwrap_or_else(|| panic!("{what} not drawn:\n{screen}"));
+        let bottom = rows
+            .iter()
+            .skip(top)
+            .position(|line| line.contains('╰'))
+            .unwrap_or_else(|| panic!("{what} not closed:\n{screen}"))
+            + top;
+
+        // Every row inside the box carries something; none is padding to reach
+        // a percentage.
+        let blank_rows = rows[top + 1..bottom]
+            .iter()
+            .filter(|line| {
+                let inside: String = line.chars().skip_while(|c| *c != '│').collect();
+                inside.trim_matches(|c| c == '│' || c == ' ').is_empty()
+            })
+            .count();
+        let inner_rows = bottom - top - 1;
+        assert!(
+            blank_rows * 3 <= inner_rows,
+            "{what} is mostly empty: {blank_rows} blank of {inner_rows}:\n{screen}"
+        );
+        assert!(
+            bottom - top + 1 < HEIGHT as usize,
+            "{what} should not fill the screen:\n{screen}"
+        );
+    }
+
+    let _ = std::fs::remove_file(&path);
+}

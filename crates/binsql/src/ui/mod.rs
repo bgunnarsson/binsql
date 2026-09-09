@@ -134,18 +134,6 @@ fn framed(
     block
 }
 
-/// Centres a box of the given size inside `area`, clamped to fit.
-pub fn centered(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
-    let width = (area.width * width_percent / 100).min(area.width);
-    let height = (area.height * height_percent / 100).min(area.height);
-    Rect {
-        x: area.x + (area.width.saturating_sub(width)) / 2,
-        y: area.y + (area.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    }
-}
-
 /// Centres a box of an explicit size, clamped to fit `area`.
 ///
 /// For overlays whose height follows their content: a record with four fields
@@ -156,6 +144,20 @@ pub fn centered_size(area: Rect, width: u16, height: u16) -> Rect {
     Rect {
         x: area.x + (area.width - width) / 2,
         y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    }
+}
+
+/// Centres a box horizontally but pins its top, so a box whose height changes
+/// — a filtered list — grows downwards instead of shifting under the cursor.
+pub fn anchored_size(area: Rect, width: u16, height: u16, from_top: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    let top = from_top.min(area.height.saturating_sub(height));
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + top,
         width,
         height,
     }
