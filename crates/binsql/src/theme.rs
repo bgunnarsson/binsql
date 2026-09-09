@@ -112,6 +112,27 @@ pub fn brand() -> Style {
     Style::default().fg(BRAND)
 }
 
+/// How far the layout recedes behind an open modal. Far enough that the eye
+/// goes to the modal, near enough that the shape of what is behind it survives
+/// as context.
+pub const SCRIM: f32 = 0.62;
+
+/// Blends a colour toward the body background. `amount` of 0 leaves it alone,
+/// 1 erases it entirely.
+///
+/// `Reset` means "whatever the terminal uses", which is already the background
+/// as far as binsql is concerned, so it passes through.
+pub fn recede(colour: Color, amount: f32) -> Color {
+    let (Color::Rgb(r, g, b), Color::Rgb(br, bg, bb)) = (colour, BACKGROUND) else {
+        return colour;
+    };
+    let amount = amount.clamp(0.0, 1.0);
+    let blend = |from: u8, to: u8| {
+        (f32::from(from) * (1.0 - amount) + f32::from(to) * amount).round() as u8
+    };
+    Color::Rgb(blend(r, br), blend(g, bg), blend(b, bb))
+}
+
 pub fn success() -> Style {
     Style::default().fg(ACCENT_SECONDARY)
 }
