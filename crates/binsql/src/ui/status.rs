@@ -1,39 +1,75 @@
+//! The status line, in binvim's powerline form.
+//!
+//! A bright chip naming the focused pane, then segments stepping down through
+//! surface and chrome, each separated by a filled arrow drawn in the outgoing
+//! segment's colour over the incoming one's. The right end carries the key
+//! hints, entered with a left-pointing arrow.
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Pane, Tone};
 use crate::theme;
 use crate::ui;
 
+const HINTS: &str = "⇥ panes · ⌃R run · ⌃K commands · F1 help · ⌃Q quit";
+
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
-    let mut left = vec![Span::styled(
-        format!(" {} ", pane_name(app.focus)),
-        theme::header(),
-    )];
+    let pane_colour = pane_colour(app.focus);
+    let message_colour = theme::SURFACE;
 
-    left.push(Span::raw(" "));
-    if app.status.is_stale() {
-        left.push(Span::styled(context(app), theme::muted()));
+    let mut spans = vec![
+        Span::styled(
+            format!(" {} ", pane_name(app.focus)),
+            theme::chip(pane_colour),
+        ),
+        Span::styled(
+            theme::PL_RIGHT.to_string(),
+            theme::powerline(pane_colour, message_colour),
+        ),
+    ];
+
+    // The transient message, or the context it falls back to once the message
+    // has aged out.
+    let (message, message_style) = if app.status.is_stale() {
+        (context(app), theme::muted())
     } else {
-        left.push(Span::styled(
-            app.status.text.clone(),
-            tone_style(app.status.tone),
-        ));
-    }
+        (app.status.text.clone(), tone_style(app.status.tone))
+    };
+    let message = ui::truncate(&message, area.width.saturating_sub(24) as usize);
+    spans.push(Span::styled(
+        format!(" {message} "),
+        message_style.bg(message_colour),
+    ));
+    spans.push(Span::styled(
+        theme::PL_RIGHT.to_string(),
+        theme::powerline(message_colour, theme::CHROME_BG),
+    ));
 
-    // "⌃T tab" used to sit here and read as the Tab key rather than a new
-    // console, while the one binding people reach for first — moving between
-    // panes — was not mentioned at all.
-    let hints = " ⇥ panes · ⌃R run · ⌃K commands · ⌃T console · F1 help · ⌃Q quit ";
-    let used: usize = left.iter().map(|span| span.content.chars().count()).sum();
+    let used: usize = spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum();
+    let hints_width = UnicodeWidthStr::width(HINTS) + 2;
     let room = (area.width as usize).saturating_sub(used);
 
-    let mut spans = left;
-    if room > hints.chars().count() {
-        spans.push(Span::raw(" ".repeat(room - hints.chars().count())));
-        spans.push(Span::styled(hints, theme::dim()));
+    if room > hints_width {
+        spans.push(Span::styled(
+            " ".repeat(room - hints_width),
+            theme::status_bar(),
+        ));
+        spans.push(Span::styled(
+            theme::PL_LEFT.to_string(),
+            theme::powerline(theme::SURFACE, theme::CHROME_BG),
+        ));
+        spans.push(Span::styled(
+            format!(" {HINTS} "),
+            theme::dim().bg(theme::SURFACE),
+        ));
     }
 
     frame.render_widget(
@@ -50,8 +86,18 @@ fn pane_name(pane: Pane) -> &'static str {
     }
 }
 
-/// What the bar falls back to once a transient message has aged out: where you
-/// are, rather than what just happened.
+/// One colour per pane, the way binvim gives one per mode — so the chip says
+/// where you are before you have read the word.
+fn pane_colour(pane: Pane) -> Color {
+    match pane {
+        Pane::Explorer => theme::HINT,
+        Pane::Editor => theme::ACCENT_SECONDARY,
+        Pane::Results => theme::EMPHASIS,
+    }
+}
+
+/// What the bar shows once a transient message has aged out: where you are,
+/// rather than what just happened.
 fn context(app: &App) -> String {
     let console = app.console();
     let mut parts = Vec::new();
@@ -64,7 +110,7 @@ fn context(app: &App) -> String {
     if parts.is_empty() {
         return "No data source — ⌃N to add one".to_string();
     }
-    ui::truncate(&parts.join(" · "), 60)
+    parts.join(" · ")
 }
 
 fn tone_style(tone: Tone) -> ratatui::style::Style {

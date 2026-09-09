@@ -29,7 +29,8 @@ pub fn draw_tabs(frame: &mut Frame, app: &App, area: Rect) {
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Pane::Editor;
     let title = binding_title(app);
-    let block = ui::pane(&title, focused);
+    let counter = Some(format!("{}/{}", app.active_console + 1, app.consoles.len()));
+    let block = ui::body_pane(&title, counter, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -39,7 +40,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     console.editor.set_cursor_style(if focused {
         theme::selection(true)
     } else {
-        theme::panel()
+        theme::body()
     });
     frame.render_widget(&console.editor, inner);
 }

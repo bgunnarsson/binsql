@@ -414,7 +414,7 @@ async fn the_record_viewer_is_sized_to_the_record() {
     let rows: Vec<&str> = screen.lines().collect();
     let top = rows
         .iter()
-        .position(|line| line.contains("╭ Row 1 of 1"))
+        .position(|line| line.contains("Row 1 of 1"))
         .expect("record viewer drawn");
     let bottom = rows
         .iter()
