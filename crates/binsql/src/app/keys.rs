@@ -19,8 +19,9 @@ pub fn handle(app: &mut App, key: KeyEvent) {
     }
 
     // Quit is handled before anything else can claim it. Raw mode has already
-    // taken ⌃C away, so a modal that swallowed ⌃Q would leave no way out of
-    // the program at all.
+    // taken ⌃C away from the terminal — it arrives here as a key like any
+    // other, and cancels a query rather than the program — so a modal that
+    // swallowed ⌃Q would leave no way out of the program at all.
     if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
         app.should_quit = true;
         return;
@@ -50,6 +51,7 @@ fn global(app: &mut App, key: KeyEvent) -> bool {
             app.overlay = Some(Overlay::Palette(Palette::build(app)));
         }
         (KeyCode::Char('r'), true, _) => app.run_query(),
+        (KeyCode::Char('c'), true, _) => app.cancel_query(),
         (KeyCode::Char('t'), true, _) => app.new_console(),
         (KeyCode::Char('w'), true, _) => app.close_console(),
         (KeyCode::Char('n'), true, _) => {
@@ -273,6 +275,7 @@ pub fn execute(app: &mut App, command: Command) {
         Command::NewConsole => app.new_console(),
         Command::CloseConsole => app.close_console(),
         Command::RunQuery => app.run_query(),
+        Command::CancelQuery => app.cancel_query(),
         Command::NewDataSource => {
             app.overlay = Some(Overlay::Connect(ConnectForm::new()));
         }

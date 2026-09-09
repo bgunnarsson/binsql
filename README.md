@@ -125,7 +125,10 @@ two things, so it names neither. **A v2 config opens unchanged** — connections
 written at the top level stay there, and everything v3 adds is optional.
 
 `readonly` refuses every mutating statement on that data source before anything
-reaches the server — how a production database should be registered.
+reaches the server — how a production database should be registered. The whole
+script is checked, not its first word: a `DELETE` under a comment, behind a
+`SELECT 1;`, or fronted by a `WITH` is still a write, and a statement binsql
+cannot classify counts as one too.
 `open_on_start` connects it when binsql launches; with none set, the `default`
 one is opened.
 
@@ -134,6 +137,7 @@ one is opened.
 | | |
 | --- | --- |
 | `⌃R` | Run the query — or just the selection, if there is one |
+| `⌃C` | Cancel the running query |
 | `⌃K` | Command palette |
 | `⌃T` / `⌃W` | New console / close console |
 | `⌥1`…`⌥9` | Jump to a console |
@@ -254,6 +258,17 @@ binvim's powerline segments with a chip naming the focused pane, which was a
 mistranslation — binvim's chips announce a *mode*, binsql has none, and the
 focused pane already says so with its border.
 
+### Cancelling
+
+`⌃C` calls off the running query. The console is yours again immediately; what
+it costs the server depends on what the server offers. Postgres and MySQL are
+told to stop — a second connection sends `pg_cancel_backend` or `KILL QUERY`,
+which is the only way either of them hears it, since neither notices a client
+that has stopped listening. SQL Server has no such statement and tiberius does
+not expose TDS's attention signal, so the connection is dropped and replaced,
+which the server reads as a disconnect and abandons the batch for. SQLite runs
+in this process and has no server to call off.
+
 A `Session` is a data source, not a database. Backends that cannot read across
 their own databases on one connection — Postgres — grow a second connection
 lazily when you expand a sibling catalog; the ones that can, do not.
@@ -280,8 +295,8 @@ been carried across from v2 yet:
 - **Managed identity and service-principal credentials** for Key Vault. The
   references themselves work; only the CLI credential is wired up, for the
   reason given under [Azure Key Vault references](#azure-key-vault-references).
-- Exporting a result set, editing values in the grid, query history, cancelling
-  a running query, and filtering the tree.
+- Exporting a result set, editing values in the grid, query history, and
+  filtering the tree.
 
 ## Licence
 

@@ -3,6 +3,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use sqlx::Row;
 use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlQueryResult, MySqlRow};
+use tokio_util::sync::CancellationToken;
 
 use super::Adapter;
 use super::sqlx_common::{self, decode_as, decode_fallback};
@@ -40,6 +41,44 @@ impl MySqlAdapter {
             version,
             database,
         })
+    }
+
+    /// Runs the statement on a connection of its own so that a cancel has
+    /// something to name: `KILL QUERY` stops the statement running on one
+    /// connection and has to be sent from another.
+    ///
+    /// It sits outside the `Adapter` impl because a boxed trait future cannot
+    /// hold a borrow of a pooled connection.
+    async fn run_on_own_connection(
+        &self,
+        sql: &str,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        let mut connection = self.pool.acquire().await.map_err(Error::query)?;
+        // One small round-trip per statement, and the price of being able to
+        // stop the large one that follows it.
+        let id: Option<u64> = sqlx::query_scalar("SELECT CONNECTION_ID()")
+            .fetch_one(&mut *connection)
+            .await
+            .ok();
+
+        let result =
+            sqlx_common::run::<sqlx::MySql>(&mut connection, sql, limit, decode, affected, cancel)
+                .await;
+
+        if matches!(result, Err(Error::Cancelled))
+            && let Some(id) = id
+        {
+            // `KILL QUERY` ends the statement and leaves the connection open.
+            // The id is a number MySQL gave us, and the statement takes no
+            // placeholder anyway.
+            let _ = sqlx::raw_sql(&format!("KILL QUERY {id}"))
+                .execute(&self.pool)
+                .await;
+        }
+
+        result
     }
 }
 
@@ -222,8 +261,13 @@ impl Adapter for MySqlAdapter {
             .collect())
     }
 
-    async fn run(&self, sql: &str, limit: Option<usize>) -> Result<ResultSet> {
-        sqlx_common::run(&self.pool, sql, limit, decode, affected).await
+    async fn run(
+        &self,
+        sql: &str,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        self.run_on_own_connection(sql, limit, cancel).await
     }
 
     async fn open_catalog(&self, _catalog: &str) -> Result<Option<Box<dyn Adapter>>> {

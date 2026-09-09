@@ -239,6 +239,7 @@ const SECTIONS: &[Section] = &[
         "Anywhere",
         &[
             ("⌃R", "Run the query or selection"),
+            ("⌃C", "Cancel the running query"),
             ("⌃K", "Command palette"),
             ("⌃T / ⌃W", "New console / close console"),
             ("⌥1…9", "Jump to console"),

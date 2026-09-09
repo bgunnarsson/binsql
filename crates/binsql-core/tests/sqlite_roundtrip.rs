@@ -1,7 +1,10 @@
 //! Exercises the whole core against a real database: connect, introspect, run,
-//! and refuse a write on a read-only source.
+//! cancel, and refuse a write on a read-only source.
 
-use binsql_core::{Backend, DataSource, ObjectKind, Session, Value};
+use std::time::Duration;
+
+use binsql_core::{Backend, DataSource, Error, ObjectKind, Session, Value};
+use tokio_util::sync::CancellationToken;
 
 fn temp_database(name: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("binsql-test-{name}-{}.db", std::process::id()));
@@ -117,6 +120,46 @@ async fn read_only_sources_refuse_writes() {
         .run(None, "SELECT * FROM t", None)
         .await
         .expect("reads still allowed");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A query nobody is waiting for any more has to hand the session back in a
+/// state the next query can use.
+#[tokio::test]
+async fn a_cancelled_query_returns_and_leaves_the_session_usable() {
+    let path = temp_database("cancel");
+    let session = Session::open("test", source(&path, false))
+        .await
+        .expect("open session");
+
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        trigger.cancel();
+    });
+
+    // Long enough to still be running when the cancel lands, short enough that
+    // the test does not depend on how fast the machine under it is.
+    let error = session
+        .run_cancellable(
+            None,
+            "WITH RECURSIVE counter(x) AS (\
+               SELECT 1 UNION ALL SELECT x + 1 FROM counter WHERE x < 20000000\
+             ) SELECT count(*) FROM counter",
+            None,
+            &cancel,
+        )
+        .await
+        .expect_err("cancelled");
+    assert!(matches!(error, Error::Cancelled), "{error}");
+
+    let result = session
+        .run(None, "SELECT 1", None)
+        .await
+        .expect("the session still works");
+    assert_eq!(result.rows[0][0], Value::Int(1));
 
     let _ = std::fs::remove_file(&path);
 }

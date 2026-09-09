@@ -26,6 +26,11 @@ pub enum Error {
         statement: String,
     },
 
+    /// The caller asked for the query to stop. Like [`Error::ReadOnly`] this is
+    /// an outcome rather than a fault, and nothing about the database is wrong.
+    #[error("cancelled")]
+    Cancelled,
+
     #[error("{0}")]
     Config(#[source] anyhow::Error),
 

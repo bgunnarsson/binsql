@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 use crate::adapter::{self, Adapter};
 use crate::backend::{Backend, Dialect};
@@ -108,8 +109,25 @@ impl Session {
         sql: &str,
         limit: Option<usize>,
     ) -> Result<ResultSet> {
+        self.run_cancellable(catalog, sql, limit, &CancellationToken::new())
+            .await
+    }
+
+    /// The same, with a way out. Cancelling the token abandons the query and
+    /// yields [`Error::Cancelled`]; the adapter is left able to run the next
+    /// statement, and stops the server where its backend gives it the means.
+    pub async fn run_cancellable(
+        &self,
+        catalog: Option<&str>,
+        sql: &str,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
         self.guard_read_only(sql)?;
-        self.adapter_for(catalog).await?.run(sql, limit).await
+        self.adapter_for(catalog)
+            .await?
+            .run(sql, limit, cancel)
+            .await
     }
 
     /// Refuses the whole script if any statement in it writes.

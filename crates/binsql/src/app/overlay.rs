@@ -48,6 +48,7 @@ pub enum Command {
     NewConsole,
     CloseConsole,
     RunQuery,
+    CancelQuery,
     NewDataSource,
     Connect(String),
     Disconnect(String),
@@ -65,6 +66,7 @@ impl Command {
             Command::NewConsole => "New console".into(),
             Command::CloseConsole => "Close console".into(),
             Command::RunQuery => "Run query".into(),
+            Command::CancelQuery => "Cancel the running query".into(),
             Command::NewDataSource => "New data source…".into(),
             Command::Connect(name) => format!("Connect {name}"),
             Command::Disconnect(name) => format!("Disconnect {name}"),
@@ -82,6 +84,7 @@ impl Command {
             Command::NewConsole => "⌃T",
             Command::CloseConsole => "⌃W",
             Command::RunQuery => "⌃R",
+            Command::CancelQuery => "⌃C",
             Command::NewDataSource => "⌃N",
             Command::Refresh => "⌃F5",
             Command::Help => "?",
@@ -108,6 +111,11 @@ impl Palette {
             Command::NewDataSource,
             Command::Refresh,
         ];
+
+        // Only worth offering while there is something to call off.
+        if app.console().is_running() {
+            commands.insert(1, Command::CancelQuery);
+        }
 
         for (name, _) in app.config.iter() {
             if app.sessions.contains_key(&name) {

@@ -6,6 +6,7 @@ use tiberius::{AuthMethod, ColumnData, ColumnType, Config, QueryItem, Row};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
+use tokio_util::sync::CancellationToken;
 
 use super::{Adapter, returns_rows};
 use crate::backend::Backend;
@@ -20,6 +21,10 @@ pub struct MsSqlAdapter {
     /// adapter serialises access rather than pooling. A terminal UI runs one
     /// statement at a time anyway.
     client: Mutex<Connection>,
+    /// Kept so a cancelled query can be replaced with a fresh connection —
+    /// see [`MsSqlAdapter::query`].
+    config: Config,
+    label: String,
     version: Option<String>,
     database: Option<String>,
 }
@@ -27,18 +32,12 @@ pub struct MsSqlAdapter {
 impl MsSqlAdapter {
     pub async fn connect(dsn: &str) -> Result<Self> {
         let config = build_config(dsn).await?;
-
-        let tcp = TcpStream::connect(config.get_addr())
-            .await
-            .map_err(|e| Error::connect(dsn, e))?;
-        tcp.set_nodelay(true).map_err(|e| Error::connect(dsn, e))?;
-
-        let client = Connection::connect(config, tcp.compat_write())
-            .await
-            .map_err(|e| Error::connect(dsn, e))?;
+        let client = open(&config, dsn).await?;
 
         let adapter = MsSqlAdapter {
             client: Mutex::new(client),
+            config,
+            label: dsn.to_string(),
             version: None,
             database: None,
         };
@@ -60,7 +59,7 @@ impl MsSqlAdapter {
 
     /// Runs a statement expected to yield a single text cell.
     async fn scalar(&self, sql: &str) -> Result<Option<String>> {
-        let result = self.query(sql, Some(1)).await?;
+        let result = self.ask(sql, Some(1)).await?;
         Ok(result
             .rows
             .first()
@@ -69,16 +68,51 @@ impl MsSqlAdapter {
             .map(Value::to_text))
     }
 
-    async fn query(&self, sql: &str, limit: Option<usize>) -> Result<ResultSet> {
+    /// Runs an introspection query. Nothing here is worth interrupting — these
+    /// are catalogue reads, not the statement someone typed — so none of them
+    /// carries a cancellation token.
+    async fn ask(&self, sql: &str, limit: Option<usize>) -> Result<ResultSet> {
+        self.query(sql, limit, &CancellationToken::new()).await
+    }
+
+    /// Runs a row-returning statement.
+    ///
+    /// A cancel here costs the connection. TDS carries an attention signal for
+    /// exactly this, but tiberius does not expose one, and abandoning a result
+    /// stream mid-flight would leave the next statement reading the last one's
+    /// rows. So the connection is dropped — which is also what tells the server
+    /// to stop — and replaced before the lock is released, leaving the adapter
+    /// as usable as it was before.
+    async fn query(
+        &self,
+        sql: &str,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
         let start = Instant::now();
         let mut client = self.client.lock().await;
+        // Sending the batch is not the part worth interrupting — the waiting
+        // is, and that is the loop below, which notices a token cancelled in
+        // the meantime on its first turn.
         let mut stream = client.simple_query(sql).await.map_err(Error::query)?;
 
         let mut columns: Vec<Column> = Vec::new();
         let mut rows: Vec<Vec<Value>> = Vec::new();
         let mut truncated = false;
+        let mut cancelled = false;
 
-        while let Some(item) = stream.try_next().await.map_err(Error::query)? {
+        loop {
+            let item = tokio::select! {
+                item = stream.try_next() => item.map_err(Error::query)?,
+                () = cancel.cancelled() => {
+                    cancelled = true;
+                    break;
+                }
+            };
+            let Some(item) = item else {
+                break;
+            };
+
             match item {
                 QueryItem::Metadata(meta) => {
                     if columns.is_empty() {
@@ -106,6 +140,13 @@ impl MsSqlAdapter {
             }
         }
 
+        // The stream borrows the client, so it has to go before the connection
+        // underneath it can be replaced.
+        drop(stream);
+        if cancelled {
+            return self.reconnect(&mut client).await;
+        }
+
         Ok(ResultSet {
             columns,
             rows,
@@ -115,12 +156,40 @@ impl MsSqlAdapter {
         })
     }
 
-    async fn execute(&self, sql: &str) -> Result<ResultSet> {
+    async fn execute(&self, sql: &str, cancel: &CancellationToken) -> Result<ResultSet> {
         let start = Instant::now();
         let mut client = self.client.lock().await;
-        let result = client.execute(sql, &[]).await.map_err(Error::query)?;
+        let finished = tokio::select! {
+            result = client.execute(sql, &[]) => Some(result.map_err(Error::query)?),
+            () = cancel.cancelled() => None,
+        };
+        let Some(result) = finished else {
+            return self.reconnect(&mut client).await;
+        };
         Ok(ResultSet::affected(result.total(), start.elapsed()))
     }
+
+    /// Replaces the connection after a cancel and reports the cancel. A failure
+    /// to reconnect is what the caller hears about instead, since that is the
+    /// state the adapter is actually in.
+    async fn reconnect(&self, client: &mut Connection) -> Result<ResultSet> {
+        *client = open(&self.config, &self.label).await?;
+        Err(Error::Cancelled)
+    }
+}
+
+/// Opens one TDS connection. `label` names the data source in a connect error,
+/// since a tiberius `Config` will not say where it came from.
+async fn open(config: &Config, label: &str) -> Result<Connection> {
+    let tcp = TcpStream::connect(config.get_addr())
+        .await
+        .map_err(|e| Error::connect(label, e))?;
+    tcp.set_nodelay(true)
+        .map_err(|e| Error::connect(label, e))?;
+
+    Connection::connect(config.clone(), tcp.compat_write())
+        .await
+        .map_err(|e| Error::connect(label, e))
 }
 
 /// `SELECT @@VERSION` returns a multi-line banner; the header wants line one.
@@ -145,7 +214,7 @@ impl Adapter for MsSqlAdapter {
     async fn catalogs(&self) -> Result<Vec<Catalog>> {
         // state = 0 is ONLINE; the rest cannot be read from anyway.
         let result = self
-            .query(
+            .ask(
                 "SELECT name, CASE WHEN name = DB_NAME() THEN 1 ELSE 0 END \
                  FROM sys.databases WHERE state = 0 ORDER BY name",
                 None,
@@ -167,7 +236,7 @@ impl Adapter for MsSqlAdapter {
     async fn schemas(&self, catalog: &str) -> Result<Vec<String>> {
         let schemas = qualify(catalog, "sys.schemas");
         let result = self
-            .query(
+            .ask(
                 &format!(
                     "SELECT name FROM {schemas} \
                      WHERE name NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest') \
@@ -190,7 +259,7 @@ impl Adapter for MsSqlAdapter {
         let objects = qualify(catalog, "sys.objects");
         let schemas = qualify(catalog, "sys.schemas");
         let result = self
-            .query(
+            .ask(
                 &format!(
                     "SELECT o.name, o.type FROM {objects} o \
                      JOIN {schemas} s ON s.schema_id = o.schema_id \
@@ -258,7 +327,7 @@ impl Adapter for MsSqlAdapter {
             quote_literal(&object.name),
         );
 
-        let result = self.query(&sql, None).await?;
+        let result = self.ask(&sql, None).await?;
 
         Ok(result
             .rows
@@ -275,11 +344,16 @@ impl Adapter for MsSqlAdapter {
             .collect())
     }
 
-    async fn run(&self, sql: &str, limit: Option<usize>) -> Result<ResultSet> {
+    async fn run(
+        &self,
+        sql: &str,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
         if returns_rows(sql, Backend::MsSql) {
-            self.query(sql, limit).await
+            self.query(sql, limit, cancel).await
         } else {
-            self.execute(sql).await
+            self.execute(sql, cancel).await
         }
     }
 
