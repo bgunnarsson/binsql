@@ -338,9 +338,11 @@ async fn enter_shows_the_whole_record_stacked() {
         );
     }
     assert!(screen.contains("Row 1 of 2"), "title missing:\n{screen}");
+    // The wrap point moves with the box width, so assert on the tail of the
+    // value: if the end of it is on screen, nothing was truncated away.
     assert!(
-        screen.contains("publication schedule"),
-        "the long value should wrap into view, not be truncated:\n{screen}"
+        screen.contains("shipping page"),
+        "the end of the long value should be visible, not truncated:\n{screen}"
     );
     assert!(screen.contains("NULL"), "null field missing:\n{screen}");
 
@@ -363,4 +365,97 @@ async fn enter_shows_the_whole_record_stacked() {
     );
 
     let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn the_record_viewer_is_sized_to_the_record() {
+    // A handful of short fields used to open a modal covering 80% of the
+    // screen, most of it empty.
+    let path = fixture("rowsize");
+    {
+        let session =
+            binsql_core::Session::open("seed", config(&path).get("demo").unwrap().clone())
+                .await
+                .expect("open seed session");
+        session
+            .run(
+                None,
+                "CREATE TABLE small (a INTEGER, b INTEGER, c TEXT)",
+                None,
+            )
+            .await
+            .expect("create table");
+        session
+            .run(None, "INSERT INTO small VALUES (1, 2, 'ok')", None)
+            .await
+            .expect("insert row");
+    }
+
+    let (mut app, mut messages) = App::new(config(&path));
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+
+    let mut guard = 0;
+    while !matches!(
+        app.tree.selected_id().and_then(|id| app.tree.find(id)).map(|n| n.kind.clone()),
+        Some(binsql::app::tree::NodeKind::Object { ref object }) if object.name == "small"
+    ) {
+        press(&mut app, KeyCode::Char('j'));
+        guard += 1;
+        assert!(guard < 40, "never reached the small table");
+    }
+    press(&mut app, KeyCode::Enter);
+    settle(&mut app, &mut messages).await;
+    press(&mut app, KeyCode::Enter);
+
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+
+    let rows: Vec<&str> = screen.lines().collect();
+    let top = rows
+        .iter()
+        .position(|line| line.contains("╭ Row 1 of 1"))
+        .expect("record viewer drawn");
+    let bottom = rows
+        .iter()
+        .skip(top)
+        .position(|line| line.contains('╰'))
+        .expect("record viewer closed")
+        + top;
+
+    // Three fields, a footer and two borders.
+    let height = bottom - top + 1;
+    assert_eq!(
+        height, 6,
+        "expected a six-line box, got {height}:\n{screen}"
+    );
+    assert!(
+        height < (HEIGHT as usize) / 2,
+        "the box should not dominate the screen"
+    );
+
+    // Measure the box itself, not the whole terminal line it sits on.
+    let box_width = box_width(rows[top]);
+    assert!(
+        box_width < WIDTH as usize / 2,
+        "short values should give a narrow box, got {box_width}:\n{screen}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The width of the overlay drawn on `line`, from its opening corner to the
+/// matching closing one. The rest of the line is whatever it was drawn over.
+fn box_width(line: &str) -> usize {
+    let chars: Vec<char> = line.chars().collect();
+    let start = chars
+        .iter()
+        .position(|c| *c == '\u{256d}')
+        .expect("an opening corner");
+    let end = chars[start..]
+        .iter()
+        .position(|c| *c == '\u{256e}')
+        .expect("a closing corner")
+        + start;
+    end - start + 1
 }
