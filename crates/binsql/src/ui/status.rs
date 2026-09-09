@@ -23,7 +23,10 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
-    let hints = " ⌃R run · ⌃K commands · ⌃T tab · F1 help · ⌃Q quit ";
+    // "⌃T tab" used to sit here and read as the Tab key rather than a new
+    // console, while the one binding people reach for first — moving between
+    // panes — was not mentioned at all.
+    let hints = " ⇥ panes · ⌃R run · ⌃K commands · ⌃T console · F1 help · ⌃Q quit ";
     let used: usize = left.iter().map(|span| span.content.chars().count()).sum();
     let room = (area.width as usize).saturating_sub(used);
 
