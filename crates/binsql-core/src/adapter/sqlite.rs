@@ -157,6 +157,19 @@ impl Adapter for SqliteAdapter {
             .await
     }
 
+    async fn run_transaction(
+        &self,
+        statements: &[String],
+        limit: Option<usize>,
+        commit: bool,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<ResultSet>> {
+        sqlx_common::run_transaction::<sqlx::Sqlite>(
+            &self.pool, statements, limit, commit, decode, affected, cancel,
+        )
+        .await
+    }
+
     async fn open_catalog(&self, _catalog: &str) -> Result<Option<Box<dyn Adapter>>> {
         // Attached databases are reachable from the connection that attached
         // them, so there is never a second connection to open.

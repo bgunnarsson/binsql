@@ -7,11 +7,55 @@
 use std::time::Instant;
 
 use futures_util::TryStreamExt;
-use sqlx::{Column as _, Database, Either, Executor, Row, TypeInfo as _};
+use sqlx::{Column as _, Database, Either, Executor, Pool, Row, TypeInfo as _};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{Error, Result};
 use crate::value::{Column, ResultSet, Value};
+
+/// Runs several statements inside one transaction, on one connection, ending
+/// it with a commit or a rollback.
+///
+/// Anything failing part-way through rolls the whole thing back, so a batch
+/// either lands or it does not. `commit: false` is what makes a dry run a dry
+/// run: everything is really executed, and then nothing is kept.
+pub async fn run_transaction<DB>(
+    pool: &Pool<DB>,
+    statements: &[String],
+    limit: Option<usize>,
+    commit: bool,
+    decode: fn(&DB::Row, usize) -> Value,
+    affected: fn(&DB::QueryResult) -> u64,
+    cancel: &CancellationToken,
+) -> Result<Vec<ResultSet>>
+where
+    DB: Database,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+{
+    let mut transaction = pool.begin().await.map_err(Error::query)?;
+    let mut results = Vec::with_capacity(statements.len());
+
+    for sql in statements {
+        let outcome = run::<DB>(&mut transaction, sql, limit, decode, affected, cancel).await;
+        match outcome {
+            Ok(result) => results.push(result),
+            Err(error) => {
+                // The statement's own error is the one worth reporting; a
+                // rollback that also fails only says the connection is gone.
+                let _ = transaction.rollback().await;
+                return Err(error);
+            }
+        }
+    }
+
+    if commit {
+        transaction.commit().await.map_err(Error::query)?;
+    } else {
+        transaction.rollback().await.map_err(Error::query)?;
+    }
+
+    Ok(results)
+}
 
 /// Runs one statement and collects at most `limit` rows.
 ///
