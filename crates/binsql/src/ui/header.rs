@@ -1,8 +1,12 @@
 //! The header line.
 //!
 //! One place that answers "what am I connected to", so the pane titles do not
-//! have to. Built from the same powerline segments as the status line, with the
-//! product chip on the left and the connection tally on the right.
+//! have to.
+//!
+//! Styled after Claude Code rather than binvim: the mark carries the only
+//! colour, everything after it is quiet text separated by `·`, and there are no
+//! chips or arrows. binvim's powerline segments exist to shout which *mode* is
+//! active; binsql has no modes, so that machinery had nothing to say here.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -16,73 +20,43 @@ use crate::ui;
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let mut left = vec![
-        Span::styled(" BINSQL ", theme::chip(theme::EMPHASIS)),
-        Span::styled(
-            theme::PL_RIGHT.to_string(),
-            theme::powerline(theme::EMPHASIS, theme::SURFACE),
-        ),
+        Span::styled(format!(" {} ", theme::MARK), theme::brand()),
+        Span::styled("binsql", theme::muted()),
     ];
 
     let console = app.console();
     match &console.source {
         Some(source) => {
-            let session = app.sessions.get(source);
-            left.push(Span::styled(
-                format!(" {} {source}", theme::ICON_SERVER),
-                theme::title(true).bg(theme::SURFACE),
-            ));
+            left.push(separator());
+            left.push(Span::styled(source.clone(), theme::title(true)));
 
             if let Some(catalog) = &console.catalog {
-                left.push(Span::styled(
-                    format!("  {} {catalog}", theme::ICON_DATABASE),
-                    theme::muted().bg(theme::SURFACE),
-                ));
+                left.push(separator());
+                left.push(Span::styled(catalog.clone(), theme::muted()));
             }
-
-            if let Some(backend) = session.map(|session| session.backend()) {
-                left.push(Span::styled(
-                    format!("  {}", backend.label()),
-                    theme::muted().bg(theme::SURFACE),
-                ));
+            if let Some(backend) = app.sessions.get(source).map(|session| session.backend()) {
+                left.push(separator());
+                left.push(Span::styled(backend.label().to_string(), theme::muted()));
             }
-
             if app.config.get(source).is_some_and(|entry| entry.read_only) {
-                left.push(Span::styled(
-                    "  read-only",
-                    theme::warning().bg(theme::SURFACE),
-                ));
+                left.push(separator());
+                left.push(Span::styled("read-only", theme::warning()));
             }
-
-            left.push(Span::styled(" ", theme::muted().bg(theme::SURFACE)));
         }
         None => {
-            left.push(Span::styled(
-                " no data source ",
-                theme::muted().bg(theme::SURFACE),
-            ));
+            left.push(separator());
+            left.push(Span::styled("no data source", theme::muted()));
         }
     }
-
-    left.push(Span::styled(
-        theme::PL_RIGHT.to_string(),
-        theme::powerline(theme::SURFACE, theme::CHROME_BG),
-    ));
 
     // Right: how many of the registered data sources are open.
     let connected = app.sessions.len();
     let total = app.config.connections.len();
-    let tally = format!(" {connected}/{total} connected ");
-    let right = vec![
-        Span::styled(
-            theme::PL_LEFT.to_string(),
-            theme::powerline(theme::SURFACE, theme::CHROME_BG),
-        ),
-        Span::styled(tally.clone(), theme::muted().bg(theme::SURFACE)),
-    ];
+    let tally = format!("{connected}/{total} connected ");
 
     let left_width = width_of(&left);
-    let right_width = UnicodeWidthStr::width(tally.as_str()) + 1;
-    let room = (area.width as usize).saturating_sub(right_width);
+    let tally_width = UnicodeWidthStr::width(tally.as_str());
+    let room = (area.width as usize).saturating_sub(tally_width);
 
     let mut spans = if left_width > room {
         truncate_spans(left, room)
@@ -94,12 +68,16 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         ));
         spans
     };
-    spans.extend(right);
+    spans.push(Span::styled(tally, theme::muted()));
 
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(theme::status_bar()),
         area,
     );
+}
+
+fn separator() -> Span<'static> {
+    Span::styled("  ·  ", theme::dim())
 }
 
 fn width_of(spans: &[Span<'_>]) -> usize {
@@ -110,7 +88,7 @@ fn width_of(spans: &[Span<'_>]) -> usize {
 }
 
 /// Cuts a run of styled segments to fit, keeping the leading ones whole. The
-/// product chip and the data source matter more than the trailing detail.
+/// mark and the data source matter more than the trailing detail.
 fn truncate_spans(spans: Vec<Span<'static>>, room: usize) -> Vec<Span<'static>> {
     let mut out = Vec::with_capacity(spans.len());
     let mut used = 0;
