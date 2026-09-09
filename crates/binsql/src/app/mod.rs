@@ -110,8 +110,8 @@ impl App {
         let (tx, rx) = unbounded_channel();
 
         let mut tree = Tree::new();
-        for name in config.names() {
-            tree.add_source(name.clone());
+        for (id, _) in config.iter() {
+            tree.add_source(id);
         }
 
         let mut app = App {
@@ -138,7 +138,7 @@ impl App {
 
     /// Connects the data sources marked to open at startup.
     pub fn open_startup_sources(&mut self) {
-        let names: Vec<String> = self.config.startup_sources().into_iter().cloned().collect();
+        let names = self.config.startup_sources();
         for name in names {
             if let Some(node) = self.source_node_id(&name) {
                 self.connect(node, &name);
@@ -317,6 +317,14 @@ impl App {
                     return;
                 };
                 self.load_objects(id, session, catalog, Some(name));
+            }
+            NodeKind::Folder { .. } => {
+                // A folder holds config entries, not database objects; there
+                // is nothing behind it to fetch.
+                if let Some(node) = self.tree.find_mut(id) {
+                    node.expanded = true;
+                    node.state = LoadState::Loaded;
+                }
             }
             NodeKind::Group { .. } => {
                 // Groups are filled when their schema loads; expanding one is
@@ -700,7 +708,7 @@ impl App {
 
     pub fn save_data_source(&mut self, name: String, source: DataSource) {
         let is_new = self.config.get(&name).is_none();
-        self.config.set(name.clone(), source);
+        self.config.set(&name, source);
         if let Err(error) = self.config.save() {
             self.error(format!("Saving connection: {error}"));
             return;

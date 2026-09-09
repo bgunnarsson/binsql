@@ -58,6 +58,7 @@ pub const BRAND: Color = Color::Rgb(0xd9, 0x77, 0x57);
 pub const MARK: char = '✻';
 
 // ── Icons ───────────────────────────────────────────────────────────
+pub const ICON_FOLDER: char = '\u{f07b}';
 pub const ICON_SERVER: char = '\u{f233}';
 pub const ICON_DATABASE: char = '\u{f1c0}';
 pub const ICON_SCHEMA: char = '\u{f07b}';
@@ -178,6 +179,11 @@ pub fn node_source(connected: bool) -> Style {
 
 pub fn node_catalog(is_current: bool) -> Style {
     Style::default().fg(if is_current { HINT } else { SUBTEXT })
+}
+
+/// A folder of data sources, above the sources themselves.
+pub fn node_folder() -> Style {
+    Style::default().fg(EMPHASIS).add_modifier(Modifier::BOLD)
 }
 
 pub fn node_schema() -> Style {

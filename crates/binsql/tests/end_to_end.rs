@@ -211,6 +211,8 @@ async fn the_connection_form_reports_what_is_wrong() {
         &mut app,
         KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
     );
+    // Folder, name, then connection string.
+    press(&mut app, KeyCode::Tab);
     for ch in "prod".chars() {
         press(&mut app, KeyCode::Char(ch));
     }
@@ -525,4 +527,69 @@ async fn the_header_and_status_line_are_legible() {
     }
 
     let _ = std::fs::remove_file(&path);
+}
+
+/// A config with two folders, each holding a connection of the same name.
+fn foldered(dir: &std::path::Path) -> Config {
+    let raw = format!(
+        r#"{{
+            "default": "eimskip/local",
+            "connections": {{
+                "eimskip": {{
+                    "local": {{ "driver": "sqlite", "dsn": "{a}", "open_on_start": true }},
+                    "prod":  {{ "driver": "sqlite", "dsn": "{a}", "readonly": true }}
+                }},
+                "osar": {{
+                    "prod": {{ "driver": "sqlite", "dsn": "{b}" }}
+                }},
+                "scratch": {{ "driver": "sqlite", "dsn": "{b}" }}
+            }}
+        }}"#,
+        a = dir.join("a.db").display(),
+        b = dir.join("b.db").display(),
+    );
+    serde_json::from_str(&raw).expect("config parses")
+}
+
+#[tokio::test]
+async fn folders_group_the_sidebar() {
+    let dir = std::env::temp_dir().join(format!("binsql-folders-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    for name in ["a.db", "b.db"] {
+        std::fs::write(dir.join(name), b"").expect("create database");
+    }
+
+    let (mut app, mut messages) = App::new(foldered(&dir));
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+    for expected in ["eimskip", "osar", "scratch"] {
+        assert!(screen.contains(expected), "{expected} missing:\n{screen}");
+    }
+
+    // Two connections named `prod` coexist because their folders differ.
+    assert!(app.config.get("eimskip/prod").is_some());
+    assert!(app.config.get("osar/prod").is_some());
+
+    // The tree shows leaf names under their folder, not qualified ones.
+    assert!(
+        !screen.contains("eimskip/prod"),
+        "the sidebar should not repeat the folder on each row:\n{screen}"
+    );
+
+    // `default` was qualified, and that is the session that opened.
+    assert!(
+        app.sessions.contains_key("eimskip/local"),
+        "expected eimskip/local to be connected, got {:?}",
+        app.sessions.keys().collect::<Vec<_>>()
+    );
+
+    // Four connections across three top-level entries.
+    assert_eq!(app.config.len(), 4);
+    assert_eq!(app.tree.roots.len(), 3);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -51,7 +51,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 
     // Right: how many of the registered data sources are open.
     let connected = app.sessions.len();
-    let total = app.config.connections.len();
+    let total = app.config.len();
     let tally = format!("{connected}/{total} connected ");
 
     let left_width = width_of(&left);

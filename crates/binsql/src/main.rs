@@ -13,7 +13,8 @@ binsql — a database IDE for the terminal
 
 USAGE
     binsql                     open the saved data sources
-    binsql <connection>        open a saved data source by name, or a DSN
+    binsql <connection>        open a saved data source, or a DSN
+    binsql eimskip/prod        a connection inside a folder
     binsql --driver <name> <dsn>
 
 OPTIONS
@@ -35,9 +36,11 @@ async fn main() -> Result<()> {
     let mut open_now: Option<String> = None;
 
     if let Some(target) = options.target {
-        let name = match config.get(&target) {
-            // A name that is already saved wins over treating it as a DSN.
-            Some(_) => target,
+        let name = match config.resolve(&target) {
+            // A saved connection wins over treating the argument as a DSN.
+            // `resolve` accepts `eimskip/prod`, and a bare `prod` when only one
+            // folder has one.
+            Some(id) => id,
             None => {
                 let backend = options
                     .backend

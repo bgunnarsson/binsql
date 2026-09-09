@@ -453,6 +453,7 @@ fn connect(frame: &mut Frame, form: &ConnectForm, area: Rect) {
     for field in Field::ORDER {
         let active = field == form.field;
         let value = match field {
+            Field::Folder => form.folder.clone(),
             Field::Name => form.name.clone(),
             Field::Dsn => form.dsn.clone(),
             Field::Backend => form.backend_display(),

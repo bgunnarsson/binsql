@@ -18,7 +18,14 @@ pub struct NodeId(u64);
 
 #[derive(Debug, Clone)]
 pub enum NodeKind {
+    /// A folder of data sources — a client, a project. Purely a grouping: it
+    /// holds no connection of its own and never loads anything.
+    Folder {
+        name: String,
+    },
     Source {
+        /// The qualified name, `eimskip/prod`, which is what identifies a
+        /// session everywhere else. The tree shows only the leaf.
         name: String,
         connected: bool,
     },
@@ -112,22 +119,62 @@ impl Tree {
         }
     }
 
-    pub fn add_source(&mut self, name: impl Into<String>) -> NodeId {
+    /// Adds a data source at the top level, or inside its folder — creating the
+    /// folder if this is the first source to land in it.
+    pub fn add_source(&mut self, id: impl Into<String>) -> NodeId {
+        let id = id.into();
+        let (folder, _) = binsql_core::config::split_qualified(&id);
+
         let node = self.make(
             NodeKind::Source {
-                name: name.into(),
+                name: id.clone(),
                 connected: false,
             },
             LoadState::Pending,
         );
-        let id = node.id;
-        self.roots.push(node);
-        id
+        let node_id = node.id;
+
+        match folder {
+            None => self.roots.push(node),
+            Some(folder) => match self.folder_mut(folder) {
+                Some(existing) => existing.children.push(node),
+                None => {
+                    let mut created = self.make(
+                        NodeKind::Folder {
+                            name: folder.to_string(),
+                        },
+                        // A folder's children are its config entries; there is
+                        // nothing behind it to fetch, so it starts loaded.
+                        LoadState::Loaded,
+                    );
+                    created.expanded = true;
+                    created.children.push(node);
+                    self.roots.push(created);
+                }
+            },
+        }
+        node_id
     }
 
-    pub fn remove_source(&mut self, name: &str) {
+    fn folder_mut(&mut self, name: &str) -> Option<&mut Node> {
         self.roots
-            .retain(|node| !matches!(&node.kind, NodeKind::Source { name: n, .. } if n == name));
+            .iter_mut()
+            .find(|node| matches!(&node.kind, NodeKind::Folder { name: n } if n == name))
+    }
+
+    /// Removes a data source wherever it sits, and the folder it leaves empty.
+    pub fn remove_source(&mut self, id: &str) {
+        fn is_source(node: &Node, id: &str) -> bool {
+            matches!(&node.kind, NodeKind::Source { name, .. } if name == id)
+        }
+
+        self.roots.retain(|node| !is_source(node, id));
+        for folder in &mut self.roots {
+            folder.children.retain(|node| !is_source(node, id));
+        }
+        self.roots.retain(|node| {
+            !matches!(&node.kind, NodeKind::Folder { .. }) || !node.children.is_empty()
+        });
         self.clamp_selection();
     }
 
@@ -161,10 +208,13 @@ impl Tree {
         walk(&mut self.roots, id)
     }
 
-    pub fn source_node(&self, name: &str) -> Option<&Node> {
+    /// Finds a data source by its qualified name, at the top level or in a
+    /// folder.
+    pub fn source_node(&self, id: &str) -> Option<&Node> {
         self.roots
             .iter()
-            .find(|node| matches!(&node.kind, NodeKind::Source { name: n, .. } if n == name))
+            .flat_map(|node| std::iter::once(node).chain(node.children.iter()))
+            .find(|node| matches!(&node.kind, NodeKind::Source { name, .. } if name == id))
     }
 
     pub fn context(&self, id: NodeId) -> Option<NodeContext> {
@@ -172,6 +222,7 @@ impl Tree {
             for node in nodes {
                 let mut here = context.clone();
                 match &node.kind {
+                    NodeKind::Folder { .. } => {}
                     NodeKind::Source { name, .. } => here.source = Some(name.clone()),
                     NodeKind::Catalog { name, .. } => here.catalog = Some(name.clone()),
                     NodeKind::Schema { name } => here.schema = Some(name.clone()),
