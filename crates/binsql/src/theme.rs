@@ -66,6 +66,8 @@ pub const ICON_TABLE: char = '\u{f0ce}';
 pub const ICON_VIEW: char = '\u{f06e}';
 pub const ICON_COLUMN: char = '\u{f0db}';
 pub const ICON_KEY: char = '\u{f084}';
+/// A connection that refuses writes.
+pub const ICON_LOCK: char = '\u{f023}';
 /// The bar down the left of a selected row.
 pub const SELECTION_BAR: char = '▌';
 

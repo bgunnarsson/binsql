@@ -8,6 +8,7 @@
 pub mod adapter;
 pub mod backend;
 pub mod config;
+pub mod dsn;
 pub mod error;
 pub mod schema;
 pub mod secrets;
