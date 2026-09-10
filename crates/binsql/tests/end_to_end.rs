@@ -369,6 +369,96 @@ async fn enter_shows_the_whole_record_stacked() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// The header answers one question — where ⌃R sends this SQL — so what it
+/// shows has to survive both a connection and a narrow terminal.
+#[tokio::test]
+async fn the_header_says_where_the_query_will_run() {
+    let path = fixture("header");
+    let (mut app, mut messages) = App::new(config(&path));
+
+    // Before anything is bound there is nothing better to say than the name of
+    // the program.
+    let screen = render(&mut app);
+    let header = screen.lines().next().expect("a header").to_string();
+    assert!(header.contains("binsql"), "header: {header}");
+    assert!(header.contains("no data source"), "header: {header}");
+
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+
+    let screen = render(&mut app);
+    let header = screen.lines().next().expect("a header").to_string();
+    println!("\n{header}\n");
+    assert!(header.contains("demo"), "the source is missing: {header}");
+    assert!(header.contains("main"), "the catalog is missing: {header}");
+    // The engine names its version, and the host says which server that is —
+    // two connections called `prod` are otherwise identical on screen.
+    assert!(
+        header.contains("SQLite 3."),
+        "the engine version is missing: {header}"
+    );
+    let file = path.file_name().unwrap().to_string_lossy().to_string();
+    assert!(header.contains(&file), "the host is missing: {header}");
+    // The stored connection string is not the host, and must not be shown.
+    assert!(
+        !header.contains(&path.display().to_string()),
+        "the header should not print the connection string: {header}"
+    );
+
+    // Squeezed, the detail goes before the identity does.
+    let mut terminal = Terminal::new(TestBackend::new(44, 12)).expect("terminal");
+    terminal
+        .draw(|frame| ui::draw(frame, &mut app))
+        .expect("draw");
+    let narrow: String = (0..44)
+        .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+        .collect();
+    println!("[{narrow}]");
+    assert!(
+        narrow.contains("demo"),
+        "the source should outlast the detail: {narrow}"
+    );
+    assert!(
+        !narrow.contains("SQLite 3."),
+        "the detail should have given way: {narrow}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn the_header_marks_a_read_only_connection() {
+    let path = fixture("readonly");
+    let mut config = Config::default();
+    config.set(
+        "prod",
+        DataSource {
+            backend: Backend::Sqlite,
+            dsn: path.display().to_string(),
+            description: String::new(),
+            read_only: true,
+            open_on_start: true,
+        },
+    );
+
+    let (mut app, mut messages) = App::new(config);
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+
+    let header = render(&mut app)
+        .lines()
+        .next()
+        .expect("a header")
+        .to_string();
+    println!("\n{header}\n");
+    assert!(
+        header.contains("read-only"),
+        "a connection that refuses writes should say so: {header}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
 #[tokio::test]
 async fn a_field_opens_in_full_from_the_record() {
     // The record viewer wraps every value into one narrow column. A JSON
