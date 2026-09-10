@@ -1,6 +1,7 @@
 //! The things that draw on top of the layout: help, one record in full, the
 //! command palette, and the connection form.
 
+use binsql_core::secrets::keychain;
 use binsql_core::{Backend, DataSource};
 
 use super::App;
@@ -215,16 +216,18 @@ pub enum Field {
     Folder,
     Name,
     Dsn,
+    Keychain,
     Backend,
     ReadOnly,
     OpenOnStart,
 }
 
 impl Field {
-    pub const ORDER: [Field; 6] = [
+    pub const ORDER: [Field; 7] = [
         Field::Folder,
         Field::Name,
         Field::Dsn,
+        Field::Keychain,
         Field::Backend,
         Field::ReadOnly,
         Field::OpenOnStart,
@@ -235,6 +238,7 @@ impl Field {
             Field::Folder => "Folder",
             Field::Name => "Name",
             Field::Dsn => "Connection string",
+            Field::Keychain => "Stored in",
             Field::Backend => "Driver",
             Field::ReadOnly => "Read-only",
             Field::OpenOnStart => "Open at startup",
@@ -242,11 +246,29 @@ impl Field {
     }
 }
 
+/// What the form produced: where to save it, and — when the connection string
+/// is to live in the credential store rather than the config — the string to
+/// file there first.
+pub struct Saved {
+    pub id: String,
+    pub source: DataSource,
+    /// The connection string to write to the credential store under `id`.
+    /// `None` leaves the store alone, either because the string is in the
+    /// config or because an edit did not retype it.
+    pub secret: Option<String>,
+    /// The name this was saved under before, so a rename can take the old entry
+    /// with it.
+    pub previous: Option<String>,
+}
+
 pub struct ConnectForm {
     /// Groups the connection in the sidebar. Empty leaves it at the top level.
     pub folder: String,
     pub name: String,
     pub dsn: String,
+    /// Keep the connection string in the OS credential store, leaving only a
+    /// `keychain://` reference in the config.
+    pub keychain: bool,
     /// `None` means "work it out from the connection string", which is right
     /// almost always and saves a decision.
     pub backend: Option<Backend>,
@@ -264,6 +286,10 @@ impl ConnectForm {
             folder: String::new(),
             name: String::new(),
             dsn: String::new(),
+            // The safe default. A connection string typed into a new data
+            // source is nearly always one with a password in it, and the config
+            // is the wrong place for that.
+            keychain: true,
             backend: None,
             read_only: false,
             open_on_start: false,
@@ -278,13 +304,27 @@ impl ConnectForm {
         ConnectForm {
             folder: folder.unwrap_or_default().to_string(),
             name: name.to_string(),
+            // A stored string is shown as the reference it is, not fetched.
+            // Opening the store to fill in a field would put a system
+            // permission prompt in front of an edit that is usually only
+            // renaming something or flipping read-only.
             dsn: source.dsn.clone(),
+            keychain: keychain::is_reference(&source.dsn),
             backend: Some(source.backend),
             read_only: source.read_only,
             open_on_start: source.open_on_start,
             field: Field::Name,
             error: None,
             editing: Some(id.to_string()),
+        }
+    }
+
+    /// Where the connection string will end up, for the form to show.
+    pub fn storage_display(&self) -> &'static str {
+        if self.keychain {
+            keychain::STORE_NAME
+        } else {
+            "the config file"
         }
     }
 
@@ -333,6 +373,7 @@ impl ConnectForm {
 
     pub fn toggle(&mut self) {
         match self.field {
+            Field::Keychain => self.keychain = !self.keychain,
             Field::ReadOnly => self.read_only = !self.read_only,
             Field::OpenOnStart => self.open_on_start = !self.open_on_start,
             _ => {}
@@ -344,7 +385,7 @@ impl ConnectForm {
             Field::Folder => self.folder.push(ch),
             Field::Name => self.name.push(ch),
             Field::Dsn => self.dsn.push(ch),
-            Field::ReadOnly | Field::OpenOnStart if ch == ' ' => self.toggle(),
+            Field::Keychain | Field::ReadOnly | Field::OpenOnStart if ch == ' ' => self.toggle(),
             _ => {}
         }
     }
@@ -365,7 +406,7 @@ impl ConnectForm {
     }
 
     /// Validates and returns what to save.
-    pub fn build(&self) -> Result<(String, DataSource), String> {
+    pub fn build(&self) -> Result<Saved, String> {
         let name = self.name.trim();
         if name.is_empty() {
             return Err("A data source needs a name".into());
@@ -387,16 +428,41 @@ impl ConnectForm {
             "Could not tell the driver from that connection string — pick one".to_string()
         })?;
 
-        Ok((
-            binsql_core::config::qualify(Some(folder).filter(|f| !f.is_empty()), name),
-            DataSource {
+        let id = binsql_core::config::qualify(Some(folder).filter(|f| !f.is_empty()), name);
+
+        // Three cases. An untouched reference is re-keyed to the name being
+        // saved under and the store is moved, not rewritten. A typed string
+        // with the toggle on becomes a reference and the string is filed. With
+        // the toggle off it stays in the config as it always did.
+        let (stored_dsn, secret) = if keychain::is_reference(dsn) {
+            if !self.keychain {
+                // Moving it back into the config would mean reading the store
+                // to find what to write, which is not something a form should
+                // do behind a toggle. Retyping the string says it deliberately.
+                return Err(format!(
+                    "To move this out of the {}, clear the connection string and type it again",
+                    keychain::STORE_NAME
+                ));
+            }
+            (keychain::reference(&id), None)
+        } else if self.keychain {
+            (keychain::reference(&id), Some(dsn.to_string()))
+        } else {
+            (dsn.to_string(), None)
+        };
+
+        Ok(Saved {
+            source: DataSource {
                 backend,
-                dsn: dsn.to_string(),
+                dsn: stored_dsn,
                 description: String::new(),
                 read_only: self.read_only,
                 open_on_start: self.open_on_start,
             },
-        ))
+            id,
+            secret,
+            previous: self.editing.clone(),
+        })
     }
 }
 
@@ -427,24 +493,85 @@ mod tests {
         assert_eq!(form.backend, None);
     }
 
+    /// The form defaults to storing the string, so a test that cares about the
+    /// config's contents has to say so.
+    fn in_the_config(name: &str, dsn: &str) -> ConnectForm {
+        let mut form = ConnectForm::new();
+        form.name = name.into();
+        form.dsn = dsn.into();
+        form.keychain = false;
+        form
+    }
+
     #[test]
     fn form_infers_the_driver_from_the_dsn() {
-        let mut form = ConnectForm::new();
-        form.name = "local".into();
-        form.dsn = "postgres://localhost/app".into();
-        let (name, source) = form.build().expect("valid form");
-        assert_eq!(name, "local");
-        assert_eq!(source.backend, Backend::Postgres);
+        let saved = in_the_config("local", "postgres://localhost/app")
+            .build()
+            .expect("valid form");
+        assert_eq!(saved.id, "local");
+        assert_eq!(saved.source.backend, Backend::Postgres);
+        assert_eq!(saved.source.dsn, "postgres://localhost/app");
+        assert_eq!(saved.secret, None);
     }
 
     #[test]
     fn a_folder_qualifies_the_saved_name() {
+        let mut form = in_the_config("prod", "sqlserver://host/db");
+        form.folder = "eimskip".into();
+        assert_eq!(form.build().expect("valid form").id, "eimskip/prod");
+    }
+
+    #[test]
+    fn the_keychain_keeps_the_string_and_the_config_keeps_a_reference() {
         let mut form = ConnectForm::new();
         form.folder = "eimskip".into();
         form.name = "prod".into();
-        form.dsn = "sqlserver://host/db".into();
-        let (id, _) = form.build().expect("valid form");
-        assert_eq!(id, "eimskip/prod");
+        form.dsn = "sqlserver://sa:hunter2@host/db".into();
+
+        let saved = form.build().expect("valid form");
+        assert_eq!(saved.source.dsn, "keychain://eimskip/prod");
+        assert_eq!(
+            saved.secret.as_deref(),
+            Some("sqlserver://sa:hunter2@host/db")
+        );
+        // The driver still comes off the real string, not the reference.
+        assert_eq!(saved.source.backend, Backend::MsSql);
+    }
+
+    #[test]
+    fn editing_a_stored_source_shows_the_reference_and_files_nothing_new() {
+        let source = DataSource {
+            backend: Backend::MsSql,
+            dsn: "keychain://eimskip/prod".into(),
+            description: String::new(),
+            read_only: true,
+            open_on_start: false,
+        };
+        let mut form = ConnectForm::editing("eimskip/prod", &source);
+        assert!(form.keychain);
+        assert_eq!(form.dsn, "keychain://eimskip/prod");
+
+        // A rename re-keys the reference; the secret moves rather than being
+        // rewritten, so there is nothing to file.
+        form.name = "production".into();
+        let saved = form.build().expect("valid form");
+        assert_eq!(saved.source.dsn, "keychain://eimskip/production");
+        assert_eq!(saved.secret, None);
+        assert_eq!(saved.previous.as_deref(), Some("eimskip/prod"));
+    }
+
+    #[test]
+    fn a_stored_source_is_not_silently_moved_back_into_the_config() {
+        let source = DataSource {
+            backend: Backend::MsSql,
+            dsn: "keychain://eimskip/prod".into(),
+            description: String::new(),
+            read_only: false,
+            open_on_start: false,
+        };
+        let mut form = ConnectForm::editing("eimskip/prod", &source);
+        form.keychain = false;
+        assert!(form.build().is_err());
     }
 
     #[test]

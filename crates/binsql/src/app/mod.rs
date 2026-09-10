@@ -10,14 +10,13 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
-use binsql_core::{
-    Catalog, Column, Config, DataSource, Error, ObjectKind, ObjectRef, ResultSet, Session,
-};
+use binsql_core::secrets::keychain;
+use binsql_core::{Catalog, Column, Config, Error, ObjectKind, ObjectRef, ResultSet, Session};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio_util::sync::CancellationToken;
 
 use console::{Console, DEFAULT_LIMIT, Grid, Outcome};
-use overlay::Overlay;
+use overlay::{Overlay, Saved};
 use tree::{LoadState, Node, NodeId, NodeKind, Tree};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -827,29 +826,76 @@ impl App {
 
     // --- data sources ---
 
-    pub fn save_data_source(&mut self, name: String, source: DataSource) {
-        let is_new = self.config.get(&name).is_none();
-        self.config.set(&name, source);
-        if let Err(error) = self.config.save() {
-            self.error(format!("Saving connection: {error}"));
-            return;
+    /// Files the secret, writes the config and opens the connection. Errors
+    /// come back rather than being reported, so the form can stay up holding
+    /// what was typed.
+    ///
+    /// The credential store is written before the config, so a config can never
+    /// end up naming a secret that was never stored.
+    pub fn save_data_source(&mut self, saved: Saved) -> Result<(), String> {
+        let Saved {
+            id,
+            source,
+            secret,
+            previous,
+        } = saved;
+        let renamed_from = previous.filter(|previous| *previous != id);
+
+        match &secret {
+            Some(secret) => keychain::set(&id, secret).map_err(|error| error.to_string())?,
+            // Nothing new to file, so a rename carries the existing entry
+            // across rather than leaving the new name pointing at nothing.
+            None if keychain::is_reference(&source.dsn) => {
+                if let Some(from) = &renamed_from {
+                    keychain::rename(from, &id).map_err(|error| error.to_string())?;
+                }
+            }
+            None => {}
         }
+
+        let is_new = self.config.get(&id).is_none();
+        self.config.set(&id, source);
+        if let Some(from) = &renamed_from {
+            // Only from the config, never through `remove_data_source`: the old
+            // name's secret has either been carried across or superseded by the
+            // one just filed, so deleting it would take the live one.
+            self.sessions.remove(from);
+            self.config.remove(from);
+            self.tree.remove_source(from);
+        }
+        self.config.save().map_err(|error| error.to_string())?;
+
         if is_new {
-            self.tree.add_source(name.clone());
+            self.tree.add_source(id.clone());
         }
-        self.success(format!("Saved {name}"));
-        if let Some(node) = self.source_node_id(&name) {
+        self.success(format!("Saved {id}"));
+        if let Some(node) = self.source_node_id(&id) {
             self.tree.select_id(node);
-            self.connect(node, &name);
+            self.connect(node, &id);
         }
+        Ok(())
     }
 
     pub fn remove_data_source(&mut self, name: &str) {
         self.sessions.remove(name);
+        let secret = self
+            .config
+            .get(name)
+            .and_then(|source| keychain::account(&source.dsn))
+            .map(str::to_string);
+
         if self.config.remove(name) {
             if let Err(error) = self.config.save() {
                 self.error(format!("Saving connections: {error}"));
                 return;
+            }
+            // Only after the config is written: a secret left behind by a
+            // failed save is recoverable, one deleted for a connection that is
+            // still listed is not.
+            if let Some(account) = secret
+                && let Err(error) = keychain::delete(&account)
+            {
+                self.warn(format!("Removed {name}, but {error}"));
             }
             self.tree.remove_source(name);
             self.warn(format!("Removed {name}"));
