@@ -499,67 +499,51 @@ async fn the_query_editor_edits_like_an_editor() {
         "typing should replace a selection"
     );
 
-    // ⌘⌫ where the terminal sends it, ⌃U where it does not — both cut back to
-    // the head of the line.
-    for modifier in [KeyModifiers::SUPER, KeyModifiers::CONTROL] {
-        app.console_mut().set_sql("SELECT * FROM artist");
-        binsql::app::keys::handle(&mut app, KeyEvent::new(KeyCode::Backspace, modifier));
-        assert_eq!(
-            app.console().sql(),
-            "",
-            "backspace with {modifier:?} should clear the line"
-        );
-    }
+    // ⌃⌫ and ⌃U both cut back to the head of the line.
+    app.console_mut().set_sql("SELECT * FROM artist");
+    binsql::app::keys::handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL),
+    );
+    assert_eq!(app.console().sql(), "", "⌃⌫ should clear the line");
+
     app.console_mut().set_sql("SELECT * FROM artist");
     ctrl(&mut app, 'u');
     assert_eq!(app.console().sql(), "", "⌃U should clear the line");
 
-    // Undo and redo, in both spellings. ⌃Z and ⌃Y are the textarea's own;
-    // ⌘Z and ⌘⇧Z are ours, because it has no idea what ⌘ is.
+    // Undo and redo take a whole run of typing, not a character of it — the
+    // textarea records one history entry per keystroke, and unpicking a word
+    // letter by letter is slower than retyping it.
     let chord = |app: &mut App, code, modifiers| {
         binsql::app::keys::handle(app, KeyEvent::new(code, modifiers))
     };
-    for (undo, redo) in [
-        (
-            (KeyCode::Char('z'), KeyModifiers::CONTROL),
-            (KeyCode::Char('y'), KeyModifiers::CONTROL),
-        ),
-        (
-            (KeyCode::Char('z'), KeyModifiers::SUPER),
-            (
-                KeyCode::Char('Z'),
-                KeyModifiers::SUPER | KeyModifiers::SHIFT,
-            ),
-        ),
-    ] {
-        app.console_mut().set_sql("SELECT 1");
-        press(&mut app, KeyCode::Char('!'));
-        assert_eq!(app.console().sql(), "SELECT 1!");
 
-        chord(&mut app, undo.0, undo.1);
-        assert_eq!(
-            app.console().sql(),
-            "SELECT 1",
-            "undo failed for {:?}",
-            undo.1
-        );
-
-        chord(&mut app, redo.0, redo.1);
-        assert_eq!(
-            app.console().sql(),
-            "SELECT 1!",
-            "redo failed for {:?}",
-            redo.1
-        );
+    app.console_mut().set_sql("");
+    for ch in "SELECT artist".chars() {
+        press(&mut app, KeyCode::Char(ch));
     }
+    assert_eq!(app.console().sql(), "SELECT artist");
 
-    // A ⌘ chord with nothing bound to it must not type its letter.
-    app.console_mut().set_sql("SELECT 1");
-    chord(&mut app, KeyCode::Char('s'), KeyModifiers::SUPER);
+    chord(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(app.console().sql(), "SELECT ", "⌃Z should take the word");
+
+    chord(
+        &mut app,
+        KeyCode::Char('Z'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
     assert_eq!(
         app.console().sql(),
-        "SELECT 1",
-        "an unbound ⌘ chord should not reach the text"
+        "SELECT artist",
+        "⌃⇧Z should put it back"
+    );
+
+    chord(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL);
+    ctrl(&mut app, 'y');
+    assert_eq!(
+        app.console().sql(),
+        "SELECT artist",
+        "⌃Y redoes too, for terminals that cannot tell ⌃⇧Z from ⌃Z"
     );
 
     // Drag across the first word, then delete it.

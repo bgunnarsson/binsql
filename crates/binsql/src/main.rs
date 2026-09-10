@@ -93,14 +93,14 @@ async fn main() -> Result<()> {
 
     let mut terminal = ratatui::init();
 
-    // A terminal cannot send ⌘ to an application over the legacy encoding —
-    // there is nowhere in it to put the modifier. The kitty keyboard protocol
-    // has somewhere, so ask for it where it is understood: Ghostty, Kitty,
-    // WezTerm, foot, and iTerm2 once it is switched on. Terminal.app has no
-    // such mode, which is why every ⌘ binding also has a control-key twin.
+    // ⌃⇧Z and ⌃Z are one and the same byte in the old encoding, which has
+    // nowhere to put the shift. The kitty keyboard protocol has somewhere, so
+    // ask for it where it is understood — Ghostty, Kitty, WezTerm, foot, and
+    // iTerm2 once it is switched on — and let redo fall back to ⌃Y where it is
+    // not. Terminal.app is one of the places it is not.
     //
-    // Only the disambiguation flag: it is what carries the modifiers, and the
-    // rest would start reporting key releases and alternate keycodes that
+    // Only the disambiguation flag: it is what separates the two chords, and
+    // the rest would start reporting key releases and alternate keycodes that
     // nothing here reads.
     //
     // Asked before mouse reporting is turned on: this negotiation writes a

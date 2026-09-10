@@ -134,10 +134,9 @@ fn disconnect_selected_source(app: &mut App) {
 
 /// The editor's own bindings, then everything else through to the textarea.
 ///
-/// ⌘ only reaches a terminal application that asked for the kitty keyboard
-/// protocol, and only from a terminal that speaks it — Terminal.app never
-/// will. So every one of these has a control-key spelling that works
-/// everywhere, and the ⌘ arm is there for where it does arrive.
+/// All on control keys. ⌘ was tried and does not survive the trip: it needs the
+/// kitty keyboard protocol to be encodable at all, and a macOS terminal claims
+/// most of it before an application ever sees it.
 fn editor(app: &mut App, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let cmd = key.modifiers.contains(KeyModifiers::SUPER);
@@ -156,34 +155,33 @@ fn editor(app: &mut App, key: KeyEvent) {
         //
         // Redo comes first, or the shifted chord matches the plainer arm. The
         // shifted letter arrives in either case depending on the terminal.
-        KeyCode::Char('z' | 'Z') if (ctrl || cmd) && shift => {
-            app.console_mut().editor.redo();
+        KeyCode::Char('z' | 'Z') if ctrl && shift => {
+            app.console_mut().redo();
             return;
         }
-        KeyCode::Char('z') if ctrl || cmd => {
-            app.console_mut().editor.undo();
+        KeyCode::Char('z') if ctrl => {
+            app.console_mut().undo();
             return;
         }
-        // The other redo this program has always advertised. It costs the
+        // ⌃⇧Z and ⌃Z are the same byte to a terminal speaking the old
+        // encoding, so the shifted spelling only works where the kitty
+        // protocol does. ⌃Y is the redo that works everywhere. It costs the
         // textarea's yank-buffer recall, which is not the system clipboard and
         // is no loss; a real paste arrives bracketed and still works.
-        KeyCode::Char('y') if ctrl || cmd => {
-            app.console_mut().editor.redo();
+        KeyCode::Char('y') if ctrl => {
+            app.console_mut().redo();
             return;
         }
         // The textarea puts "move to start of line" here, which Home already
         // does. Select-all is what a modern editor means by it, and typing
         // over a selection replaces it.
-        KeyCode::Char('a') if ctrl || cmd => {
+        KeyCode::Char('a') if ctrl => {
             app.console_mut().editor.select_all();
             return;
         }
-        // ⌘⌫ where it arrives, ⌃U — readline's spelling — where it does not.
-        KeyCode::Backspace if ctrl || cmd => {
-            app.console_mut().editor.delete_line_by_head();
-            return;
-        }
-        KeyCode::Char('u') if ctrl => {
+        // Readline's spelling of delete-to-line-start, and ⌫ with a modifier,
+        // which is what a hand reaches for.
+        KeyCode::Char('u') | KeyCode::Backspace if ctrl => {
             app.console_mut().editor.delete_line_by_head();
             return;
         }
