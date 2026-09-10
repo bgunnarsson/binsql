@@ -7,7 +7,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use tui_textarea::{Input, Key};
 
-use super::overlay::{Command, ConnectForm, Field, Overlay, Palette, RowDetail};
+use super::overlay::{Command, ConnectForm, Field, Overlay, Palette, RowDetail, ValueDetail};
 use super::{App, Pane};
 
 /// How far ⌃D and ⌃U move.
@@ -181,26 +181,54 @@ fn overlay(app: &mut App, key: KeyEvent) {
         // not a prompt.
         Some(Overlay::Help) | Some(Overlay::Splash) => app.overlay = None,
 
-        Some(Overlay::Detail(detail)) => match key.code {
-            KeyCode::Char('j') | KeyCode::Down => detail.scroll_by(1),
-            KeyCode::Char('k') | KeyCode::Up => detail.scroll_by(-1),
+        // The record is a list of its fields, so up and down move between them
+        // rather than scrolling the box freely — the view follows the
+        // selection, and Enter opens whichever field is under it.
+        Some(Overlay::Detail(_)) => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => move_field(app, 1),
+            KeyCode::Char('k') | KeyCode::Up => move_field(app, -1),
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                detail.scroll_by(HALF_PAGE)
+                move_field(app, HALF_PAGE)
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                detail.scroll_by(-HALF_PAGE)
+                move_field(app, -HALF_PAGE)
             }
-            KeyCode::PageDown => detail.scroll_by(HALF_PAGE * 2),
-            KeyCode::PageUp => detail.scroll_by(-HALF_PAGE * 2),
-            KeyCode::Char('g') | KeyCode::Home => detail.to_top(),
-            KeyCode::Char('G') | KeyCode::End => detail.to_bottom(),
+            KeyCode::PageDown => move_field(app, HALF_PAGE * 2),
+            KeyCode::PageUp => move_field(app, -HALF_PAGE * 2),
+            KeyCode::Char('g') | KeyCode::Home => field_edge(app, false),
+            KeyCode::Char('G') | KeyCode::End => field_edge(app, true),
 
             // Left and right step between records without closing, which is
             // the point of a row viewer when you are reading down a table.
             KeyCode::Char('h') | KeyCode::Left => step_record(app, -1),
             KeyCode::Char('l') | KeyCode::Right => step_record(app, 1),
 
-            _ => app.overlay = None,
+            KeyCode::Enter => open_value(app),
+            KeyCode::Esc => app.overlay = None,
+            _ => {}
+        },
+
+        Some(Overlay::Value(value)) => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => value.scroll_by(1),
+            KeyCode::Char('k') | KeyCode::Up => value.scroll_by(-1),
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                value.scroll_by(HALF_PAGE)
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                value.scroll_by(-HALF_PAGE)
+            }
+            KeyCode::PageDown => value.scroll_by(HALF_PAGE * 2),
+            KeyCode::PageUp => value.scroll_by(-HALF_PAGE * 2),
+            KeyCode::Char('g') | KeyCode::Home => value.to_top(),
+            KeyCode::Char('G') | KeyCode::End => value.to_bottom(),
+
+            // The same field of the next record, which is how one column gets
+            // read down a table without closing and reopening at every row.
+            KeyCode::Char('h') | KeyCode::Left => step_record(app, -1),
+            KeyCode::Char('l') | KeyCode::Right => step_record(app, 1),
+
+            KeyCode::Esc | KeyCode::Enter => close_value(app),
+            _ => {}
         },
         Some(Overlay::Palette(palette)) => match key.code {
             KeyCode::Esc => app.overlay = None,
@@ -245,10 +273,58 @@ fn step_record(app: &mut App, delta: isize) {
     let before = grid.row;
     grid.move_row(delta);
     let moved = grid.row != before;
-
-    if moved && let Some(Overlay::Detail(detail)) = app.overlay.as_mut() {
-        detail.to_top();
+    if !moved {
+        return;
     }
+
+    match app.overlay.as_mut() {
+        Some(Overlay::Detail(detail)) => detail.scroll = 0,
+        // A different record's value is a different document; carrying the old
+        // scroll into it lands somewhere arbitrary.
+        Some(Overlay::Value(value)) => value.to_top(),
+        _ => {}
+    }
+}
+
+/// Moves the selected field. That is the grid's cursor column: the record
+/// modal marks it, and the value modal opens it.
+fn move_field(app: &mut App, delta: isize) {
+    if let Some(grid) = app.console_mut().grid_mut() {
+        grid.move_column(delta);
+    }
+}
+
+fn field_edge(app: &mut App, last: bool) {
+    let Some(grid) = app.console_mut().grid_mut() else {
+        return;
+    };
+    if last {
+        grid.last_column();
+    } else {
+        grid.first_column();
+    }
+}
+
+fn open_value(app: &mut App) {
+    let row = match app.overlay.take() {
+        Some(Overlay::Detail(row)) => row,
+        other => {
+            app.overlay = other;
+            return;
+        }
+    };
+    app.overlay = Some(Overlay::Value(ValueDetail::new(row)));
+}
+
+fn close_value(app: &mut App) {
+    let value = match app.overlay.take() {
+        Some(Overlay::Value(value)) => value,
+        other => {
+            app.overlay = other;
+            return;
+        }
+    };
+    app.overlay = Some(Overlay::Detail(value.row));
 }
 
 fn save_form(app: &mut App) {
