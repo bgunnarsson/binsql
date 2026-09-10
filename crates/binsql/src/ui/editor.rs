@@ -3,22 +3,49 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, Pane};
+use crate::app::{App, Pane, TabSpan};
 use crate::theme;
 use crate::ui;
+use unicode_width::UnicodeWidthStr;
 
-pub fn draw_tabs(frame: &mut Frame, app: &App, area: Rect) {
+/// Space between one tab and the next.
+const TAB_GAP: u16 = 1;
+/// The button that opens a console, and what it is drawn as.
+const NEW_TAB: &str = " + ";
+
+pub fn draw_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut spans = Vec::new();
+    // Measured while they are laid out: a tab is as wide as its own title, so
+    // where one ends is not something a click can work out for itself.
+    let mut tabs = Vec::with_capacity(app.consoles.len() + 1);
+    let mut x = area.x;
+
     for (index, console) in app.consoles.iter().enumerate() {
         let active = index == app.active_console;
         let marker = if console.is_running() { "◐ " } else { "" };
-        spans.push(Span::styled(
-            format!(" {marker}{} ", ui::truncate(&console.title, 24)),
-            theme::tab(active),
-        ));
+        let label = format!(" {marker}{} ", ui::truncate(&console.title, 24));
+        let width = UnicodeWidthStr::width(label.as_str()) as u16;
+
+        tabs.push(TabSpan {
+            console: Some(index),
+            start: x,
+            end: x + width,
+        });
+        x += width + TAB_GAP;
+
+        spans.push(Span::styled(label, theme::tab(active)));
         spans.push(Span::raw(" "));
     }
-    spans.push(Span::styled(" + ", theme::dim()));
+
+    tabs.push(TabSpan {
+        console: None,
+        start: x,
+        end: x + UnicodeWidthStr::width(NEW_TAB) as u16,
+    });
+    spans.push(Span::styled(NEW_TAB, theme::dim()));
+
+    app.tabs = tabs;
+    app.panes.tabs = area;
 
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(theme::status_bar()),

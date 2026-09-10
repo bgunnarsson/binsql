@@ -77,6 +77,10 @@ fn press(app: &mut App, event: MouseEvent) -> bool {
 
     let at = (event.column, event.row);
 
+    if contains(app.panes.tabs, at) {
+        return open_tab(app, event.column);
+    }
+
     if contains(app.panes.tree, at) {
         app.focus = Pane::Explorer;
         let row = (event.row - app.panes.tree.y) as usize;
@@ -114,6 +118,29 @@ fn press(app: &mut App, event: MouseEvent) -> bool {
     }
 
     false
+}
+
+/// Switches to the console whose tab is under the pointer, or opens a new one
+/// when the `+` is. The gaps between tabs select nothing, which is what they
+/// look like they do.
+fn open_tab(app: &mut App, column: u16) -> bool {
+    let Some(tab) = app
+        .tabs
+        .iter()
+        .copied()
+        .find(|tab| column >= tab.start && column < tab.end)
+    else {
+        return false;
+    };
+
+    match tab.console {
+        Some(index) => app.select_console(index),
+        None => app.new_console(),
+    }
+    // Picking a console is picking what to type in, so the editor takes the
+    // cursor — which is what ⌥1…9 and ⌃T do too.
+    app.focus = Pane::Editor;
+    true
 }
 
 /// Where in the text a pointer at this column and row is.

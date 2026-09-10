@@ -662,6 +662,60 @@ async fn a_single_click_only_selects() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// The tab strip is a row of buttons: each console's tab, and a `+`.
+#[tokio::test]
+async fn clicking_a_tab_switches_console() {
+    let path = fixture("tabs");
+    let (mut app, _messages) = App::new(config(&path));
+
+    // Three consoles, each with something in it to tell them apart.
+    app.console_mut().set_sql("SELECT one");
+    binsql::app::keys::handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+    );
+    app.console_mut().set_sql("SELECT two");
+    binsql::app::keys::handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+    );
+    app.console_mut().set_sql("SELECT three");
+    render(&mut app);
+    assert_eq!(app.active_console, 2);
+
+    // Back to the first, by its tab rather than by ⌥1.
+    let (first, row) = (app.tabs[0], app.panes.tabs.y);
+    click(&mut app, (first.start + 1, row));
+    assert_eq!(app.active_console, 0, "the first tab should be first");
+    assert_eq!(app.console().sql(), "SELECT one");
+    assert_eq!(app.focus, Pane::Editor, "and the editor should take over");
+
+    // And to the middle one.
+    render(&mut app);
+    let (second, row) = (app.tabs[1], app.panes.tabs.y);
+    click(&mut app, (second.start + 1, row));
+    assert_eq!(app.active_console, 1);
+    assert_eq!(app.console().sql(), "SELECT two");
+
+    // The gap between two tabs is not either of them.
+    render(&mut app);
+    let (gap, row) = (app.tabs[0].end, app.panes.tabs.y);
+    assert!(gap < app.tabs[1].start, "there is a gap to aim at");
+    click(&mut app, (gap, row));
+    assert_eq!(app.active_console, 1, "a click in the gap changes nothing");
+
+    // The + opens one.
+    render(&mut app);
+    let new = *app.tabs.last().expect("the new-console button");
+    let row = app.panes.tabs.y;
+    assert_eq!(new.console, None, "the last tab is the button");
+    click(&mut app, (new.start + 1, row));
+    assert_eq!(app.consoles.len(), 4, "+ should open a console");
+    assert_eq!(app.active_console, 3, "and switch to it");
+
+    let _ = std::fs::remove_file(&path);
+}
+
 /// A click takes focus, and lands on the thing under it.
 #[tokio::test]
 async fn clicking_a_pane_focuses_it() {
@@ -1616,6 +1670,49 @@ async fn ctrl_c_cancels_a_running_query() {
         screen.contains("after_cancel"),
         "the console did not recover:\n{screen}"
     );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The recorded spans have to line up with the pixels, not just with each
+/// other: a tab is found by where it was drawn, so the two measurements being
+/// the same measurement is the whole point.
+#[tokio::test]
+async fn the_tab_spans_match_what_was_drawn() {
+    let path = fixture("tabspans");
+    let (mut app, _messages) = App::new(config(&path));
+    for _ in 0..2 {
+        binsql::app::keys::handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+        );
+    }
+
+    let screen = render(&mut app);
+    let strip = screen
+        .lines()
+        .nth(app.panes.tabs.y as usize)
+        .expect("the tab strip")
+        .to_string();
+    println!("[{strip}]");
+
+    let columns: Vec<char> = strip.chars().collect();
+    for tab in &app.tabs {
+        let drawn: String = (tab.start..tab.end)
+            .filter_map(|x| columns.get(x as usize))
+            .collect();
+        match tab.console {
+            Some(index) => assert!(
+                drawn.contains(&app.consoles[index].title),
+                "tab {index} claims {}..{} but that reads {drawn:?}",
+                tab.start,
+                tab.end
+            ),
+            // The captured line has its trailing blanks trimmed, and the
+            // button's last column is one of them.
+            None => assert_eq!(drawn.trim(), "+", "the button should be where it says"),
+        }
+    }
 
     let _ = std::fs::remove_file(&path);
 }

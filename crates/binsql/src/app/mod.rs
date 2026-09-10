@@ -121,6 +121,10 @@ pub struct App {
     /// whoever wants it.
     pub last_press: Option<(u16, u16, Instant)>,
     pub panes: PaneAreas,
+    /// Where each tab was drawn along the strip. Written by the renderer: the
+    /// tabs are as wide as their titles, so where one ends is only known by
+    /// laying them out.
+    pub tabs: Vec<TabSpan>,
     next_console_id: u64,
     tx: UnboundedSender<Message>,
 }
@@ -151,6 +155,16 @@ pub struct PaneAreas {
     pub tree: Rect,
     pub text: Rect,
     pub grid: Rect,
+    pub tabs: Rect,
+}
+
+/// One tab's place along the strip, and what clicking it does.
+#[derive(Debug, Clone, Copy)]
+pub struct TabSpan {
+    /// The console this tab opens, or `None` for the `+` that makes a new one.
+    pub console: Option<usize>,
+    pub start: u16,
+    pub end: u16,
 }
 
 impl App {
@@ -177,6 +191,7 @@ impl App {
             dragging: None,
             last_press: None,
             panes: PaneAreas::default(),
+            tabs: Vec::new(),
             next_console_id: 0,
             tx,
         };
