@@ -46,14 +46,26 @@ registered, and the three keys worth knowing. Any key dismisses it.
 
 ## Install
 
+Each release carries a build for macOS, Linux and Windows on
+[the releases page](https://github.com/bgunnarsson/binsql/releases), with a
+`checksums.txt` beside them:
+
+```sh
+tar -xzf binsql-3.0.0-darwin-arm64.tar.gz
+sudo mv binsql-3.0.0-darwin-arm64/binsql /usr/local/bin/
+```
+
+Or from source:
+
 ```sh
 cargo build --release
 # the binary lands at target/release/binsql
 ```
 
-Rust 1.90 or newer, and a Nerd Font in your terminal — binsql draws the tree
-and the pane chrome with the same glyphs binvim does, and sits beside it in the
-same font. Without one the icons render as boxes; nothing else is affected.
+Rust 1.90 or newer to build, and a Nerd Font in your terminal either way —
+binsql draws the tree and the pane chrome with the same glyphs binvim does, and
+sits beside it in the same font. Without one the icons render as boxes; nothing
+else is affected.
 
 ## Use
 
