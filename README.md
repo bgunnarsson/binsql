@@ -173,8 +173,15 @@ on in full — JSON re-indented — and `←`/`→` step between records without
 closing it.
 
 In the query editor: `⌃A` selects all — typing over a selection replaces it —
-`⌃U` (or `⌘⌫` where the terminal sends it) deletes back to the start of the
-line, `⌃X` cuts, `⌃Z`/`⌃Y` undo and redo.
+`⌃U` deletes back to the start of the line, `⌃X` cuts, and `⌃Z` / `⌃⇧Z` undo
+and redo.
+
+Each of those has a `⌘` spelling too — `⌘A`, `⌘⌫`, `⌘Z`, `⌘⇧Z` — which works
+only where the terminal can send `⌘` at all. That needs the kitty keyboard
+protocol: Ghostty, Kitty, WezTerm and foot have it, iTerm2 has it behind a
+setting, and Terminal.app has no such mode. binsql asks for the protocol when
+it starts and goes without when the answer is no, which is why every `⌘`
+binding above is also on a control key.
 
 ## Mouse
 

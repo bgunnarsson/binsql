@@ -141,10 +141,34 @@ fn disconnect_selected_source(app: &mut App) {
 fn editor(app: &mut App, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let cmd = key.modifiers.contains(KeyModifiers::SUPER);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
     match key.code {
         KeyCode::Esc => {
             app.focus = Pane::Explorer;
+            return;
+        }
+        // Undo and redo are bound here rather than left to the textarea, whose
+        // own map is emacs': undo on ⌃U and redo on ⌃R. ⌃R is binsql's "run
+        // the query" and never reaches it, ⌃U is delete-to-line-start above,
+        // and ⌃Z — which this program has always told people to press — was
+        // bound to nothing at all.
+        //
+        // Redo comes first, or the shifted chord matches the plainer arm. The
+        // shifted letter arrives in either case depending on the terminal.
+        KeyCode::Char('z' | 'Z') if (ctrl || cmd) && shift => {
+            app.console_mut().editor.redo();
+            return;
+        }
+        KeyCode::Char('z') if ctrl || cmd => {
+            app.console_mut().editor.undo();
+            return;
+        }
+        // The other redo this program has always advertised. It costs the
+        // textarea's yank-buffer recall, which is not the system clipboard and
+        // is no loss; a real paste arrives bracketed and still works.
+        KeyCode::Char('y') if ctrl || cmd => {
+            app.console_mut().editor.redo();
             return;
         }
         // The textarea puts "move to start of line" here, which Home already
@@ -164,6 +188,13 @@ fn editor(app: &mut App, key: KeyEvent) {
             return;
         }
         _ => {}
+    }
+
+    // A ⌘ chord the editor has no use for is still not text. The textarea has
+    // no concept of the modifier, so passing one through drops it and types
+    // the bare letter into the query — ⌘S would write an "s".
+    if cmd {
+        return;
     }
 
     let input = Input::from(key);
