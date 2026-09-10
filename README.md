@@ -192,9 +192,11 @@ only way to settle a question like that.
 ## Mouse
 
 A click focuses the pane it landed in and lands the cursor with it: a position
-in the query, a cell in the grid, a row in the tree. Dragging across the query
-selects, and `⌫` removes what was selected. The wheel scrolls whatever the
-pointer is over, the query editor included.
+in the query, a cell in the grid, a row in the tree. Clicking a tab switches to
+that console, and the `+` at the end of the strip opens one. Double-clicking
+does whatever `Enter` would — connects a data source, opens a table, opens a
+record. Dragging across the query selects, and `⌫` removes what was selected.
+The wheel scrolls whatever the pointer is over, the query editor included.
 
 **Both pane seams drag.** The sidebar's edge widens it, for a schema whose
 table names are longer than the default fits — it never narrows below that
