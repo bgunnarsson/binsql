@@ -18,19 +18,20 @@ keys worth knowing; any key dismisses it.
 
 ## Install
 
-**v3 is not tagged yet.** The crate says `3.0.0-dev` and
-[the releases page](https://github.com/bgunnarsson/binsql/releases) still ends
-at v2, the Go build. Until there is a tag:
+Download the archive for your platform from [the releases
+page](https://github.com/bgunnarsson/binsql/releases) — darwin-arm64,
+darwin-amd64, linux-amd64, linux-arm64 or windows-amd64 — and check it against
+the `checksums.txt` beside it. Each unpacks into a directory of its own, so it
+cannot overwrite anything where it lands; put the `binsql` inside it on your
+`PATH`. Or build it:
 
 ```sh
 cargo build --release
 # the binary lands at target/release/binsql
 ```
 
-Tagging is what makes a release: `v3.0.0` sends GitHub Actions off to build
-darwin-arm64, darwin-amd64, linux-amd64, linux-arm64 and windows-amd64, and
-attaches the five archives and a `checksums.txt` to the tag. Each unpacks into a
-directory of its own, so it cannot overwrite anything where it lands.
+Tagging is what makes a release: a `v*` tag that agrees with `Cargo.toml` sends
+GitHub Actions off to build the five archives and attach them to it.
 
 Rust 1.90 or newer to build, and a Nerd Font in your terminal either way —
 binsql draws the tree and the pane chrome with the same glyphs binvim does.
