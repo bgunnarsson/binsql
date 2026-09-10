@@ -2,15 +2,26 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use sqlx::Row;
-use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlQueryResult, MySqlRow};
+use sqlx::mysql::{
+    MySql, MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlQueryResult, MySqlRow,
+    MySqlTypeInfo,
+};
 use tokio_util::sync::CancellationToken;
 
 use super::Adapter;
-use super::sqlx_common::{self, decode_as, decode_fallback};
+use super::sqlx_common::{self, Binding, Codec, bind_as_given, decode_as, decode_fallback};
 use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
+use crate::sql::Bound;
 use crate::value::{Column, ResultSet, Value};
+
+const CODEC: Codec<MySql> = Codec {
+    decode,
+    affected,
+    bind,
+    describe: false,
+};
 
 pub struct MySqlAdapter {
     pool: MySqlPool,
@@ -51,7 +62,7 @@ impl MySqlAdapter {
     /// hold a borrow of a pooled connection.
     async fn run_on_own_connection(
         &self,
-        sql: &str,
+        statement: &Bound,
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
@@ -64,8 +75,7 @@ impl MySqlAdapter {
             .ok();
 
         let result =
-            sqlx_common::run::<sqlx::MySql>(&mut connection, sql, limit, decode, affected, cancel)
-                .await;
+            sqlx_common::run::<MySql>(&mut connection, statement, limit, &CODEC, cancel).await;
 
         if matches!(result, Err(Error::Cancelled))
             && let Some(id) = id
@@ -263,24 +273,22 @@ impl Adapter for MySqlAdapter {
 
     async fn run(
         &self,
-        sql: &str,
+        statement: &Bound,
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
-        self.run_on_own_connection(sql, limit, cancel).await
+        self.run_on_own_connection(statement, limit, cancel).await
     }
 
     async fn run_transaction(
         &self,
-        statements: &[String],
+        statements: &[Bound],
         limit: Option<usize>,
         commit: bool,
         cancel: &CancellationToken,
     ) -> Result<Vec<ResultSet>> {
-        sqlx_common::run_transaction::<sqlx::MySql>(
-            &self.pool, statements, limit, commit, decode, affected, cancel,
-        )
-        .await
+        sqlx_common::run_transaction::<MySql>(&self.pool, statements, limit, commit, &CODEC, cancel)
+            .await
     }
 
     async fn open_catalog(&self, _catalog: &str) -> Result<Option<Box<dyn Adapter>>> {
@@ -291,6 +299,14 @@ impl Adapter for MySqlAdapter {
 
 fn affected(result: &MySqlQueryResult) -> u64 {
     result.rows_affected()
+}
+
+fn bind<'q>(
+    query: Binding<'q, MySql>,
+    value: &'q Value,
+    _expected: Option<&MySqlTypeInfo>,
+) -> std::result::Result<Binding<'q, MySql>, String> {
+    Ok(bind_as_given!(query, value))
 }
 
 fn decode(row: &MySqlRow, idx: usize) -> Value {

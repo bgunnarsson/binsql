@@ -7,9 +7,12 @@
 use binsql_core::sql;
 
 use super::render;
-use super::{Result, cancel_on_interrupt, connect, failed, output, parse, print, read_sql, usage};
+use super::{
+    Result, bind_values, cancel_on_interrupt, connect, failed, output, parse, print, read_sql,
+    usage,
+};
 
-const VALUES: &[&str] = &["file", "f", "limit"];
+const VALUES: &[&str] = &["file", "f", "limit", "arg"];
 const SWITCHES: &[&str] = &["allow-write"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {
@@ -24,6 +27,7 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         None => None,
     };
 
+    let params = bind_values(&args)?;
     let script = read_sql(&args)?;
     let session = connect(&args).await?;
 
@@ -49,9 +53,12 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         )));
     }
 
+    let bound = sql::bind(std::slice::from_ref(statement), &params, backend)
+        .map_err(|error| usage(format!("{error} — one --arg per ?")))?;
+
     let cancel = cancel_on_interrupt();
     let result = session
-        .run_cancellable(None, &statement.sql, limit, &cancel)
+        .run_bound(None, &bound[0], limit, &cancel)
         .await
         .map_err(|error| failed(error.to_string()))?;
 

@@ -9,10 +9,11 @@ use binsql_core::{Backend, Statement, sql};
 
 use super::render::{self, Outcome};
 use super::{
-    Result, cancel_on_interrupt, connect, failed, note, output, parse, print, read_sql, usage,
+    Result, bind_values, cancel_on_interrupt, connect, failed, note, output, parse, print,
+    read_sql, usage,
 };
 
-const VALUES: &[&str] = &["file", "f"];
+const VALUES: &[&str] = &["file", "f", "arg"];
 const SWITCHES: &[&str] = &["dry-run", "tx", "no-tx", "force"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {
@@ -31,6 +32,7 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         ));
     }
 
+    let params = bind_values(&args)?;
     let script = read_sql(&args)?;
     let session = connect(&args).await?;
     let backend = session.backend();
@@ -42,6 +44,8 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     if !args.is_set(&["force"]) {
         refuse_the_obviously_destructive(&statements, backend)?;
     }
+    let bound = sql::bind(&statements, &params, backend)
+        .map_err(|error| usage(format!("{error} — one --arg per ?")))?;
 
     // A batch is one unit of work by default; a lone statement is not worth
     // wrapping. Either way `--tx` and `--dry-run` say so outright.
@@ -51,14 +55,9 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     }
 
     let cancel = cancel_on_interrupt();
-    let sqls: Vec<String> = statements
-        .iter()
-        .map(|statement| statement.sql.clone())
-        .collect();
-
     let results = if transactional {
         session
-            .run_transaction(None, &sqls, None, !dry_run, &cancel)
+            .run_transaction(None, &bound, None, !dry_run, &cancel)
             .await
             .map_err(|error| {
                 failed(format!(
@@ -66,10 +65,10 @@ pub async fn run(args: Vec<String>) -> Result<()> {
                 ))
             })?
     } else {
-        let mut results = Vec::with_capacity(sqls.len());
-        for (index, sql) in sqls.iter().enumerate() {
+        let mut results = Vec::with_capacity(bound.len());
+        for (index, (statement, bound)) in statements.iter().zip(&bound).enumerate() {
             let result = session
-                .run_cancellable(None, sql, None, &cancel)
+                .run_bound(None, bound, None, &cancel)
                 .await
                 .map_err(|error| {
                     // Without a transaction there is nothing to undo, so the
@@ -83,7 +82,7 @@ pub async fn run(args: Vec<String>) -> Result<()> {
                     };
                     failed(format!(
                         "{error}\n  statement: {}{stranded}",
-                        sql::summarize(sql, backend, 100)
+                        sql::summarize(&statement.sql, backend, 100)
                     ))
                 })?;
             results.push(result);

@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::backend::Backend;
 use crate::error::Result;
 use crate::schema::{Catalog, ObjectRef};
-use crate::sql;
+use crate::sql::{self, Bound};
 use crate::value::{Column, ResultSet};
 
 /// One live connection to one database, with every backend difference already
@@ -35,8 +35,9 @@ pub trait Adapter: Send + Sync {
 
     async fn columns(&self, object: &ObjectRef) -> Result<Vec<Column>>;
 
-    /// Runs one statement. `limit` caps the rows pulled off the wire; the
-    /// result is flagged truncated when the cap was reached.
+    /// Runs one statement, sending its values beside it. `limit` caps the rows
+    /// pulled off the wire; the result is flagged truncated when the cap was
+    /// reached.
     ///
     /// Cancelling the token stops the query and yields [`Error::Cancelled`].
     /// What that costs the server is the adapter's business: SQL Server has no
@@ -46,7 +47,7 @@ pub trait Adapter: Send + Sync {
     /// run the next statement on.
     async fn run(
         &self,
-        sql: &str,
+        statement: &Bound,
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet>;
@@ -60,7 +61,7 @@ pub trait Adapter: Send + Sync {
     /// connection means nothing to the next.
     async fn run_transaction(
         &self,
-        statements: &[String],
+        statements: &[Bound],
         limit: Option<usize>,
         commit: bool,
         cancel: &CancellationToken,

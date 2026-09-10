@@ -1,16 +1,29 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use sqlx::Row;
-use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgQueryResult, PgRow, PgSslMode};
+use sqlx::encode::{Encode, IsNull};
+use sqlx::error::BoxDynError;
+use sqlx::postgres::{
+    PgArgumentBuffer, PgConnectOptions, PgPool, PgPoolOptions, PgQueryResult, PgRow, PgSslMode,
+    PgTypeInfo, Postgres,
+};
+use sqlx::{Row, Type, TypeInfo as _};
 use tokio_util::sync::CancellationToken;
 
 use super::Adapter;
-use super::sqlx_common::{self, decode_as, decode_fallback};
+use super::sqlx_common::{self, Binding, Codec, decode_as, decode_fallback};
 use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
+use crate::sql::Bound;
 use crate::value::{Column, ResultSet, Value};
+
+const CODEC: Codec<Postgres> = Codec {
+    decode,
+    affected,
+    bind,
+    describe: true,
+};
 
 pub struct PostgresAdapter {
     pool: PgPool,
@@ -61,7 +74,7 @@ impl PostgresAdapter {
     /// hold a borrow of a pooled connection.
     async fn run_on_own_connection(
         &self,
-        sql: &str,
+        statement: &Bound,
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
@@ -73,15 +86,8 @@ impl PostgresAdapter {
             .await
             .ok();
 
-        let result = sqlx_common::run::<sqlx::Postgres>(
-            &mut connection,
-            sql,
-            limit,
-            decode,
-            affected,
-            cancel,
-        )
-        .await;
+        let result =
+            sqlx_common::run::<Postgres>(&mut connection, statement, limit, &CODEC, cancel).await;
 
         if matches!(result, Err(Error::Cancelled))
             && let Some(pid) = pid
@@ -261,22 +267,22 @@ impl Adapter for PostgresAdapter {
 
     async fn run(
         &self,
-        sql: &str,
+        statement: &Bound,
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
-        self.run_on_own_connection(sql, limit, cancel).await
+        self.run_on_own_connection(statement, limit, cancel).await
     }
 
     async fn run_transaction(
         &self,
-        statements: &[String],
+        statements: &[Bound],
         limit: Option<usize>,
         commit: bool,
         cancel: &CancellationToken,
     ) -> Result<Vec<ResultSet>> {
-        sqlx_common::run_transaction::<sqlx::Postgres>(
-            &self.pool, statements, limit, commit, decode, affected, cancel,
+        sqlx_common::run_transaction::<Postgres>(
+            &self.pool, statements, limit, commit, &CODEC, cancel,
         )
         .await
     }
@@ -293,6 +299,158 @@ impl Adapter for PostgresAdapter {
 
 fn affected(result: &PgQueryResult) -> u64 {
     result.rows_affected()
+}
+
+/// Postgres types a parameter by the value sent for it rather than converting
+/// it to what the column holds, so text sent for a date column is a type error
+/// rather than a date. Each value is converted here to the type the server
+/// reported for its placeholder instead — what v2's driver did, and what
+/// someone typing `--arg 2024-01-01` means.
+fn bind<'q>(
+    query: Binding<'q, Postgres>,
+    value: &'q Value,
+    expected: Option<&PgTypeInfo>,
+) -> std::result::Result<Binding<'q, Postgres>, String> {
+    let Some(expected) = expected else {
+        return Err("the server did not say what this placeholder takes".into());
+    };
+    if value.is_null() {
+        return Ok(query.bind(AsText {
+            text: None,
+            type_info: expected.clone(),
+        }));
+    }
+
+    let text = value.to_text();
+    let bound = match expected.name() {
+        "BOOL" => query.bind(parse_bool(&text).ok_or_else(|| expected_a("a boolean", &text))?),
+        "INT2" => query.bind(
+            text.parse::<i16>()
+                .map_err(|_| expected_a("a smallint", &text))?,
+        ),
+        "INT4" => query.bind(
+            text.parse::<i32>()
+                .map_err(|_| expected_a("an integer", &text))?,
+        ),
+        "INT8" => query.bind(
+            text.parse::<i64>()
+                .map_err(|_| expected_a("a bigint", &text))?,
+        ),
+        "FLOAT4" => query.bind(
+            text.parse::<f32>()
+                .map_err(|_| expected_a("a number", &text))?,
+        ),
+        "FLOAT8" => query.bind(
+            text.parse::<f64>()
+                .map_err(|_| expected_a("a number", &text))?,
+        ),
+        "NUMERIC" => query.bind(
+            rust_decimal::Decimal::from_str(&text)
+                .or_else(|_| rust_decimal::Decimal::from_scientific(&text))
+                .map_err(|_| expected_a("a number", &text))?,
+        ),
+        "UUID" => {
+            query.bind(uuid::Uuid::parse_str(&text).map_err(|_| expected_a("a UUID", &text))?)
+        }
+        "JSONB" => query.bind(
+            serde_json::from_str::<serde_json::Value>(&text)
+                .map_err(|_| expected_a("JSON", &text))?,
+        ),
+        "DATE" | "TIME" | "TIMESTAMP" | "TIMESTAMPTZ" => bind_temporal(query, &text)?,
+        "BYTEA" => match value {
+            Value::Bytes(bytes) => query.bind(bytes.as_slice()),
+            _ => query.bind(text.into_bytes()),
+        },
+        _ => query.bind(AsText {
+            text: Some(text),
+            type_info: expected.clone(),
+        }),
+    };
+    Ok(bound)
+}
+
+/// A date or a time, as whichever of the four it reads as. Postgres casts
+/// between date, timestamp and timestamptz itself, and a value written without
+/// an offset is sent without one, so the server reads it in the session's own
+/// time zone — exactly as it would have read the text.
+fn bind_temporal<'q>(
+    query: Binding<'q, Postgres>,
+    text: &str,
+) -> std::result::Result<Binding<'q, Postgres>, String> {
+    if let Ok(zoned) = chrono::DateTime::parse_from_rfc3339(text)
+        .or_else(|_| chrono::DateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%.f%#z"))
+    {
+        return Ok(query.bind(zoned));
+    }
+    for format in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M",
+    ] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(text, format) {
+            return Ok(query.bind(naive));
+        }
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d") {
+        return Ok(query.bind(date));
+    }
+    for format in ["%H:%M:%S%.f", "%H:%M"] {
+        if let Ok(time) = chrono::NaiveTime::parse_from_str(text, format) {
+            return Ok(query.bind(time));
+        }
+    }
+    Err(expected_a("a date or a time", text))
+}
+
+/// Postgres's own spellings of a boolean, so what it would accept as text is
+/// accepted here too.
+fn parse_bool(text: &str) -> Option<bool> {
+    match text.to_ascii_lowercase().as_str() {
+        "t" | "true" | "y" | "yes" | "on" | "1" => Some(true),
+        "f" | "false" | "n" | "no" | "off" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn expected_a(what: &str, text: &str) -> String {
+    format!("expected {what}, got {text:?}")
+}
+
+/// A value sent as its own text under the type the server asked for. Right for
+/// every type whose binary form is its text — the character types, `json`,
+/// enums, and domains over any of them — and for a NULL of any type at all,
+/// which sends no bytes. The server refuses anything else with a message of
+/// its own.
+struct AsText {
+    text: Option<String>,
+    type_info: PgTypeInfo,
+}
+
+impl Type<Postgres> for AsText {
+    // Never consulted: `produces` always answers.
+    fn type_info() -> PgTypeInfo {
+        <String as Type<Postgres>>::type_info()
+    }
+}
+
+impl Encode<'_, Postgres> for AsText {
+    fn encode_by_ref(
+        &self,
+        buf: &mut PgArgumentBuffer,
+    ) -> std::result::Result<IsNull, BoxDynError> {
+        match &self.text {
+            Some(text) => {
+                buf.extend(text.as_bytes());
+                Ok(IsNull::No)
+            }
+            None => Ok(IsNull::Yes),
+        }
+    }
+
+    fn produces(&self) -> Option<PgTypeInfo> {
+        Some(self.type_info.clone())
+    }
 }
 
 fn decode(row: &PgRow, idx: usize) -> Value {

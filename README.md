@@ -275,6 +275,29 @@ the two statements most likely to be a mistake are refused before they are sent.
 `--dry-run` is transactional everywhere except MySQL DDL, which MySQL commits as
 it runs — binsql says so rather than letting a dry run imply otherwise.
 
+Both take `--arg VALUE` to fill a `?` placeholder, once per placeholder and in
+order, so a script hands over values rather than building SQL out of them:
+
+```sh
+binsql query "SELECT * FROM orders WHERE customer_id = ?" --arg int:31 -o json
+binsql exec  "UPDATE users SET active = ? WHERE last_seen < ?" --arg bool:false --arg 2024-01-01
+```
+
+A value is text unless a prefix says otherwise — `int:42`, `float:1.5`,
+`bool:true`, `null:`, `json:{"a":1}`, or `str:` for text that happens to begin
+with one of those. It travels beside the statement rather than inside it, so a
+quote in a value is only ever a quote.
+
+`?` is the spelling on every database. binsql rewrites it to `$1` for
+PostgreSQL and `@P1` for SQL Server, and leaves a `?` inside a string or a
+comment alone. Across a script the values are handed out left to right, and a
+count that does not come out even is refused before any of it runs. PostgreSQL
+is sent each value as the type its placeholder takes, so text that reads as a
+date reaches a `date` column as a date; the others convert a value to the
+column's type themselves. In a statement that binds values every other `?` is
+a placeholder too, so there Postgres's jsonb `?` operators need their function
+forms, such as `jsonb_exists`.
+
 `inspect` reads the connected database, and every schema in it:
 
 | | |
@@ -497,9 +520,6 @@ targets, nothing published — and refuses a tag that disagrees with `Cargo.toml
 What works today is everything above. What has **not** been carried across from
 v2 yet:
 
-- **Bind arguments.** v2's `--arg` passed values as `?` placeholders, so a
-  script never built SQL by concatenation. Adding them means teaching every
-  adapter to bind parameters; until then, command mode takes SQL and no values.
 - **Managing data sources from the command line.** v2 had `binsql conn add`. In
   v3 a data source is added with `⌃N`, or by editing the config by hand — which
   now means knowing whether you meant the user file or a project's.

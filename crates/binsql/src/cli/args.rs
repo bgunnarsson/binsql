@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use super::{Failure, usage};
 
 pub struct Args {
-    values: HashMap<String, String>,
+    values: HashMap<String, Vec<String>>,
     switches: Vec<String>,
     positional: Vec<String>,
 }
@@ -59,7 +59,7 @@ impl Args {
                         .next()
                         .ok_or_else(|| usage(format!("--{name} needs a value")))?,
                 };
-                parsed.values.insert(name, value);
+                parsed.values.entry(name).or_default().push(value);
                 continue;
             }
 
@@ -83,7 +83,16 @@ impl Args {
         names
             .iter()
             .find_map(|name| self.values.get(*name))
+            .and_then(|values| values.last())
             .map(String::as_str)
+    }
+
+    /// Every value a repeatable flag was given, in the order given.
+    pub fn values(&self, name: &str) -> Vec<&str> {
+        self.values
+            .get(name)
+            .map(|values| values.iter().map(String::as_str).collect())
+            .unwrap_or_default()
     }
 
     pub fn is_set(&self, names: &[&str]) -> bool {
@@ -124,6 +133,19 @@ mod tests {
         assert!(parsed.is_set(&["pretty"]));
         assert!(parsed.is_set(&["dry-run"]));
         assert!(!parsed.is_set(&["tx"]));
+    }
+
+    #[test]
+    fn a_repeated_flag_keeps_every_value_in_order() {
+        let parsed = Args::parse(
+            args(&["--conn", "a", "--conn=b", "--conn", "c"]),
+            VALUES,
+            SWITCHES,
+        )
+        .unwrap();
+        assert_eq!(parsed.values("conn"), ["a", "b", "c"]);
+        assert_eq!(parsed.value(&["conn"]), Some("c"));
+        assert!(parsed.values("format").is_empty());
     }
 
     #[test]

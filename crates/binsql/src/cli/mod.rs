@@ -13,7 +13,7 @@ mod render;
 
 use std::io::{IsTerminal, Read, Write};
 
-use binsql_core::{Backend, DataSource, Session, Workspace};
+use binsql_core::{Backend, DataSource, Session, Value, Workspace};
 use tokio_util::sync::CancellationToken;
 
 use args::Args;
@@ -105,11 +105,13 @@ OUTPUT
 
 QUERY
     -f, --file FILE       read the SQL from a file, or from stdin for `-`
+        --arg VALUE       fill the next ? placeholder; repeat, in order
         --limit N         stop after N rows (default: all of them)
         --allow-write     permit a statement that writes (prefer `exec`)
 
 EXEC
     -f, --file FILE       read the script from a file, or from stdin for `-`
+        --arg VALUE       fill the next ? placeholder; repeat, in order
         --dry-run         run the batch inside a transaction, then roll it back
         --tx / --no-tx    force one transaction around the batch, or none
         --force           permit UPDATE/DELETE with no WHERE, and DROP/TRUNCATE
@@ -118,8 +120,13 @@ INSPECT
         --catalog NAME    the database to read (default: the connected one)
         --schema NAME     the schema to read
 
+BIND VALUES
+    An --arg is text unless it says otherwise: int:42, float:1.5, bool:true,
+    null:, json:{\"a\":1} — or str: for text that begins with one of those.
+
 EXAMPLES
     binsql query \"select * from users limit 20\" -o json --pretty
+    binsql query \"select * from users where id = ?\" --arg int:7
     binsql query -f report.sql --conn eimskip/prod -o csv > report.csv
     binsql exec -f migration.sql --dry-run
     binsql inspect --conn scratch
@@ -276,6 +283,46 @@ pub fn read_sql(args: &Args) -> Result<String> {
         ));
     }
     read_stdin()
+}
+
+/// The values for the statement's `?` placeholders, one per `--arg`, in the
+/// order given.
+///
+/// Text unless a prefix says otherwise — `int:`, `float:`, `bool:`, `json:`,
+/// `null:`, or `str:` for text that begins with one of those. A colon after
+/// anything else is part of the value, so `--arg 12:30` is the text it looks
+/// like.
+pub fn bind_values(args: &Args) -> Result<Vec<Value>> {
+    args.values("arg").into_iter().map(bind_value).collect()
+}
+
+fn bind_value(raw: &str) -> Result<Value> {
+    let Some((prefix, rest)) = raw.split_once(':') else {
+        return Ok(Value::Text(raw.to_string()));
+    };
+    let invalid = |kind: &str| usage(format!("--arg {raw}: {rest:?} is not {kind}"));
+
+    match prefix.to_ascii_lowercase().as_str() {
+        "int" => rest
+            .parse::<i64>()
+            .map(Value::Int)
+            .map_err(|_| invalid("an integer")),
+        "float" => rest
+            .parse::<f64>()
+            .map(Value::Float)
+            .map_err(|_| invalid("a number")),
+        "bool" => match rest {
+            "1" | "t" | "T" | "TRUE" | "true" | "True" => Ok(Value::Bool(true)),
+            "0" | "f" | "F" | "FALSE" | "false" | "False" => Ok(Value::Bool(false)),
+            _ => Err(invalid("true or false")),
+        },
+        "null" => Ok(Value::Null),
+        "json" => serde_json::from_str::<serde_json::Value>(rest)
+            .map(|_| Value::Json(rest.to_string()))
+            .map_err(|_| invalid("JSON")),
+        "str" | "string" => Ok(Value::Text(rest.to_string())),
+        _ => Ok(Value::Text(raw.to_string())),
+    }
 }
 
 fn read_stdin() -> Result<String> {

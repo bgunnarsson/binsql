@@ -341,6 +341,21 @@ fn a_read_only_data_source_refuses_a_write_from_the_command_line() {
             .stderr_has("read-only");
     }
 
+    // Binding values changes what is sent, not what the statement does.
+    fixture
+        .binsql(&[
+            "exec",
+            "--conn",
+            "prod",
+            "UPDATE artist SET founded = ? WHERE id = ?",
+            "--arg",
+            "int:0",
+            "--arg",
+            "int:1",
+        ])
+        .failed()
+        .stderr_has("read-only");
+
     fixture
         .binsql(&[
             "query",
@@ -352,6 +367,133 @@ fn a_read_only_data_source_refuses_a_write_from_the_command_line() {
         ])
         .succeeds()
         .stdout_has("3");
+}
+
+#[test]
+fn values_are_bound_rather_than_spliced_in() {
+    let fixture = Fixture::new("bind");
+    fixture.seed();
+
+    // Untyped, a value is text, which SQLite compares with an integer column
+    // as the number it spells.
+    fixture
+        .direct(&args(
+            "query",
+            &[
+                "SELECT name FROM artist WHERE id = ?",
+                "--arg",
+                "2",
+                "-o",
+                "raw",
+            ],
+        ))
+        .succeeds()
+        .stdout_has("Boards of Canada");
+
+    fixture
+        .direct(&args(
+            "query",
+            &[
+                "SELECT name FROM artist WHERE founded < ? AND name <> ?",
+                "--arg",
+                "int:1990",
+                "--arg",
+                "Autechre",
+                "-o",
+                "raw",
+            ],
+        ))
+        .succeeds()
+        .stdout_has("Boards of Canada");
+
+    // A value that would be SQL if it were pasted in is only ever a value.
+    fixture
+        .direct(&args(
+            "exec",
+            &[
+                "INSERT INTO artist (name, founded) VALUES (?, ?)",
+                "--arg",
+                "x'); DROP TABLE artist; --",
+                "--arg",
+                "null:",
+            ],
+        ))
+        .succeeds()
+        .stdout_has("1 row");
+    fixture
+        .direct(&args(
+            "query",
+            &[
+                "SELECT count(*) FROM artist WHERE founded IS NULL",
+                "-o",
+                "raw",
+            ],
+        ))
+        .succeeds()
+        .stdout_has("2");
+
+    // A question mark in a string is text, and str: keeps a prefix as text.
+    fixture
+        .direct(&args(
+            "query",
+            &["SELECT '?' || ? AS s", "--arg", "str:int:7", "-o", "raw"],
+        ))
+        .succeeds()
+        .stdout_has("?int:7");
+}
+
+#[test]
+fn placeholders_and_values_have_to_match() {
+    let fixture = Fixture::new("bind-count");
+    fixture.seed();
+
+    fixture
+        .direct(&args(
+            "query",
+            &[
+                "SELECT * FROM artist WHERE id = ? AND name = ?",
+                "--arg",
+                "int:1",
+            ],
+        ))
+        .refused()
+        .stderr_has("2 placeholders in the SQL, but 1 value to bind");
+    fixture
+        .direct(&args("query", &["SELECT ?", "--arg", "int:seven"]))
+        .refused()
+        .stderr_has("is not an integer");
+
+    // A batch takes its values left to right, and a shortfall is found before
+    // any of it runs — without a transaction, the first insert would stay.
+    let batch = "INSERT INTO artist (name) VALUES (?); INSERT INTO artist (name) VALUES (?)";
+    fixture
+        .direct(&args("exec", &[batch, "--arg", "Aphex Twin", "--no-tx"]))
+        .refused();
+    fixture
+        .direct(&args(
+            "query",
+            &["SELECT count(*) FROM artist", "-o", "raw"],
+        ))
+        .succeeds()
+        .stdout_has("3");
+
+    fixture
+        .direct(&args(
+            "exec",
+            &[batch, "--arg", "Aphex Twin", "--arg", "Plaid", "--no-tx"],
+        ))
+        .succeeds();
+    fixture
+        .direct(&args(
+            "query",
+            &[
+                "SELECT name FROM artist WHERE id > 3 ORDER BY id",
+                "-o",
+                "raw",
+            ],
+        ))
+        .succeeds()
+        .stdout_has("Aphex Twin\nPlaid\n");
 }
 
 #[test]

@@ -26,6 +26,11 @@ pub enum Error {
         statement: String,
     },
 
+    /// The values given do not fill the placeholders one for one. Found before
+    /// anything is sent, like [`Error::ReadOnly`].
+    #[error("{} in the SQL, but {} to bind", plural(.found, "placeholder"), plural(.given, "value"))]
+    Placeholders { found: usize, given: usize },
+
     /// The caller asked for the query to stop. Like [`Error::ReadOnly`] this is
     /// an outcome rather than a fault, and nothing about the database is wrong.
     #[error("cancelled")]
@@ -52,5 +57,13 @@ impl Error {
 
     pub fn config(err: impl Into<anyhow::Error>) -> Self {
         Error::Config(err.into())
+    }
+}
+
+fn plural(count: &usize, noun: &str) -> String {
+    if *count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
     }
 }
