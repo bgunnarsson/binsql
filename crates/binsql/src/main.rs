@@ -25,6 +25,7 @@ OPTIONS
     -d, --driver <name>   sqlite | postgres | mssql | mysql (default: inferred)
     -h, --help            show this
     -V, --version         show the version
+        --debug-keys      print what this terminal sends, and stop
 
 Data sources are stored in ~/.config/binsql/connections.json and can be added
 from inside the app with ⌃N.
@@ -91,11 +92,6 @@ async fn main() -> Result<()> {
     }
 
     let mut terminal = ratatui::init();
-    // Mouse reporting buys the pane seams and the pointer, and costs the
-    // terminal's own click-to-select, which most terminals hand back while ⇧
-    // is held. Worth it for a pane whose right width depends on the schema in
-    // front of you.
-    let _ = execute!(std::io::stdout(), EnableMouseCapture);
 
     // A terminal cannot send ⌘ to an application over the legacy encoding —
     // there is nowhere in it to put the modifier. The kitty keyboard protocol
@@ -106,6 +102,10 @@ async fn main() -> Result<()> {
     // Only the disambiguation flag: it is what carries the modifiers, and the
     // rest would start reporting key releases and alternate keycodes that
     // nothing here reads.
+    //
+    // Asked before mouse reporting is turned on: this negotiation writes a
+    // query and reads the reply off the same stdin, and it has no business
+    // doing that with mouse events already arriving on it.
     let enhanced = matches!(terminal::supports_keyboard_enhancement(), Ok(true));
     if enhanced {
         let _ = execute!(
@@ -113,6 +113,12 @@ async fn main() -> Result<()> {
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         );
     }
+
+    // Mouse reporting buys the pane seams and the pointer, and costs the
+    // terminal's own click-to-select, which most terminals hand back while ⇧
+    // is held. Worth it for a pane whose right width depends on the schema in
+    // front of you.
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
 
     let result = run(&mut terminal, &mut app, &mut messages).await;
 
@@ -168,6 +174,59 @@ async fn run(
     Ok(())
 }
 
+/// Prints what this terminal actually sends, until Esc.
+///
+/// Every question about a ⌘ binding is really a question about what reaches
+/// the program, and the only place that can be answered is the terminal doing
+/// the sending. It reports whether the kitty keyboard protocol was negotiated
+/// first, because without it no ⌘ chord can arrive at all.
+fn debug_keys() -> Result<()> {
+    use crossterm::event::{Event, KeyCode, read};
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+    use std::io::Write;
+
+    enable_raw_mode()?;
+    let enhanced = matches!(terminal::supports_keyboard_enhancement(), Ok(true));
+    if enhanced {
+        let _ = execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
+
+    let mut out = std::io::stdout();
+    let verdict = if enhanced {
+        "yes — this terminal can report ⌘"
+    } else {
+        "no — this terminal cannot send ⌘ at all"
+    };
+    let _ = write!(
+        out,
+        "terminal: {}\r\nkitty keyboard protocol: {verdict}\r\n\r\n\
+         Press keys to see what arrives. Esc stops.\r\n\r\n",
+        std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "unknown".into()),
+    );
+    let _ = out.flush();
+
+    loop {
+        if let Event::Key(key) = read()?
+            && key.kind == KeyEventKind::Press
+        {
+            if key.code == KeyCode::Esc {
+                break;
+            }
+            let _ = write!(out, "{:?}   {:?}\r\n", key.code, key.modifiers);
+            let _ = out.flush();
+        }
+    }
+
+    if enhanced {
+        let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+    }
+    disable_raw_mode()?;
+    Ok(())
+}
+
 struct Options {
     target: Option<String>,
     backend: Option<Backend>,
@@ -188,6 +247,10 @@ fn parse_args(args: Vec<String>) -> Result<Option<Options>> {
             }
             "-V" | "--version" => {
                 println!("binsql {}", env!("CARGO_PKG_VERSION"));
+                return Ok(None);
+            }
+            "--debug-keys" => {
+                debug_keys()?;
                 return Ok(None);
             }
             "-d" | "--driver" => {
