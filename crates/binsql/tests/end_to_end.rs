@@ -514,6 +514,54 @@ async fn the_query_editor_edits_like_an_editor() {
     ctrl(&mut app, 'u');
     assert_eq!(app.console().sql(), "", "⌃U should clear the line");
 
+    // Undo and redo, in both spellings. ⌃Z and ⌃Y are the textarea's own;
+    // ⌘Z and ⌘⇧Z are ours, because it has no idea what ⌘ is.
+    let chord = |app: &mut App, code, modifiers| {
+        binsql::app::keys::handle(app, KeyEvent::new(code, modifiers))
+    };
+    for (undo, redo) in [
+        (
+            (KeyCode::Char('z'), KeyModifiers::CONTROL),
+            (KeyCode::Char('y'), KeyModifiers::CONTROL),
+        ),
+        (
+            (KeyCode::Char('z'), KeyModifiers::SUPER),
+            (
+                KeyCode::Char('Z'),
+                KeyModifiers::SUPER | KeyModifiers::SHIFT,
+            ),
+        ),
+    ] {
+        app.console_mut().set_sql("SELECT 1");
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(app.console().sql(), "SELECT 1!");
+
+        chord(&mut app, undo.0, undo.1);
+        assert_eq!(
+            app.console().sql(),
+            "SELECT 1",
+            "undo failed for {:?}",
+            undo.1
+        );
+
+        chord(&mut app, redo.0, redo.1);
+        assert_eq!(
+            app.console().sql(),
+            "SELECT 1!",
+            "redo failed for {:?}",
+            redo.1
+        );
+    }
+
+    // A ⌘ chord with nothing bound to it must not type its letter.
+    app.console_mut().set_sql("SELECT 1");
+    chord(&mut app, KeyCode::Char('s'), KeyModifiers::SUPER);
+    assert_eq!(
+        app.console().sql(),
+        "SELECT 1",
+        "an unbound ⌘ chord should not reach the text"
+    );
+
     // Drag across the first word, then delete it.
     app.console_mut().set_sql("SELECT everything");
     render(&mut app);

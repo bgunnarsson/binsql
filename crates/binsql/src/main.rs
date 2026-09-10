@@ -2,8 +2,11 @@
 
 use anyhow::{Context, Result, bail};
 use binsql_core::{Backend, Config, DataSource};
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind};
-use crossterm::execute;
+use crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
+use crossterm::{execute, terminal};
 use futures_util::StreamExt;
 
 use binsql::app::{self, App, keys, mouse};
@@ -88,12 +91,34 @@ async fn main() -> Result<()> {
     }
 
     let mut terminal = ratatui::init();
-    // Mouse reporting buys one gesture — dragging the sidebar's edge — and
-    // costs the terminal's own click-to-select, which most terminals hand back
-    // while ⇧ is held. Worth it for a pane whose right width depends on the
-    // schema in front of you.
+    // Mouse reporting buys the pane seams and the pointer, and costs the
+    // terminal's own click-to-select, which most terminals hand back while ⇧
+    // is held. Worth it for a pane whose right width depends on the schema in
+    // front of you.
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
+
+    // A terminal cannot send ⌘ to an application over the legacy encoding —
+    // there is nowhere in it to put the modifier. The kitty keyboard protocol
+    // has somewhere, so ask for it where it is understood: Ghostty, Kitty,
+    // WezTerm, foot, and iTerm2 once it is switched on. Terminal.app has no
+    // such mode, which is why every ⌘ binding also has a control-key twin.
+    //
+    // Only the disambiguation flag: it is what carries the modifiers, and the
+    // rest would start reporting key releases and alternate keycodes that
+    // nothing here reads.
+    let enhanced = matches!(terminal::supports_keyboard_enhancement(), Ok(true));
+    if enhanced {
+        let _ = execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
+
     let result = run(&mut terminal, &mut app, &mut messages).await;
+
+    if enhanced {
+        let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result

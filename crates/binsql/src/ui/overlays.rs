@@ -292,7 +292,7 @@ const SECTIONS: &[Section] = &[
         &[
             ("⌃A", "Select all"),
             ("⌃U or ⌘⌫", "Delete to line start"),
-            ("⌃Z / ⌃Y", "Undo / redo"),
+            ("⌃Z / ⌃⇧Z", "Undo / redo"),
             ("Esc / ⇧Tab", "Leave the editor"),
             ("Select text", "⌃R then runs only that"),
         ],
