@@ -1,11 +1,14 @@
 //! Connection strings stored outside the config.
 //!
-//! A saved data source can hold a Key Vault reference instead of a credential,
-//! so the config on disk need contain no secret at all. Resolving one is the
-//! only thing between reading the config and opening a connection.
+//! A saved data source can hold a reference instead of a credential, so the
+//! config on disk need contain no secret at all. Two kinds resolve here: a Key
+//! Vault secret, for a string a team already shares, and a [`keychain`] entry,
+//! for one that belongs to this machine. Resolving one is the only thing
+//! between reading the config and opening a connection.
 
 mod azure;
 mod cache;
+pub mod keychain;
 mod reference;
 
 use std::time::Duration;
@@ -56,6 +59,13 @@ impl Resolver {
     /// Returns `dsn` unchanged when it is a literal connection string, or
     /// fetches the referenced secret when it is a reference.
     pub async fn resolve(&self, dsn: &str) -> Result<String> {
+        // The credential store is local, so this neither waits on a network nor
+        // goes through the cache — writing it to the cache file would put the
+        // secret somewhere the keychain is not.
+        if let Some(account) = keychain::account(dsn) {
+            return keychain::get(account);
+        }
+
         if !Reference::is_reference(dsn) {
             // Catch the vault URL pasted from the portal, which is a reference
             // in spirit but names no secret — the driver's complaint about it

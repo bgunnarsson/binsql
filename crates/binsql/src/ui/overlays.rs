@@ -772,6 +772,7 @@ fn connect(frame: &mut Frame, form: &ConnectForm, area: Rect) {
             Field::Folder => form.folder.clone(),
             Field::Name => form.name.clone(),
             Field::Dsn => form.dsn.clone(),
+            Field::Keychain => form.storage_display().to_string(),
             Field::Backend => form.backend_display(),
             Field::ReadOnly => checkbox(form.read_only),
             Field::OpenOnStart => checkbox(form.open_on_start),

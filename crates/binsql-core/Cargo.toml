@@ -44,6 +44,10 @@ base64 = "0.23.1"
 sha2 = "0.11.0"
 hex = "0.4.3"
 getrandom = "0.4.3"
+# Default features are the `v1` all-in-one API, which picks the right store per
+# platform. Each store is target-gated in keyring's own manifest, so only the
+# native one is ever compiled.
+keyring = "4"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

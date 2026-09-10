@@ -97,6 +97,11 @@ palette. A bare name works when only one folder has it, so `binsql scratch` and
 had one — it would name two things, so it would name neither. **A v2 config
 opens unchanged**; everything v3 adds is optional.
 
+A `dsn` that reads `keychain://eimskip/prod` keeps the connection string in the
+operating system's credential store rather than in the file — see [the
+keychain](#the-keychain). `⌃N` does that by default, which is why the config
+above is worth reading and worth committing.
+
 Only `driver` and `dsn` are required. `readonly` refuses every mutating
 statement before anything reaches the server — how a production database should
 be registered — and checks the whole script rather than its first word: a
@@ -268,6 +273,39 @@ A connection string containing `fedauth=` authenticates with an Azure AD token
 instead of a password, exactly as it did in v2. The token comes from the Azure
 CLI, so `az` must be on `PATH` and `az login` must have been run.
 
+### The keychain
+
+A connection string that belongs to one machine goes in that machine's
+credential store — the macOS Keychain, the Windows Credential Manager, or the
+Secret Service on Linux — and the config keeps only its name:
+
+```json
+{
+  "connections": {
+    "eimskip": {
+      "local": {
+        "driver": "mssql",
+        "dsn": "keychain://eimskip/local"
+      }
+    }
+  }
+}
+```
+
+The **Stored in** field of the `⌃N` form chooses this, and it is the default;
+`←`/`→` or space switches it back to keeping the string in the config. The entry
+is filed under the service `binsql` and the connection's qualified name, so it
+is recognisable in Keychain Access, and renaming a data source moves it. It is
+read fresh on every connect rather than going through the secret cache below —
+one secure store is the point.
+
+This is what makes a `connections.json` worth sharing: with every string either
+a keychain entry or a Key Vault reference, the file is a list of names, drivers
+and flags with nothing sensitive in it.
+
+Moving a string back out of the store is deliberate rather than a toggle: clear
+the connection string in the form and type it again.
+
 ### Azure Key Vault references
 
 A data source can name a secret instead of holding one, so the config on disk
@@ -373,6 +411,13 @@ query and renders the whole layout to a test backend, so the thing people look
 at is asserted rather than assumed. Command mode is tested by running the built
 binary as a subprocess and reading its stdout, its stderr and its exit code,
 because those three are its whole interface.
+
+The keychain round trip is ignored by default, because a plain `cargo test` has
+no business writing to your credential store. Run it deliberately:
+
+```sh
+cargo test -p binsql-core --test keychain_roundtrip -- --ignored
+```
 
 `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
 warnings` and this suite run on every push and pull request, and again on a tag

@@ -389,18 +389,23 @@ fn save_form(app: &mut App) {
     let Some(Overlay::Connect(form)) = app.overlay.as_mut() else {
         return;
     };
-    match form.build() {
-        Ok((name, source)) => {
-            let previous = form.editing.clone();
-            app.overlay = None;
-            if let Some(previous) = previous
-                && previous != name
-            {
-                app.remove_data_source(&previous);
-            }
-            app.save_data_source(name, source);
+    let saved = match form.build() {
+        Ok(saved) => saved,
+        Err(error) => {
+            form.error = Some(error);
+            return;
         }
-        Err(error) => form.error = Some(error),
+    };
+
+    // The form stays up until the save has actually happened, so a credential
+    // store that refuses does not take the typed connection string with it.
+    match app.save_data_source(saved) {
+        Ok(()) => app.overlay = None,
+        Err(error) => {
+            if let Some(Overlay::Connect(form)) = app.overlay.as_mut() {
+                form.error = Some(error);
+            }
+        }
     }
 }
 
