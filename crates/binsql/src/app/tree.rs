@@ -279,6 +279,14 @@ impl Tree {
         self.selected = next.clamp(0, count as isize - 1) as usize;
     }
 
+    /// Selects a row by its position down the visible list, ignoring a click
+    /// past the last one — the empty space below the tree is not a row.
+    pub fn select_visible(&mut self, index: usize) {
+        if index < self.visible().len() {
+            self.selected = index;
+        }
+    }
+
     pub fn select_first(&mut self) {
         self.selected = 0;
     }

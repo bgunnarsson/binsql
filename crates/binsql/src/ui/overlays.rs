@@ -252,6 +252,7 @@ const SECTIONS: &[Section] = &[
             ("⌥h ⌥k ⌥j", "Databases / query / results"),
             ("F1 or ?", "This help"),
             ("F5", "Refresh the selected node"),
+            ("click", "Focus, and land the cursor"),
             ("drag an edge", "Resize the panes"),
             ("⌃Q", "Quit"),
         ],
@@ -289,9 +290,10 @@ const SECTIONS: &[Section] = &[
     (
         "Query",
         &[
-            ("Esc / ⇧Tab", "Leave the editor"),
-            ("Tab", "Indents, so it stays here"),
+            ("⌃A", "Select all"),
+            ("⌃U or ⌘⌫", "Delete to line start"),
             ("⌃Z / ⌃Y", "Undo / redo"),
+            ("Esc / ⇧Tab", "Leave the editor"),
             ("Select text", "⌃R then runs only that"),
         ],
     ),

@@ -5,19 +5,17 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::console::{Outcome, display};
+use crate::app::console::{GAP, Outcome, display};
 use crate::app::{App, Pane, format_elapsed};
 use crate::theme;
 use crate::ui;
-
-/// Space between columns, and the width of the row-number gutter's separator.
-const GAP: u16 = 1;
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Pane::Results;
     let (title, counter) = title(app);
     let block = ui::body_pane(&title, counter, focused);
     let inner = block.inner(area);
+    app.panes.grid = inner;
     frame.render_widget(block, area);
 
     match &app.consoles[app.active_console].outcome {
@@ -87,7 +85,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let Some(grid) = console.grid_mut() else {
         return;
     };
-    let gutter = (grid.rows().to_string().len() as u16).max(3) + GAP;
+    let gutter = grid.gutter();
     let body_width = area.width.saturating_sub(gutter);
     let visible_rows = area.height.saturating_sub(1) as usize;
 

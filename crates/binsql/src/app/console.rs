@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use binsql_core::{ResultSet, Value};
+use ratatui::layout::Rect;
 use tokio_util::sync::CancellationToken;
 use tui_textarea::TextArea;
 use unicode_width::UnicodeWidthStr;
@@ -17,6 +18,9 @@ use crate::theme;
 /// Rows a console pulls for one run. High enough to scroll through, low enough
 /// that a mistyped `SELECT *` on a huge table is not a wait.
 pub const DEFAULT_LIMIT: usize = 500;
+
+/// Space between columns, and the width of the row-number gutter's separator.
+pub const GAP: u16 = 1;
 
 const MIN_COLUMN_WIDTH: u16 = 4;
 const MAX_COLUMN_WIDTH: u16 = 48;
@@ -47,6 +51,14 @@ pub struct Console {
     pub source: Option<String>,
     pub catalog: Option<String>,
     pub editor: TextArea<'static>,
+    /// Where the editor's viewport sits, as (row, column).
+    ///
+    /// tui-textarea keeps this itself and does not expose it, and a click
+    /// cannot be turned into a position in the text without it. The rule is
+    /// the library's own — the same one the tree and the grid scroll by — and
+    /// it is re-derived from the cursor on every frame, so the copy here and
+    /// the one inside the widget cannot disagree for longer than a frame.
+    pub editor_scroll: (usize, usize),
     pub outcome: Outcome,
     /// Calls off the query this console is running. Held only while one is in
     /// flight, so `is_running` and this stay one fact rather than two.
@@ -85,6 +97,7 @@ impl Console {
             source: None,
             catalog: None,
             editor,
+            editor_scroll: (0, 0),
             outcome: Outcome::Idle,
             cancel: None,
             generation: 0,
@@ -206,6 +219,25 @@ impl Grid {
 
     pub fn rows(&self) -> usize {
         self.result.rows.len()
+    }
+
+    /// Width of the row-number gutter, sized to the largest number it will
+    /// show. Lives here rather than in the renderer because a click has to
+    /// land on the same columns the grid was drawn on.
+    pub fn gutter(&self) -> u16 {
+        (self.rows().to_string().len() as u16).max(3) + GAP
+    }
+
+    /// The column a click at `x` landed on, given where the grid was drawn.
+    pub fn column_at(&self, x: u16, area: Rect) -> Option<usize> {
+        let mut used = area.x + self.gutter();
+        for index in self.column_offset..self.columns() {
+            used += self.widths[index] + GAP;
+            if x < used {
+                return Some(index);
+            }
+        }
+        None
     }
 
     pub fn columns(&self) -> usize {

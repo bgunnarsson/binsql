@@ -132,11 +132,40 @@ fn disconnect_selected_source(app: &mut App) {
     }
 }
 
+/// The editor's own bindings, then everything else through to the textarea.
+///
+/// ⌘ only reaches a terminal application that asked for the kitty keyboard
+/// protocol, and only from a terminal that speaks it — Terminal.app never
+/// will. So every one of these has a control-key spelling that works
+/// everywhere, and the ⌘ arm is there for where it does arrive.
 fn editor(app: &mut App, key: KeyEvent) {
-    if key.code == KeyCode::Esc {
-        app.focus = Pane::Explorer;
-        return;
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let cmd = key.modifiers.contains(KeyModifiers::SUPER);
+
+    match key.code {
+        KeyCode::Esc => {
+            app.focus = Pane::Explorer;
+            return;
+        }
+        // The textarea puts "move to start of line" here, which Home already
+        // does. Select-all is what a modern editor means by it, and typing
+        // over a selection replaces it.
+        KeyCode::Char('a') if ctrl || cmd => {
+            app.console_mut().editor.select_all();
+            return;
+        }
+        // ⌘⌫ where it arrives, ⌃U — readline's spelling — where it does not.
+        KeyCode::Backspace if ctrl || cmd => {
+            app.console_mut().editor.delete_line_by_head();
+            return;
+        }
+        KeyCode::Char('u') if ctrl => {
+            app.console_mut().editor.delete_line_by_head();
+            return;
+        }
+        _ => {}
     }
+
     let input = Input::from(key);
     // The textarea maps Enter to a newline; nothing here should reach it that
     // the global bindings already claimed.
