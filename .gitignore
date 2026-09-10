@@ -11,14 +11,5 @@
 .DS_Store
 **/.DS_Store
 
-### Go (the archived v2 under _old/) ###
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-go.work
-
 # a throwaway database for poking at the UI
 /demo.db
