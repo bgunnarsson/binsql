@@ -1,11 +1,14 @@
 pub mod console;
 pub mod keys;
+pub mod mouse;
 pub mod overlay;
 pub mod tree;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use ratatui::layout::Rect;
 
 use binsql_core::{
     Catalog, Column, Config, DataSource, Error, ObjectKind, ObjectRef, ResultSet, Session,
@@ -106,8 +109,27 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub status: Status,
     pub should_quit: bool,
+    /// The sidebar width someone has dragged to, if they have. Held raw and
+    /// clamped at draw time, where the terminal's size is known — so a window
+    /// resize re-fits it instead of stranding it.
+    pub explorer_width: Option<u16>,
+    /// Set while the sidebar's edge is being dragged.
+    pub dragging_divider: bool,
+    pub panes: PaneAreas,
     next_console_id: u64,
     tx: UnboundedSender<Message>,
+}
+
+/// Where the panes were last drawn.
+///
+/// Written by the renderer, which is the only thing that knows the layout, and
+/// read by the mouse handler, which has nothing to go on but a column and a
+/// row.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PaneAreas {
+    pub explorer: Rect,
+    pub editor: Rect,
+    pub results: Rect,
 }
 
 impl App {
@@ -129,6 +151,9 @@ impl App {
             overlay: None,
             status: Status::new("⌃K for commands, ? for help", Tone::Info),
             should_quit: false,
+            explorer_width: None,
+            dragging_divider: false,
+            panes: PaneAreas::default(),
             next_console_id: 0,
             tx,
         };

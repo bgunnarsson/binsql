@@ -156,7 +156,15 @@ In the tree: `j`/`k` to move, `l`/`Space` to expand, `h` to collapse or step up,
 `Enter` to connect or open a table, `n`/`e`/`d` to add, edit or disconnect a
 data source. In the grid: `hjkl` by cell, `g`/`G` and `0`/`$` for the edges,
 `Enter` opens the whole record with every column stacked and long values
-wrapped, where `←`/`→` step between records without closing it.
+wrapped, where `↑`/`↓` move between fields, `Enter` again opens the one you are
+on in full — JSON re-indented — and `←`/`→` step between records without
+closing it.
+
+**Dragging the sidebar's edge** widens it, for a schema whose table names are
+longer than the default width fits; it never narrows below that default, and
+the wheel scrolls whichever of the tree and the grid the pointer is over. This
+is the whole of what the mouse does, and it costs the terminal's own
+click-to-select — most terminals hand that back while `⇧` is held.
 
 ## Command mode
 
