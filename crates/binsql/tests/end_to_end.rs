@@ -370,6 +370,103 @@ async fn enter_shows_the_whole_record_stacked() {
 }
 
 #[tokio::test]
+async fn a_field_opens_in_full_from_the_record() {
+    // The record viewer wraps every value into one narrow column. A JSON
+    // document stored on a single line is unreadable that way, so Enter opens
+    // the selected field on its own, re-indented.
+    let path = fixture("fieldvalue");
+    let payload = r#"{"id":42,"tags":["alpha","beta"],"note":"a value long enough that the grid can only ever show the front of it"}"#;
+    {
+        let session =
+            binsql_core::Session::open("seed", config(&path).get("demo").unwrap().clone())
+                .await
+                .expect("open seed session");
+        session
+            .run(
+                None,
+                "CREATE TABLE doc (id INTEGER PRIMARY KEY, payload TEXT)",
+                None,
+            )
+            .await
+            .expect("create table");
+        session
+            .run(
+                None,
+                &format!("INSERT INTO doc (payload) VALUES ('{payload}')"),
+                None,
+            )
+            .await
+            .expect("insert row");
+    }
+
+    let (mut app, mut messages) = App::new(config(&path));
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+
+    let mut guard = 0;
+    while !matches!(
+        app.tree.selected_id().and_then(|id| app.tree.find(id)).map(|n| n.kind.clone()),
+        Some(binsql::app::tree::NodeKind::Object { ref object }) if object.name == "doc"
+    ) {
+        press(&mut app, KeyCode::Char('j'));
+        guard += 1;
+        assert!(guard < 40, "never reached the doc table");
+    }
+    press(&mut app, KeyCode::Enter);
+    settle(&mut app, &mut messages).await;
+
+    // Open the record, then move down a field: the selection is the grid's
+    // cursor column, so the modal's title follows it.
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('j'));
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("payload TEXT"),
+        "the title should name the selected field:\n{screen}"
+    );
+    assert_eq!(
+        app.console().grid().expect("grid").column,
+        1,
+        "moving in the record should move the grid cursor with it"
+    );
+
+    press(&mut app, KeyCode::Enter);
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+
+    // Re-indented: each key on its own line, and the tail of the long note
+    // present rather than cut off.
+    assert!(
+        screen.contains("\"tags\": ["),
+        "JSON should be re-indented:\n{screen}"
+    );
+    assert!(
+        screen.contains("\"alpha\","),
+        "array members should be on their own lines:\n{screen}"
+    );
+    assert!(
+        screen.contains("front of it"),
+        "the end of the value should be readable:\n{screen}"
+    );
+    assert!(
+        screen.contains("chars"),
+        "the border should size the value:\n{screen}"
+    );
+
+    // Esc steps back to the record rather than all the way out.
+    press(&mut app, KeyCode::Esc);
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("Row 1 of 1"),
+        "Esc should return to the record:\n{screen}"
+    );
+    press(&mut app, KeyCode::Esc);
+    assert!(app.overlay.is_none(), "Esc should then close the record");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
 async fn the_record_viewer_is_sized_to_the_record() {
     // A handful of short fields used to open a modal covering 80% of the
     // screen, most of it empty.

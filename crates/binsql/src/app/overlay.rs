@@ -12,21 +12,47 @@ pub enum Overlay {
     /// One row, every column stacked. The grid has to truncate to fit a line;
     /// this is where the values are actually readable.
     Detail(RowDetail),
+    /// One field of that row, in full. A JSON document or a paragraph of text
+    /// is still cramped in the record's value column.
+    Value(ValueDetail),
     Palette(Palette),
     Connect(ConnectForm),
 }
 
-/// Scroll position within the stacked row. A wide table is taller than the
-/// modal, so this is not optional.
+/// Where the record view is scrolled to.
+///
+/// Which field is selected is not kept here — it is the grid's cursor column,
+/// so stepping through fields in the modal moves the grid with it and closing
+/// leaves you on the field you were reading.
 #[derive(Debug, Default)]
 pub struct RowDetail {
+    /// First visible line. Follows the selection at render time, and is kept
+    /// only so the view moves the least it can when the selection walks off an
+    /// edge.
+    pub scroll: usize,
+}
+
+/// One field, in full, with its own scroll.
+#[derive(Debug, Default)]
+pub struct ValueDetail {
+    /// The record view this was opened from, restored when it closes — the
+    /// value modal is a step into the record, not a replacement for it.
+    pub row: RowDetail,
     pub scroll: usize,
     /// How far down it is worth scrolling, written by the renderer once it
-    /// knows how many lines the row wrapped to.
+    /// knows how many lines the value wrapped to.
     pub max_scroll: usize,
 }
 
-impl RowDetail {
+impl ValueDetail {
+    pub fn new(row: RowDetail) -> ValueDetail {
+        ValueDetail {
+            row,
+            scroll: 0,
+            max_scroll: 0,
+        }
+    }
+
     pub fn scroll_by(&mut self, delta: isize) {
         let next = self.scroll as isize + delta;
         self.scroll = next.clamp(0, self.max_scroll as isize) as usize;

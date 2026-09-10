@@ -18,6 +18,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         // Takes `app` mutably: the renderer is what discovers how tall the
         // record is, and the scroll limit follows from that.
         Some(Overlay::Detail(_)) => detail(frame, app, area),
+        Some(Overlay::Value(_)) => value(frame, app, area),
         Some(Overlay::Palette(palette)) => command_palette(frame, palette, area),
         Some(Overlay::Connect(form)) => connect(frame, form, area),
     }
@@ -182,10 +183,10 @@ fn block_width(lines: &[Line<'_>]) -> usize {
 
 fn help(frame: &mut Frame, area: Rect) {
     // Two columns: the bindings do not fit down one, and a help screen that
-    // scrolls is a help screen nobody reads to the end of. "Anywhere" is the
-    // long section and gets a column to itself.
-    let left = section_lines(&SECTIONS[..1]);
-    let right = section_lines(&SECTIONS[1..]);
+    // scrolls is a help screen nobody reads to the end of. Split where the two
+    // columns come out closest to level.
+    let left = section_lines(&SECTIONS[..LEFT_COLUMN]);
+    let right = section_lines(&SECTIONS[LEFT_COLUMN..]);
 
     const GUTTER: u16 = 4;
     let left_width = saturating_u16(block_width(&left));
@@ -234,6 +235,9 @@ const BORDERS: u16 = 2;
 
 type Section = (&'static str, &'static [(&'static str, &'static str)]);
 
+/// How many sections the left-hand help column takes.
+const LEFT_COLUMN: usize = 2;
+
 const SECTIONS: &[Section] = &[
     (
         "Anywhere",
@@ -249,6 +253,15 @@ const SECTIONS: &[Section] = &[
             ("F1 or ?", "This help"),
             ("F5", "Refresh the selected node"),
             ("⌃Q", "Quit"),
+        ],
+    ),
+    (
+        "Record",
+        &[
+            ("j / k", "Move between fields"),
+            ("Enter", "Open the value in full"),
+            ("h / l", "Previous / next record"),
+            ("Esc", "Close"),
         ],
     ),
     (
@@ -341,12 +354,18 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
         .saturating_sub(BORDERS as usize + label_width + gap)
         .max(8);
 
+    // Where the selected field's lines start and end, so the view can be
+    // scrolled to it once the wrapping is known.
+    let mut selection = (0usize, 0usize);
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (index, column) in grid.result.columns.iter().enumerate() {
         let value = row.get(index);
-        // The column the grid cursor was on stays marked, so opening the row
-        // does not lose track of where you were.
+        // The grid's cursor column is the selected field: the record opens on
+        // whatever you were reading, and moving here moves the grid too.
         let focused = index == grid.column;
+        if focused {
+            selection.0 = lines.len();
+        }
         let value_style = match value {
             Some(value) => results::value_style(value),
             None => theme::cell_text(),
@@ -382,6 +401,9 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
             }
             lines.push(Line::from(spans));
         }
+        if focused {
+            selection.1 = lines.len().saturating_sub(1);
+        }
     }
 
     // Height follows the wrapped line count, which is only known now: one row
@@ -395,7 +417,7 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
         frame,
         ui::centered_size(area, width, height),
         &title,
-        format!("{fields} fields"),
+        format!("{}/{fields} fields", grid.column + 1),
     );
     if inner.height < 2 {
         return;
@@ -406,8 +428,11 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let scroll = match app.overlay.as_mut() {
         Some(Overlay::Detail(detail)) => {
-            detail.max_scroll = max_scroll;
-            detail.scroll = detail.scroll.min(max_scroll);
+            // The end of the selected field first, then its start, so a field
+            // taller than the box shows its label rather than its tail.
+            let mut offset = ui::scroll_offset(detail.scroll, selection.1, body_height);
+            offset = ui::scroll_offset(offset, selection.0, body_height);
+            detail.scroll = offset.min(max_scroll);
             detail.scroll
         }
         _ => 0,
@@ -425,7 +450,9 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("↑↓", theme::key()),
-            Span::styled(" fields · ", theme::dim()),
+            Span::styled(" field · ", theme::dim()),
+            Span::styled("↵", theme::key()),
+            Span::styled(" value · ", theme::dim()),
             Span::styled("←→", theme::key()),
             Span::styled(" record · ", theme::dim()),
             Span::styled("Esc", theme::key()),
@@ -437,6 +464,144 @@ fn detail(frame: &mut Frame, app: &mut App, area: Rect) {
             ..inner
         },
     );
+}
+
+/// One field of the open record, in full.
+///
+/// The record modal gives every value the same narrow column and wraps it; a
+/// JSON document or a long comment needs the whole box. JSON is re-indented
+/// here, since a document stored on one line is not readable as one.
+fn value(frame: &mut Frame, app: &mut App, area: Rect) {
+    let Some(grid) = app.console().grid() else {
+        app.overlay = None;
+        return;
+    };
+    let (Some(row), Some(column)) = (
+        grid.result.rows.get(grid.row),
+        grid.result.columns.get(grid.column),
+    ) else {
+        return;
+    };
+
+    let cell = row.get(grid.column);
+    let style = cell
+        .map(results::value_style)
+        .unwrap_or_else(theme::cell_text);
+    let title = format!("{} {}", column.name, column.type_name);
+    // The counter measures the stored value, not the re-indented one — the
+    // size of a JSON document is not a property of how it is being displayed.
+    let raw = cell.map(field_text).unwrap_or_default();
+    let counter = format!("{} · row {}", value_size(&raw), grid.row + 1);
+    let text = match cell {
+        Some(cell) => expand(cell, raw),
+        None => raw,
+    };
+
+    // Wide enough for the longest line the value has, so a re-indented
+    // document is not re-wrapped on top of its own indentation.
+    let widest = text
+        .split('\n')
+        .map(|line| UnicodeWidthStr::width(line.trim_end_matches('\r')))
+        .max()
+        .unwrap_or(0);
+    let ceiling = (area.width * 88 / 100).max(1);
+    let wanted = saturating_u16(widest + BORDERS as usize + PADDING * 2);
+    let width = wanted.clamp(MIN_VALUE_WIDTH.min(ceiling), ceiling);
+    let body_width = (width as usize).saturating_sub(BORDERS as usize + PADDING * 2);
+
+    let lines: Vec<Line<'static>> = wrap(&text, body_width.max(8))
+        .into_iter()
+        .map(|piece| Line::from(Span::styled(piece, style)))
+        .collect();
+
+    let ceiling = (area.height * 88 / 100).max(BORDERS + 2);
+    let height = saturating_u16(lines.len() + BORDERS as usize + 1)
+        .clamp((BORDERS + 2).min(ceiling), ceiling);
+
+    let inner = frame_for_counted(
+        frame,
+        ui::centered_size(area, width, height),
+        &title,
+        counter,
+    );
+    if inner.height < 2 {
+        return;
+    }
+
+    let body_height = inner.height.saturating_sub(1) as usize;
+    let max_scroll = lines.len().saturating_sub(body_height);
+    let scroll = match app.overlay.as_mut() {
+        Some(Overlay::Value(value)) => {
+            value.max_scroll = max_scroll;
+            value.scroll = value.scroll.min(max_scroll);
+            value.scroll
+        }
+        _ => 0,
+    };
+
+    let visible: Vec<Line> = lines.into_iter().skip(scroll).take(body_height).collect();
+    frame.render_widget(
+        Paragraph::new(visible),
+        Rect {
+            x: inner.x + PADDING as u16,
+            width: inner.width.saturating_sub(PADDING as u16 * 2),
+            height: inner.height - 1,
+            ..inner
+        },
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("↑↓", theme::key()),
+            Span::styled(" scroll · ", theme::dim()),
+            Span::styled("←→", theme::key()),
+            Span::styled(" record · ", theme::dim()),
+            Span::styled("Esc", theme::key()),
+            Span::styled(" back", theme::dim()),
+        ])),
+        Rect {
+            x: inner.x + PADDING as u16,
+            y: inner.y + inner.height - 1,
+            width: inner.width.saturating_sub(PADDING as u16 * 2),
+            height: 1,
+        },
+    );
+}
+
+/// Enough for the footer, so the box does not resize down under its own hints.
+const MIN_VALUE_WIDTH: u16 = 40;
+
+/// The value as the whole-value modal shows it: JSON re-indented, everything
+/// else as it comes.
+fn expand(value: &binsql_core::Value, text: String) -> String {
+    match value {
+        // A text column holds JSON as often as a JSON column does, so the
+        // value decides this, not the type the driver reported.
+        binsql_core::Value::Json(_) | binsql_core::Value::Text(_) => {
+            pretty_json(&text).unwrap_or(text)
+        }
+        _ => text,
+    }
+}
+
+fn pretty_json(text: &str) -> Option<String> {
+    let trimmed = text.trim_start();
+    if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
+        return None;
+    }
+    let parsed: serde_json::Value = serde_json::from_str(text).ok()?;
+    serde_json::to_string_pretty(&parsed).ok()
+}
+
+/// How big the value is, for the counter in the modal's border.
+fn value_size(text: &str) -> String {
+    let chars = text.chars().count();
+    let lines = text.split('\n').count();
+    if lines > 1 {
+        format!("{lines} lines · {chars} chars")
+    } else {
+        format!("{chars} chars")
+    }
 }
 
 /// One field's value as text. NULL is spelled out here so it is styled and
@@ -672,5 +837,45 @@ fn checkbox(on: bool) -> String {
         "[x] yes".into()
     } else {
         "[ ] no".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use binsql_core::Value;
+
+    #[test]
+    fn json_is_reindented_whichever_type_it_arrived_as() {
+        let text = |value: &Value| expand(value, field_text(value));
+
+        let json = Value::Json(r#"{"a":1}"#.into());
+        assert_eq!(text(&json), "{\n  \"a\": 1\n}");
+        // The same document in a text column reads the same way.
+        let stored_as_text = Value::Text(r#"{"a":1}"#.into());
+        assert_eq!(text(&stored_as_text), "{\n  \"a\": 1\n}");
+    }
+
+    #[test]
+    fn text_that_is_not_json_is_left_alone() {
+        let braces = Value::Text("{not json".into());
+        assert_eq!(expand(&braces, field_text(&braces)), "{not json");
+
+        let prose = Value::Text("a long comment".into());
+        assert_eq!(expand(&prose, field_text(&prose)), "a long comment");
+    }
+
+    #[test]
+    fn a_wrapped_word_keeps_every_character() {
+        let wrapped = wrap("a supercalifragilistic word", 8);
+        assert_eq!(
+            wrapped.concat().replace(' ', ""),
+            "asupercalifragilisticword"
+        );
+        assert!(
+            wrapped
+                .iter()
+                .all(|line| UnicodeWidthStr::width(line.as_str()) <= 8)
+        );
     }
 }
