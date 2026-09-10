@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::time::Instant;
 
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
-use tiberius::{AuthMethod, ColumnData, ColumnType, Config, QueryItem, Row};
+use tiberius::{AuthMethod, ColumnData, ColumnType, Config, QueryItem, Row, ToSql};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
@@ -12,6 +13,7 @@ use super::{Adapter, returns_rows};
 use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
+use crate::sql::Bound;
 use crate::value::{Column, ResultSet, Value};
 
 type Connection = tiberius::Client<Compat<TcpStream>>;
@@ -76,7 +78,7 @@ impl MsSqlAdapter {
     /// are catalogue reads, not the statement someone typed — so none of them
     /// carries a cancellation token.
     async fn ask(&self, sql: &str, limit: Option<usize>) -> Result<ResultSet> {
-        self.query(sql, limit, &CancellationToken::new()).await
+        self.query(sql, &[], limit, &CancellationToken::new()).await
     }
 
     /// Runs one statement, taking the connection lock for it.
@@ -90,11 +92,12 @@ impl MsSqlAdapter {
     async fn query(
         &self,
         sql: &str,
+        values: &[Value],
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
         let mut client = self.client.lock().await;
-        match run_one(&mut client, sql, limit, cancel).await? {
+        match run_one(&mut client, sql, values, limit, cancel).await? {
             Some(result) => Ok(result),
             None => self.cancelled(&mut client).await,
         }
@@ -116,19 +119,46 @@ impl MsSqlAdapter {
 async fn run_one(
     client: &mut Connection,
     sql: &str,
+    values: &[Value],
     limit: Option<usize>,
     cancel: &CancellationToken,
 ) -> Result<Option<ResultSet>> {
+    let wrapped: Vec<Param<'_>> = values.iter().map(Param).collect();
+    let params: Vec<&dyn ToSql> = wrapped.iter().map(|param| param as &dyn ToSql).collect();
+
     if returns_rows(sql, Backend::MsSql) {
-        collect(client, sql, limit, cancel).await
+        collect(client, sql, &params, limit, cancel).await
     } else {
-        execute_one(client, sql, cancel).await
+        execute_one(client, sql, &params, cancel).await
+    }
+}
+
+/// A bound value as tiberius sends it. SQL Server converts a parameter to what
+/// the column holds, so each goes as the type it already is — text sent for a
+/// date column arrives as the date.
+struct Param<'a>(&'a Value);
+
+impl ToSql for Param<'_> {
+    fn to_sql(&self) -> ColumnData<'_> {
+        match self.0 {
+            Value::Null => ColumnData::String(None),
+            Value::Bool(value) => ColumnData::Bit(Some(*value)),
+            Value::Int(value) => ColumnData::I64(Some(*value)),
+            Value::Float(value) => ColumnData::F64(Some(*value)),
+            Value::Bytes(value) => ColumnData::Binary(Some(Cow::Borrowed(value.as_slice()))),
+            Value::Decimal(value)
+            | Value::Text(value)
+            | Value::Uuid(value)
+            | Value::Json(value)
+            | Value::Timestamp(value) => ColumnData::String(Some(Cow::Borrowed(value.as_str()))),
+        }
     }
 }
 
 async fn collect(
     client: &mut Connection,
     sql: &str,
+    params: &[&dyn ToSql],
     limit: Option<usize>,
     cancel: &CancellationToken,
 ) -> Result<Option<ResultSet>> {
@@ -136,7 +166,12 @@ async fn collect(
     // Sending the batch is not the part worth interrupting — the waiting is,
     // and that is the loop below, which notices a token cancelled in the
     // meantime on its first turn.
-    let mut stream = client.simple_query(sql).await.map_err(Error::query)?;
+    let mut stream = if params.is_empty() {
+        client.simple_query(sql).await
+    } else {
+        client.query(sql, params).await
+    }
+    .map_err(Error::query)?;
 
     let mut columns: Vec<Column> = Vec::new();
     let mut rows: Vec<Vec<Value>> = Vec::new();
@@ -198,11 +233,12 @@ async fn collect(
 async fn execute_one(
     client: &mut Connection,
     sql: &str,
+    params: &[&dyn ToSql],
     cancel: &CancellationToken,
 ) -> Result<Option<ResultSet>> {
     let start = Instant::now();
     let finished = tokio::select! {
-        result = client.execute(sql, &[]) => Some(result.map_err(Error::query)?),
+        result = client.execute(sql, params) => Some(result.map_err(Error::query)?),
         () = cancel.cancelled() => None,
     };
     Ok(finished.map(|result| ResultSet::affected(result.total(), start.elapsed())))
@@ -376,11 +412,12 @@ impl Adapter for MsSqlAdapter {
 
     async fn run(
         &self,
-        sql: &str,
+        statement: &Bound,
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
-        self.query(sql, limit, cancel).await
+        self.query(&statement.sql, &statement.params, limit, cancel)
+            .await
     }
 
     /// SQL Server spells its transaction control as statements rather than as
@@ -388,13 +425,13 @@ impl Adapter for MsSqlAdapter {
     /// nothing else can slip a statement between the `BEGIN` and the `COMMIT`.
     async fn run_transaction(
         &self,
-        statements: &[String],
+        statements: &[Bound],
         limit: Option<usize>,
         commit: bool,
         cancel: &CancellationToken,
     ) -> Result<Vec<ResultSet>> {
         let mut client = self.client.lock().await;
-        if run_one(&mut client, "BEGIN TRANSACTION", None, cancel)
+        if run_one(&mut client, "BEGIN TRANSACTION", &[], None, cancel)
             .await?
             .is_none()
         {
@@ -402,21 +439,30 @@ impl Adapter for MsSqlAdapter {
         }
 
         let mut results = Vec::with_capacity(statements.len());
-        for sql in statements {
-            match run_one(&mut client, sql, limit, cancel).await {
+        for statement in statements {
+            match run_one(
+                &mut client,
+                &statement.sql,
+                &statement.params,
+                limit,
+                cancel,
+            )
+            .await
+            {
                 Ok(Some(result)) => results.push(result),
                 // A cancel takes the connection with it, and with the
                 // connection goes the transaction.
                 Ok(None) => return self.cancelled(&mut client).await,
                 Err(error) => {
-                    let _ = run_one(&mut client, ROLLBACK, None, &CancellationToken::new()).await;
+                    let _ =
+                        run_one(&mut client, ROLLBACK, &[], None, &CancellationToken::new()).await;
                     return Err(error);
                 }
             }
         }
 
         let ending = if commit { "COMMIT" } else { ROLLBACK };
-        if run_one(&mut client, ending, None, &CancellationToken::new())
+        if run_one(&mut client, ending, &[], None, &CancellationToken::new())
             .await?
             .is_none()
         {

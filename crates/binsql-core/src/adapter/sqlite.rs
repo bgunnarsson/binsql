@@ -3,16 +3,25 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use sqlx::Row;
 use sqlx::sqlite::{
-    SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteQueryResult, SqliteRow,
+    Sqlite, SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteQueryResult, SqliteRow,
+    SqliteTypeInfo,
 };
 use tokio_util::sync::CancellationToken;
 
 use super::Adapter;
-use super::sqlx_common::{self, decode_as, decode_fallback};
+use super::sqlx_common::{self, Binding, Codec, bind_as_given, decode_as, decode_fallback};
 use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
+use crate::sql::Bound;
 use crate::value::{Column, ResultSet, Value};
+
+const CODEC: Codec<Sqlite> = Codec {
+    decode,
+    affected,
+    bind,
+    describe: false,
+};
 
 pub struct SqliteAdapter {
     pool: SqlitePool,
@@ -148,24 +157,23 @@ impl Adapter for SqliteAdapter {
     /// engine finishes its current step first, which for SQLite is short.
     async fn run(
         &self,
-        sql: &str,
+        statement: &Bound,
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
         let mut connection = self.pool.acquire().await.map_err(Error::query)?;
-        sqlx_common::run::<sqlx::Sqlite>(&mut connection, sql, limit, decode, affected, cancel)
-            .await
+        sqlx_common::run::<Sqlite>(&mut connection, statement, limit, &CODEC, cancel).await
     }
 
     async fn run_transaction(
         &self,
-        statements: &[String],
+        statements: &[Bound],
         limit: Option<usize>,
         commit: bool,
         cancel: &CancellationToken,
     ) -> Result<Vec<ResultSet>> {
-        sqlx_common::run_transaction::<sqlx::Sqlite>(
-            &self.pool, statements, limit, commit, decode, affected, cancel,
+        sqlx_common::run_transaction::<Sqlite>(
+            &self.pool, statements, limit, commit, &CODEC, cancel,
         )
         .await
     }
@@ -179,6 +187,14 @@ impl Adapter for SqliteAdapter {
 
 fn affected(result: &SqliteQueryResult) -> u64 {
     result.rows_affected()
+}
+
+fn bind<'q>(
+    query: Binding<'q, Sqlite>,
+    value: &'q Value,
+    _expected: Option<&SqliteTypeInfo>,
+) -> std::result::Result<Binding<'q, Sqlite>, String> {
+    Ok(bind_as_given!(query, value))
 }
 
 /// SQLite stores a value's type per row, not per column, so a declared type is

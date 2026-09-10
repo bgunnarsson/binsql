@@ -9,6 +9,8 @@
 //! trustworthy as that distinction.
 
 use crate::backend::Backend;
+use crate::error::{Error, Result};
+use crate::value::Value;
 
 /// What a statement does to the database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +55,24 @@ pub struct Statement {
     pub kind: Kind,
 }
 
+/// A statement as it goes to the server: its SQL, with any placeholders in the
+/// backend's own spelling, and the values that fill them, in order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bound {
+    pub sql: String,
+    pub params: Vec<Value>,
+}
+
+impl Bound {
+    /// A statement with nothing to bind, sent exactly as written.
+    pub fn plain(sql: impl Into<String>) -> Bound {
+        Bound {
+            sql: sql.into(),
+            params: Vec::new(),
+        }
+    }
+}
+
 /// Breaks a script into statements on top-level semicolons, dropping the empty
 /// and comment-only chunks. SQL Server `GO` batch separators split too.
 pub fn split(script: &str, backend: Backend) -> Vec<Statement> {
@@ -78,6 +98,72 @@ pub fn split(script: &str, backend: Backend) -> Vec<Statement> {
     }
 
     out
+}
+
+/// Hands each statement its share of `params`, left to right, and rewrites its
+/// `?` placeholders into the spelling its backend expects — `$1` for Postgres,
+/// `@P1` for SQL Server, and `?` as it stands for SQLite and MySQL. The values
+/// travel beside the SQL, never inside it.
+///
+/// A `?` inside a string, a quoted identifier or a comment is text, not a
+/// placeholder. With no values at all nothing is rewritten, so a Postgres `?`
+/// operator in a statement that binds nothing reaches the server intact.
+///
+/// Placeholders and values that do not come out even are refused here, before
+/// any statement is sent: a batch that found it had no value for its second
+/// statement after running its first would already have done something.
+pub fn bind(statements: &[Statement], params: &[Value], backend: Backend) -> Result<Vec<Bound>> {
+    if params.is_empty() {
+        return Ok(statements
+            .iter()
+            .map(|statement| Bound::plain(statement.sql.clone()))
+            .collect());
+    }
+
+    let mut remaining = params;
+    let mut found = 0;
+    let mut out = Vec::with_capacity(statements.len());
+    for statement in statements {
+        let (sql, count) = placeholders(&statement.sql, backend);
+        found += count;
+        let (mine, rest) = remaining.split_at(count.min(remaining.len()));
+        remaining = rest;
+        out.push(Bound {
+            sql,
+            params: mine.to_vec(),
+        });
+    }
+
+    if found != params.len() {
+        return Err(Error::Placeholders {
+            found,
+            given: params.len(),
+        });
+    }
+    Ok(out)
+}
+
+/// The statement with each executable `?` rewritten for `backend`, and how
+/// many there were. Numbering starts at one per statement, because each
+/// statement is sent on its own.
+fn placeholders(sql: &str, backend: Backend) -> (String, usize) {
+    let mut out = String::with_capacity(sql.len());
+    let mut count = 0;
+    scan(sql, backend, &mut |token| match token {
+        Token::Char(Class::Code, '?') => {
+            count += 1;
+            match backend {
+                Backend::Postgres => out.push_str(&format!("${count}")),
+                Backend::MsSql => out.push_str(&format!("@P{count}")),
+                Backend::Sqlite | Backend::MySql => out.push('?'),
+            }
+        }
+        Token::Char(_, ch) => out.push(ch),
+        // `split` has already cut the script on these, so a statement it
+        // produced never holds one.
+        Token::BatchSeparator => {}
+    });
+    (out, count)
 }
 
 /// What a single statement does, from its leading keyword.
@@ -641,5 +727,73 @@ mod tests {
             summarize("select a_very_long_column_name from t", Backend::Sqlite, 10),
             "select a_…"
         );
+    }
+
+    fn bound(sql: &str, params: &[Value], backend: Backend) -> Result<Vec<Bound>> {
+        bind(&split(sql, backend), params, backend)
+    }
+
+    #[test]
+    fn placeholders_take_each_backends_spelling() {
+        let params = [Value::Int(1), Value::Text("a".into())];
+        for (backend, want) in [
+            (Backend::Sqlite, "select * from t where a = ? and b = ?"),
+            (Backend::MySql, "select * from t where a = ? and b = ?"),
+            (Backend::Postgres, "select * from t where a = $1 and b = $2"),
+            (Backend::MsSql, "select * from t where a = @P1 and b = @P2"),
+        ] {
+            let bound = bound("select * from t where a = ? and b = ?", &params, backend).unwrap();
+            assert_eq!(bound[0].sql, want, "{backend}");
+            assert_eq!(bound[0].params, params);
+        }
+    }
+
+    #[test]
+    fn a_question_mark_in_a_literal_or_a_comment_is_not_a_placeholder() {
+        let bound = bound(
+            "select '?', \"?\" from t -- why?\nwhere a = ? /* or? */",
+            &[Value::Int(1)],
+            Backend::Postgres,
+        )
+        .unwrap();
+        assert_eq!(
+            bound[0].sql,
+            "select '?', \"?\" from t -- why?\nwhere a = $1 /* or? */"
+        );
+    }
+
+    #[test]
+    fn values_fill_a_batch_left_to_right() {
+        let params = [Value::Int(1), Value::Int(2), Value::Int(3)];
+        let bound = bound(
+            "insert into t values (?); update t set a = ? where b = ?",
+            &params,
+            Backend::Postgres,
+        )
+        .unwrap();
+        assert_eq!(bound[0].sql, "insert into t values ($1)");
+        assert_eq!(bound[0].params, [Value::Int(1)]);
+        assert_eq!(bound[1].sql, "update t set a = $1 where b = $2");
+        assert_eq!(bound[1].params, [Value::Int(2), Value::Int(3)]);
+    }
+
+    #[test]
+    fn placeholders_and_values_have_to_come_out_even() {
+        assert!(matches!(
+            bound("select ? + ?", &[Value::Int(1)], Backend::Sqlite),
+            Err(Error::Placeholders { found: 2, given: 1 })
+        ));
+        assert!(matches!(
+            bound("select ?", &[Value::Int(1), Value::Int(2)], Backend::Sqlite),
+            Err(Error::Placeholders { found: 1, given: 2 })
+        ));
+    }
+
+    #[test]
+    fn nothing_is_rewritten_when_nothing_is_bound() {
+        // Postgres's `?` operator asks whether a jsonb value has a key.
+        let bound = bound("select data ? 'key' from t", &[], Backend::Postgres).unwrap();
+        assert_eq!(bound[0].sql, "select data ? 'key' from t");
+        assert!(bound[0].params.is_empty());
     }
 }

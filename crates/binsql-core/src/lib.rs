@@ -26,6 +26,6 @@ pub use schema::{Catalog, ObjectKind, ObjectRef};
 pub use schema_cache::{Level, SchemaCache, SourceId};
 pub use secrets::{Reference, Resolver};
 pub use session::Session;
-pub use sql::{Kind, Statement};
+pub use sql::{Bound, Kind, Statement};
 pub use value::{Column, ResultSet, Value};
 pub use workspace::{Scope, Workspace};

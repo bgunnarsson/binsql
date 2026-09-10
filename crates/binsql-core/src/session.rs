@@ -10,7 +10,7 @@ use crate::config::DataSource;
 use crate::error::{Error, Result};
 use crate::schema::ObjectRef;
 use crate::secrets::Resolver;
-use crate::sql;
+use crate::sql::{self, Bound};
 use crate::value::{Column, ResultSet};
 
 /// One open data source.
@@ -123,10 +123,25 @@ impl Session {
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
-        self.guard_read_only(sql)?;
+        self.run_bound(catalog, &Bound::plain(sql), limit, cancel)
+            .await
+    }
+
+    /// The same, for a statement with values to send beside it — see
+    /// [`sql::bind`], which is what put its placeholders into this backend's
+    /// spelling. Binding changes what is sent, never what the statement does,
+    /// so the read-only guard reads it exactly as it reads any other.
+    pub async fn run_bound(
+        &self,
+        catalog: Option<&str>,
+        statement: &Bound,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        self.guard_read_only(&statement.sql)?;
         self.adapter_for(catalog)
             .await?
-            .run(sql, limit, cancel)
+            .run(statement, limit, cancel)
             .await
     }
 
@@ -139,13 +154,13 @@ impl Session {
     pub async fn run_transaction(
         &self,
         catalog: Option<&str>,
-        statements: &[String],
+        statements: &[Bound],
         limit: Option<usize>,
         commit: bool,
         cancel: &CancellationToken,
     ) -> Result<Vec<ResultSet>> {
-        for sql in statements {
-            self.guard_read_only(sql)?;
+        for statement in statements {
+            self.guard_read_only(&statement.sql)?;
         }
         self.adapter_for(catalog)
             .await?
