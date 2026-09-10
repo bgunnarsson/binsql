@@ -15,6 +15,7 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use tui_textarea::CursorMove;
 
+use super::overlay::{Overlay, RowDetail};
 use super::{App, Drag, Pane};
 
 /// Rows the wheel moves per notch.
@@ -64,8 +65,11 @@ pub fn handle(app: &mut App, event: MouseEvent) -> bool {
     }
 }
 
-/// A press takes focus and puts the cursor where it was aimed.
+/// A press takes focus and puts the cursor where it was aimed. A second press
+/// on the same spot opens whatever that was, the way Enter would.
 fn press(app: &mut App, event: MouseEvent) -> bool {
+    let double = app.double_click(event.column, event.row);
+
     if let Some(seam) = divider_at(app, event) {
         app.dragging = Some(seam);
         return false;
@@ -77,6 +81,11 @@ fn press(app: &mut App, event: MouseEvent) -> bool {
         app.focus = Pane::Explorer;
         let row = (event.row - app.panes.tree.y) as usize;
         app.tree.select_visible(app.tree.offset + row);
+        if double {
+            // Connect a data source, expand a catalog, open a table: the same
+            // one answer Enter gives, because the node decides which it is.
+            app.activate_selected();
+        }
         return true;
     }
 
@@ -96,6 +105,11 @@ fn press(app: &mut App, event: MouseEvent) -> bool {
     if contains(app.panes.grid, at) {
         app.focus = Pane::Results;
         select_cell(app, event);
+        // The grid's own answer to Enter: the whole record, where a value too
+        // long for a cell is readable.
+        if double && app.console().grid().is_some() {
+            app.overlay = Some(Overlay::Detail(RowDetail::default()));
+        }
         return true;
     }
 

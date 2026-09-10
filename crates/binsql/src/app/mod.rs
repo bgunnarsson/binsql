@@ -116,6 +116,10 @@ pub struct App {
     pub editor_height: Option<u16>,
     /// What the mouse is in the middle of doing, while it is doing it.
     pub dragging: Option<Drag>,
+    /// The last press — column, row, when — for telling a double click from
+    /// two clicks. The terminal reports presses and leaves the pairing to
+    /// whoever wants it.
+    pub last_press: Option<(u16, u16, Instant)>,
     pub panes: PaneAreas,
     next_console_id: u64,
     tx: UnboundedSender<Message>,
@@ -171,6 +175,7 @@ impl App {
             explorer_width: None,
             editor_height: None,
             dragging: None,
+            last_press: None,
             panes: PaneAreas::default(),
             next_console_id: 0,
             tx,
@@ -278,6 +283,31 @@ impl App {
     }
 
     /// Enter on a node: connect, drill in, or open the table.
+    /// Whether this press pairs with the one before it into a double click.
+    ///
+    /// The row has to match and the column has to be close: two panes side by
+    /// side share their rows, so the column is what keeps a click in the tree
+    /// from pairing with one in the grid. The record is consumed either way,
+    /// so a third press starts a new pair rather than reading as a second
+    /// double.
+    pub fn double_click(&mut self, column: u16, row: u16) -> bool {
+        /// How close together two presses have to land to be one gesture.
+        const WITHIN: Duration = Duration::from_millis(400);
+        /// How far the pointer may drift between them, in columns.
+        const DRIFT: u16 = 2;
+
+        let now = Instant::now();
+        let paired = self.last_press.is_some_and(|(before, at, when)| {
+            row == at && column.abs_diff(before) <= DRIFT && now.duration_since(when) <= WITHIN
+        });
+        self.last_press = if paired {
+            None
+        } else {
+            Some((column, row, now))
+        };
+        paired
+    }
+
     pub fn activate_selected(&mut self) {
         let Some(id) = self.tree.selected_id() else {
             return;
