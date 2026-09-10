@@ -533,6 +533,103 @@ async fn the_query_editor_edits_like_an_editor() {
     let _ = std::fs::remove_file(&path);
 }
 
+fn double_click(app: &mut App, at: (u16, u16)) {
+    click(app, at);
+    click(app, at);
+}
+
+/// The row a label is drawn on, so a test can aim at what it can see.
+fn row_of(app: &mut App, label: &str) -> u16 {
+    let screen = render(app);
+    screen
+        .lines()
+        .position(|line| line.contains(label))
+        .unwrap_or_else(|| panic!("{label} is not on screen:\n{screen}")) as u16
+}
+
+/// Double-clicking down the sidebar opens each thing in turn, the way Enter
+/// does — a catalog expands, a table runs.
+#[tokio::test]
+async fn double_clicking_the_sidebar_opens_things() {
+    let path = fixture("doubleclick");
+    {
+        let session =
+            binsql_core::Session::open("seed", config(&path).get("demo").unwrap().clone())
+                .await
+                .expect("open seed session");
+        session
+            .run(None, "CREATE TABLE artist (id INTEGER, name TEXT)", None)
+            .await
+            .expect("create table");
+        session
+            .run(None, "INSERT INTO artist VALUES (1,'Portishead')", None)
+            .await
+            .expect("insert row");
+    }
+
+    let (mut app, mut messages) = App::new(config(&path));
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+
+    // Connecting leaves the group open, so a double click shuts it — the same
+    // toggle Enter is, on a node that has something to toggle.
+    let tables = row_of(&mut app, "Tables");
+    let column = app.panes.tree.x + 8;
+    double_click(&mut app, (column, tables));
+
+    let screen = render(&mut app);
+    assert!(
+        !screen.contains("artist"),
+        "double-clicking an open group should close it:\n{screen}"
+    );
+
+    double_click(&mut app, (column, tables));
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("artist"),
+        "and again should open it:\n{screen}"
+    );
+
+    // A table is not a toggle: opening it runs a query for it.
+    let artist = row_of(&mut app, "artist");
+    double_click(&mut app, (column + 4, artist));
+    settle(&mut app, &mut messages).await;
+
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+    assert!(
+        screen.contains("Portishead"),
+        "double-clicking a table should open it:\n{screen}"
+    );
+    assert_eq!(app.focus, Pane::Results, "focus should follow the results");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Two presses far enough apart in space are two clicks, not one gesture.
+#[tokio::test]
+async fn a_single_click_only_selects() {
+    let path = fixture("singleclick");
+    let (mut app, _messages) = App::new(config(&path));
+    render(&mut app);
+
+    // The source is registered but not connected, and one click must not
+    // connect it — that is what the second click is for.
+    let tree = app.panes.tree;
+    click(&mut app, (tree.x + 2, tree.y));
+    assert!(app.sessions.is_empty(), "a single click should only select");
+
+    // Two clicks on different rows are not a double click either.
+    click(&mut app, (tree.x + 2, tree.y));
+    click(&mut app, (tree.x + 2, tree.y + 1));
+    assert!(
+        app.sessions.is_empty(),
+        "clicks on different rows are not a double click"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
 /// A click takes focus, and lands on the thing under it.
 #[tokio::test]
 async fn clicking_a_pane_focuses_it() {
