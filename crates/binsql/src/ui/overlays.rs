@@ -766,13 +766,14 @@ fn connect(frame: &mut Frame, form: &ConnectForm, area: Rect) {
     };
 
     let mut lines = Vec::new();
-    for field in Field::ORDER {
+    for field in form.fields() {
         let active = field == form.field;
         let value = match field {
             Field::Folder => form.folder.clone(),
             Field::Name => form.name.clone(),
             Field::Dsn => form.dsn.clone(),
             Field::Keychain => form.storage_display().to_string(),
+            Field::Scope => form.scope_display(),
             Field::Backend => form.backend_display(),
             Field::ReadOnly => checkbox(form.read_only),
             Field::OpenOnStart => checkbox(form.open_on_start),

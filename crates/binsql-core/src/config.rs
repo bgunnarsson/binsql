@@ -83,6 +83,18 @@ pub enum Listing<'a> {
     },
 }
 
+/// Who a config file is for, which decides how it is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    /// Yours alone. Written owner-only, in an owner-only directory: a literal
+    /// connection string is one keystroke away even when every DSN in it is a
+    /// reference today.
+    Private,
+    /// Meant to be committed. Rewriting its permissions — or its repository's —
+    /// would be wrong, so neither is touched.
+    Shared,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,13 +142,15 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        self.save_to(&Self::path())
+        self.save_to(&Self::path(), Visibility::Private)
     }
 
-    /// Writes owner-only, through a temp file so a failed write cannot truncate
-    /// a config that holds credentials.
-    pub fn save_to(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
+    /// Writes through a temp file, so a failed write cannot truncate a config
+    /// that holds credentials.
+    pub fn save_to(&self, path: &Path, visibility: Visibility) -> Result<()> {
+        if visibility == Visibility::Private
+            && let Some(parent) = path.parent()
+        {
             std::fs::create_dir_all(parent)?;
             set_owner_only(parent, 0o700)?;
         }
@@ -146,7 +160,9 @@ impl Config {
 
         let temp = path.with_extension("json.tmp");
         std::fs::write(&temp, json)?;
-        set_owner_only(&temp, 0o600)?;
+        if visibility == Visibility::Private {
+            set_owner_only(&temp, 0o600)?;
+        }
         std::fs::rename(&temp, path)?;
         Ok(())
     }
@@ -268,12 +284,40 @@ impl Config {
         if self.get(needle).is_some() {
             return Some(needle.to_string());
         }
-        let mut matches = self
-            .iter()
-            .map(|(id, _)| id)
-            .filter(|id| split_qualified(id).1 == needle);
+        let mut matches = self.leaf_matches(needle).into_iter();
         let first = matches.next()?;
         matches.next().is_none().then_some(first)
+    }
+
+    /// Every qualified name whose leaf is `needle`.
+    fn leaf_matches(&self, needle: &str) -> Vec<String> {
+        self.iter()
+            .map(|(id, _)| id)
+            .filter(|id| split_qualified(id).1 == needle)
+            .collect()
+    }
+
+    /// Why `default` opened nothing, when it names something that does not
+    /// resolve to exactly one connection.
+    ///
+    /// Ambiguity is the case worth a sentence: once two folders each hold a
+    /// `prod`, the bare `prod` that was right before names neither, and doing
+    /// nothing about it looks identical to having no default at all.
+    pub fn unresolved_default(&self) -> Option<String> {
+        let name = self.default.as_deref()?;
+        if self.resolve(name).is_some() {
+            return None;
+        }
+
+        let matches = self.leaf_matches(name);
+        if matches.is_empty() {
+            return Some(format!("default \"{name}\" is not a saved data source"));
+        }
+        // Short enough to survive the status bar, which is where this is read.
+        Some(format!(
+            "default \"{name}\" is ambiguous — {}",
+            matches.join(" or ")
+        ))
     }
 
     /// The data sources to connect at startup: those flagged `open_on_start`,
@@ -610,9 +654,35 @@ mod tests {
         assert!(config.get("osar/local").unwrap().read_only);
 
         // "prod" now names two connections, so it names neither. Nothing opens
-        // on start rather than something arbitrary opening.
+        // on start rather than something arbitrary opening — but silence would
+        // be indistinguishable from having no default, so it says which two.
         assert_eq!(config.resolve("prod"), None);
         assert!(config.startup_sources().is_empty());
+
+        let problem = config.unresolved_default().expect("the default is broken");
+        assert!(problem.contains("eimskip/prod"), "{problem}");
+        assert!(problem.contains("osar/prod"), "{problem}");
+    }
+
+    #[test]
+    fn a_default_that_resolves_has_nothing_to_report() {
+        let config: Config = serde_json::from_str(FOLDERED).expect("parses");
+        assert_eq!(config.unresolved_default(), None);
+
+        let none: Config = serde_json::from_str(r#"{ "connections": {} }"#).expect("parses");
+        assert_eq!(
+            none.unresolved_default(),
+            None,
+            "no default is not a problem"
+        );
+    }
+
+    #[test]
+    fn a_default_naming_nothing_says_so() {
+        let raw = r#"{ "default": "gone", "connections": { "scratch": { "driver": "sqlite", "dsn": "/tmp/s.db" } } }"#;
+        let config: Config = serde_json::from_str(raw).expect("parses");
+        let problem = config.unresolved_default().expect("the default is broken");
+        assert!(problem.contains("is not a saved data source"), "{problem}");
     }
 
     #[test]

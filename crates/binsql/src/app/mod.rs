@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use ratatui::layout::Rect;
 
 use binsql_core::secrets::keychain;
-use binsql_core::{Catalog, Column, Config, Error, ObjectKind, ObjectRef, ResultSet, Session};
+use binsql_core::{Catalog, Column, Error, ObjectKind, ObjectRef, ResultSet, Session, Workspace};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio_util::sync::CancellationToken;
 
@@ -99,7 +99,9 @@ pub enum Message {
 }
 
 pub struct App {
-    pub config: Config,
+    /// Reads like a `Config`, because it derefs to the merged one. Writes name
+    /// the file they mean.
+    pub config: Workspace,
     pub sessions: HashMap<String, Arc<Session>>,
     pub tree: Tree,
     pub consoles: Vec<Console>,
@@ -167,7 +169,7 @@ pub struct TabSpan {
 }
 
 impl App {
-    pub fn new(config: Config) -> (App, UnboundedReceiver<Message>) {
+    pub fn new(config: Workspace) -> (App, UnboundedReceiver<Message>) {
         let (tx, rx) = unbounded_channel();
 
         let mut tree = Tree::new();
@@ -213,6 +215,15 @@ impl App {
     /// Connects the data sources marked to open at startup.
     pub fn open_startup_sources(&mut self) {
         let names = self.config.startup_sources();
+
+        // A `default` that names two things opens neither, which on its own
+        // looks exactly like having no default at all.
+        if names.is_empty()
+            && let Some(problem) = self.config.unresolved_default()
+        {
+            self.warn(problem);
+        }
+
         for name in names {
             if let Some(node) = self.source_node_id(&name) {
                 self.connect(node, &name);
@@ -838,6 +849,7 @@ impl App {
             source,
             secret,
             previous,
+            scope,
         } = saved;
         let renamed_from = previous.filter(|previous| *previous != id);
 
@@ -854,16 +866,19 @@ impl App {
         }
 
         let is_new = self.config.get(&id).is_none();
-        self.config.set(&id, source);
+        self.config
+            .set(&id, source, scope)
+            .map_err(|error| error.to_string())?;
         if let Some(from) = &renamed_from {
-            // Only from the config, never through `remove_data_source`: the old
-            // name's secret has either been carried across or superseded by the
-            // one just filed, so deleting it would take the live one.
+            // Never through `remove_data_source`: the old name's secret has
+            // either been carried across or superseded by the one just filed,
+            // so deleting it would take the live one.
             self.sessions.remove(from);
-            self.config.remove(from);
+            self.config
+                .remove(from)
+                .map_err(|error| error.to_string())?;
             self.tree.remove_source(from);
         }
-        self.config.save().map_err(|error| error.to_string())?;
 
         if is_new {
             self.tree.add_source(id.clone());
@@ -884,11 +899,15 @@ impl App {
             .and_then(|source| keychain::account(&source.dsn))
             .map(str::to_string);
 
-        if self.config.remove(name) {
-            if let Err(error) = self.config.save() {
+        let removed = match self.config.remove(name) {
+            Ok(removed) => removed,
+            Err(error) => {
                 self.error(format!("Saving connections: {error}"));
                 return;
             }
+        };
+
+        if removed {
             // Only after the config is written: a secret left behind by a
             // failed save is recoverable, one deleted for a connection that is
             // still listed is not.

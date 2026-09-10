@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use binsql::app::{App, Message, Pane};
 use binsql::ui;
-use binsql_core::{Backend, Config, DataSource};
+use binsql_core::{Backend, Config, DataSource, Workspace};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -24,7 +24,10 @@ fn fixture(name: &str) -> std::path::PathBuf {
     path
 }
 
-fn config(path: &std::path::Path) -> Config {
+/// One data source, `demo`, pointing at the fixture database. The workspace's
+/// config file sits beside it and is never read back, so a test that saves a
+/// data source writes there rather than over the developer's own config.
+fn config(path: &std::path::Path) -> Workspace {
     let mut config = Config::default();
     config.set(
         "demo",
@@ -36,7 +39,7 @@ fn config(path: &std::path::Path) -> Config {
             open_on_start: true,
         },
     );
-    config
+    Workspace::single(config, path.with_extension("connections.json"))
 }
 
 /// Applies whatever background work has finished, waiting briefly for the first
@@ -1010,7 +1013,10 @@ async fn the_header_marks_a_read_only_connection() {
         },
     );
 
-    let (mut app, mut messages) = App::new(config);
+    let (mut app, mut messages) = App::new(Workspace::single(
+        config,
+        path.with_extension("connections.json"),
+    ));
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
 
@@ -1286,7 +1292,7 @@ async fn the_header_and_status_line_are_legible() {
 }
 
 /// A config with two folders, each holding a connection of the same name.
-fn foldered(dir: &std::path::Path) -> Config {
+fn foldered(dir: &std::path::Path) -> Workspace {
     let raw = format!(
         r#"{{
             "default": "eimskip/local",
@@ -1304,7 +1310,8 @@ fn foldered(dir: &std::path::Path) -> Config {
         a = dir.join("a.db").display(),
         b = dir.join("b.db").display(),
     );
-    serde_json::from_str(&raw).expect("config parses")
+    let config = serde_json::from_str(&raw).expect("config parses");
+    Workspace::single(config, dir.join("connections.json"))
 }
 
 #[tokio::test]
@@ -1377,7 +1384,7 @@ async fn folders_start_closed() {
     );
     let config: Config = serde_json::from_str(&raw).expect("config parses");
 
-    let (mut app, _messages) = App::new(config);
+    let (mut app, _messages) = App::new(Workspace::single(config, dir.join("connections.json")));
     let screen = render(&mut app);
     println!("\n{screen}\n");
 
@@ -1715,4 +1722,125 @@ async fn the_tab_spans_match_what_was_drawn() {
     }
 
     let _ = std::fs::remove_file(&path);
+}
+
+/// A user config and a project `.binsql.json` side by side, both naming
+/// connections under `eimskip`.
+fn layered(dir: &std::path::Path) -> Workspace {
+    let db = dir.join("a.db").display().to_string();
+    let user = format!(
+        r#"{{ "connections": {{
+            "eimskip": {{ "prod": {{ "driver": "sqlite", "dsn": "{db}", "readonly": true }} }},
+            "scratch": {{ "driver": "sqlite", "dsn": "{db}" }}
+        }} }}"#
+    );
+    let project = format!(
+        r#"{{ "connections": {{
+            "eimskip": {{ "local": {{ "driver": "sqlite", "dsn": "{db}" }} }}
+        }} }}"#
+    );
+
+    let project_path = dir.join(binsql_core::workspace::PROJECT_FILE);
+    std::fs::write(&project_path, &project).expect("write the project file");
+    binsql_core::workspace::Workspace::load_at(
+        serde_json::from_str(&user).expect("user config parses"),
+        dir.join("connections.json"),
+        Some(project_path),
+    )
+    .expect("workspace loads")
+}
+
+#[tokio::test]
+async fn a_project_file_joins_the_user_config_in_one_sidebar() {
+    let dir = std::env::temp_dir().join(format!("binsql-layered-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    std::fs::write(dir.join("a.db"), b"").expect("create database");
+
+    let (mut app, _messages) = App::new(layered(&dir));
+
+    // One eimskip folder holding both, not one folder per file.
+    assert_eq!(app.config.len(), 3);
+    assert_eq!(app.config.listing().len(), 2);
+    assert_eq!(
+        app.config.scope_of("eimskip/prod"),
+        Some(binsql_core::Scope::User)
+    );
+    assert_eq!(
+        app.config.scope_of("eimskip/local"),
+        Some(binsql_core::Scope::Project)
+    );
+
+    let screen = render(&mut app);
+    assert!(screen.contains("eimskip"), "folder missing:\n{screen}");
+    assert!(
+        screen.contains("scratch"),
+        "loose source missing:\n{screen}"
+    );
+
+    // The form offers the choice of file, and starts a new connection in the
+    // project you are standing in.
+    binsql::app::keys::handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+    );
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+    assert!(
+        screen.contains("Saved in"),
+        "scope field missing:\n{screen}"
+    );
+    assert!(
+        screen.contains(binsql_core::workspace::PROJECT_FILE),
+        "the project file should be the default for a new source:\n{screen}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn one_config_alone_does_not_offer_a_choice_of_file() {
+    let path = fixture("no-project");
+    let (mut app, _messages) = App::new(config(&path));
+
+    binsql::app::keys::handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+    );
+    let screen = render(&mut app);
+    assert!(
+        !screen.contains("Saved in"),
+        "there is nothing to choose between:\n{screen}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn an_ambiguous_default_says_which_two_it_found() {
+    let dir = std::env::temp_dir().join(format!("binsql-ambiguous-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    std::fs::write(dir.join("a.db"), b"").expect("create database");
+
+    let db = dir.join("a.db").display().to_string();
+    let raw = format!(
+        r#"{{ "default": "prod", "connections": {{
+            "eimskip": {{ "prod": {{ "driver": "sqlite", "dsn": "{db}" }} }},
+            "osar":    {{ "prod": {{ "driver": "sqlite", "dsn": "{db}" }} }}
+        }} }}"#
+    );
+    let config: Config = serde_json::from_str(&raw).expect("config parses");
+
+    let (mut app, _messages) = App::new(Workspace::single(config, dir.join("connections.json")));
+    app.open_startup_sources();
+
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+    assert!(
+        screen.contains("eimskip/prod") && screen.contains("osar/prod"),
+        "the status line should name both:\n{screen}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

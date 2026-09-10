@@ -13,7 +13,7 @@ mod render;
 
 use std::io::{IsTerminal, Read, Write};
 
-use binsql_core::{Backend, Config, DataSource, Session};
+use binsql_core::{Backend, DataSource, Session, Workspace};
 use tokio_util::sync::CancellationToken;
 
 use args::Args;
@@ -158,7 +158,10 @@ pub fn output(args: &Args) -> Result<Options> {
 /// the flags left out — the order a script expects, where the command line
 /// overrides what the shell already set.
 pub async fn connect(args: &Args) -> Result<Session> {
-    let config = Config::load().map_err(|error| failed(format!("loading connections: {error}")))?;
+    // A Workspace, so command mode sees the same project `.binsql.json` the
+    // TUI does when it is run from inside a repository.
+    let config =
+        Workspace::load().map_err(|error| failed(format!("loading connections: {error}")))?;
 
     let named = args
         .value(&["conn", "c"])
@@ -204,8 +207,16 @@ pub async fn connect(args: &Args) -> Result<Session> {
             )
         }
         (None, None) => {
-            let id = config.default.clone().ok_or_else(|| {
+            let named = config.default.clone().ok_or_else(|| {
                 usage("no data source given, and none is the default — pass --conn or --dsn")
+            })?;
+            // Through `resolve`, so a `default` of `prod` finds `eimskip/prod`
+            // exactly as `--conn prod` does — and says which two it found when
+            // that name has stopped meaning one thing.
+            let id = config.resolve(&named).ok_or_else(|| {
+                failed(config.unresolved_default().unwrap_or_else(|| {
+                    format!("the default data source {named} is not in the config")
+                }))
             })?;
             let source = config.get(&id).cloned().ok_or_else(|| {
                 failed(format!("the default data source {id} is not in the config"))
