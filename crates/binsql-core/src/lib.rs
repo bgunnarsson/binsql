@@ -15,6 +15,7 @@ pub mod secrets;
 pub mod session;
 pub mod sql;
 pub mod value;
+pub mod workspace;
 
 pub use adapter::Adapter;
 pub use backend::{Backend, Dialect};
@@ -25,3 +26,4 @@ pub use secrets::{Reference, Resolver};
 pub use session::Session;
 pub use sql::{Kind, Statement};
 pub use value::{Column, ResultSet, Value};
+pub use workspace::{Scope, Workspace};

@@ -1,7 +1,7 @@
 //! binsql — a database IDE for the terminal.
 
 use anyhow::{Context, Result, bail};
-use binsql_core::{Backend, Config, DataSource};
+use binsql_core::{Backend, DataSource, Workspace};
 use crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
         return Ok(());
     };
 
-    let mut config = Config::load().context("loading connections")?;
+    let mut config = Workspace::load().context("loading connections")?;
     let mut open_now: Option<String> = None;
 
     if let Some(target) = options.target {
@@ -67,8 +67,8 @@ async fn main() -> Result<()> {
                              `binsql --help` for the commands"
                         )
                     })?;
-                // Not written to disk: an ad-hoc DSN is for this run only.
-                config.set(
+                // Never written to disk: an ad-hoc DSN is for this run only.
+                config.add_ephemeral(
                     "ad-hoc",
                     DataSource {
                         backend,

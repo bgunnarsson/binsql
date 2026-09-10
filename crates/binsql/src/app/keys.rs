@@ -55,7 +55,7 @@ fn global(app: &mut App, key: KeyEvent) -> bool {
         (KeyCode::Char('t'), true, _) => app.new_console(),
         (KeyCode::Char('w'), true, _) => app.close_console(),
         (KeyCode::Char('n'), true, _) => {
-            app.overlay = Some(Overlay::Connect(ConnectForm::new()));
+            app.overlay = Some(Overlay::Connect(ConnectForm::new(&app.config)));
         }
         (KeyCode::F(1), _, _) => app.overlay = Some(Overlay::Help),
         (KeyCode::F(5), _, _) => app.refresh_selected(),
@@ -105,7 +105,7 @@ fn explorer(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => app.activate_selected(),
 
         KeyCode::Char('r') => app.refresh_selected(),
-        KeyCode::Char('n') => app.overlay = Some(Overlay::Connect(ConnectForm::new())),
+        KeyCode::Char('n') => app.overlay = Some(Overlay::Connect(ConnectForm::new(&app.config))),
         KeyCode::Char('e') => edit_selected_source(app),
         KeyCode::Char('d') => disconnect_selected_source(app),
         KeyCode::Char('?') => app.overlay = Some(Overlay::Help),
@@ -120,7 +120,11 @@ fn edit_selected_source(app: &mut App) {
     let Some(source) = app.config.get(&name).cloned() else {
         return;
     };
-    app.overlay = Some(Overlay::Connect(ConnectForm::editing(&name, &source)));
+    app.overlay = Some(Overlay::Connect(ConnectForm::editing(
+        &name,
+        &source,
+        &app.config,
+    )));
 }
 
 fn disconnect_selected_source(app: &mut App) {
@@ -416,14 +420,18 @@ pub fn execute(app: &mut App, command: Command) {
         Command::RunQuery => app.run_query(),
         Command::CancelQuery => app.cancel_query(),
         Command::NewDataSource => {
-            app.overlay = Some(Overlay::Connect(ConnectForm::new()));
+            app.overlay = Some(Overlay::Connect(ConnectForm::new(&app.config)));
         }
         Command::Connect(name) => app.bind_console(&name),
         Command::Disconnect(name) => app.disconnect(&name),
         Command::BindConsole(name) => app.bind_console(&name),
         Command::EditDataSource(name) => {
             if let Some(source) = app.config.get(&name).cloned() {
-                app.overlay = Some(Overlay::Connect(ConnectForm::editing(&name, &source)));
+                app.overlay = Some(Overlay::Connect(ConnectForm::editing(
+                    &name,
+                    &source,
+                    &app.config,
+                )));
             }
         }
         Command::RemoveDataSource(name) => app.remove_data_source(&name),

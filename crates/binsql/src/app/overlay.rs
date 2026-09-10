@@ -2,7 +2,7 @@
 //! command palette, and the connection form.
 
 use binsql_core::secrets::keychain;
-use binsql_core::{Backend, DataSource};
+use binsql_core::{Backend, Config, DataSource, Scope, Workspace};
 
 use super::App;
 
@@ -211,34 +211,52 @@ fn is_subsequence(needle: &str, haystack: &str) -> bool {
 
 // --- connection form ---
 
+/// The project file as it is worth showing: relative to where binsql was
+/// started when it is at or below that, since `./.binsql.json` says everything
+/// an absolute path does and fits the column.
+fn project_display(workspace: &Workspace) -> Option<String> {
+    let path = workspace.project_path()?;
+    let here = std::env::current_dir().ok();
+    let relative = here
+        .as_deref()
+        .and_then(|here| path.strip_prefix(here).ok())
+        .map(|rest| format!("./{}", rest.display()));
+    Some(relative.unwrap_or_else(|| shorten_home(path)))
+}
+
+fn shorten_home(path: &std::path::Path) -> String {
+    let home = dirs::home_dir();
+    match home
+        .as_deref()
+        .and_then(|home| path.strip_prefix(home).ok())
+    {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Folder,
     Name,
     Dsn,
     Keychain,
+    /// Which config file this is saved in. Only offered when a project file
+    /// exists — with one file there is nothing to choose.
+    Scope,
     Backend,
     ReadOnly,
     OpenOnStart,
 }
 
 impl Field {
-    pub const ORDER: [Field; 7] = [
-        Field::Folder,
-        Field::Name,
-        Field::Dsn,
-        Field::Keychain,
-        Field::Backend,
-        Field::ReadOnly,
-        Field::OpenOnStart,
-    ];
-
     pub fn label(self) -> &'static str {
         match self {
             Field::Folder => "Folder",
             Field::Name => "Name",
             Field::Dsn => "Connection string",
             Field::Keychain => "Stored in",
+            Field::Scope => "Saved in",
             Field::Backend => "Driver",
             Field::ReadOnly => "Read-only",
             Field::OpenOnStart => "Open at startup",
@@ -259,6 +277,8 @@ pub struct Saved {
     /// The name this was saved under before, so a rename can take the old entry
     /// with it.
     pub previous: Option<String>,
+    /// The config file to write it to.
+    pub scope: Scope,
 }
 
 pub struct ConnectForm {
@@ -269,6 +289,10 @@ pub struct ConnectForm {
     /// Keep the connection string in the OS credential store, leaving only a
     /// `keychain://` reference in the config.
     pub keychain: bool,
+    pub scope: Scope,
+    /// The project file's path as it is worth showing, when there is one. `None`
+    /// leaves the Saved in field out of the form entirely.
+    project: Option<String>,
     /// `None` means "work it out from the connection string", which is right
     /// almost always and saves a decision.
     pub backend: Option<Backend>,
@@ -281,7 +305,7 @@ pub struct ConnectForm {
 }
 
 impl ConnectForm {
-    pub fn new() -> ConnectForm {
+    pub fn new(workspace: &Workspace) -> ConnectForm {
         ConnectForm {
             folder: String::new(),
             name: String::new(),
@@ -290,6 +314,8 @@ impl ConnectForm {
             // source is nearly always one with a password in it, and the config
             // is the wrong place for that.
             keychain: true,
+            scope: workspace.default_scope(None),
+            project: project_display(workspace),
             backend: None,
             read_only: false,
             open_on_start: false,
@@ -299,7 +325,7 @@ impl ConnectForm {
         }
     }
 
-    pub fn editing(id: &str, source: &DataSource) -> ConnectForm {
+    pub fn editing(id: &str, source: &DataSource, workspace: &Workspace) -> ConnectForm {
         let (folder, name) = binsql_core::config::split_qualified(id);
         ConnectForm {
             folder: folder.unwrap_or_default().to_string(),
@@ -310,6 +336,8 @@ impl ConnectForm {
             // renaming something or flipping read-only.
             dsn: source.dsn.clone(),
             keychain: keychain::is_reference(&source.dsn),
+            scope: workspace.default_scope(Some(id)),
+            project: project_display(workspace),
             backend: Some(source.backend),
             read_only: source.read_only,
             open_on_start: source.open_on_start,
@@ -319,12 +347,39 @@ impl ConnectForm {
         }
     }
 
+    /// The fields this form actually shows, in order.
+    pub fn fields(&self) -> Vec<Field> {
+        let mut fields = vec![
+            Field::Folder,
+            Field::Name,
+            Field::Dsn,
+            Field::Keychain,
+            Field::Backend,
+            Field::ReadOnly,
+            Field::OpenOnStart,
+        ];
+        if self.project.is_some() {
+            fields.insert(4, Field::Scope);
+        }
+        fields
+    }
+
     /// Where the connection string will end up, for the form to show.
     pub fn storage_display(&self) -> &'static str {
         if self.keychain {
             keychain::STORE_NAME
         } else {
             "the config file"
+        }
+    }
+
+    /// Which file it will be written to. Both arms name a path rather than a
+    /// word: "project" and "user" mean nothing until you know which files they
+    /// are, and this form is where you find out.
+    pub fn scope_display(&self) -> String {
+        match self.scope {
+            Scope::Project => self.project.clone().unwrap_or_default(),
+            Scope::User => shorten_home(&Config::path()),
         }
     }
 
@@ -345,12 +400,10 @@ impl ConnectForm {
     }
 
     pub fn next_field(&mut self, delta: isize) {
-        let position = Field::ORDER
-            .iter()
-            .position(|f| *f == self.field)
-            .unwrap_or(0) as isize;
-        let next = (position + delta).rem_euclid(Field::ORDER.len() as isize);
-        self.field = Field::ORDER[next as usize];
+        let fields = self.fields();
+        let position = fields.iter().position(|f| *f == self.field).unwrap_or(0) as isize;
+        let next = (position + delta).rem_euclid(fields.len() as isize);
+        self.field = fields[next as usize];
     }
 
     /// Cycles the driver, including back through "auto".
@@ -374,6 +427,12 @@ impl ConnectForm {
     pub fn toggle(&mut self) {
         match self.field {
             Field::Keychain => self.keychain = !self.keychain,
+            Field::Scope => {
+                self.scope = match self.scope {
+                    Scope::Project => Scope::User,
+                    Scope::User => Scope::Project,
+                }
+            }
             Field::ReadOnly => self.read_only = !self.read_only,
             Field::OpenOnStart => self.open_on_start = !self.open_on_start,
             _ => {}
@@ -385,7 +444,9 @@ impl ConnectForm {
             Field::Folder => self.folder.push(ch),
             Field::Name => self.name.push(ch),
             Field::Dsn => self.dsn.push(ch),
-            Field::Keychain | Field::ReadOnly | Field::OpenOnStart if ch == ' ' => self.toggle(),
+            Field::Keychain | Field::Scope | Field::ReadOnly | Field::OpenOnStart if ch == ' ' => {
+                self.toggle()
+            }
             _ => {}
         }
     }
@@ -462,19 +523,20 @@ impl ConnectForm {
             id,
             secret,
             previous: self.editing.clone(),
+            scope: self.scope,
         })
-    }
-}
-
-impl Default for ConnectForm {
-    fn default() -> Self {
-        ConnectForm::new()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A workspace with one config file and no project, which is the shape
+    /// every test here cares about unless it says otherwise.
+    fn alone() -> Workspace {
+        Workspace::single(Config::default(), std::env::temp_dir().join("unused.json"))
+    }
 
     #[test]
     fn subsequence_matching_finds_abbreviations() {
@@ -485,7 +547,7 @@ mod tests {
 
     #[test]
     fn backend_cycles_through_auto() {
-        let mut form = ConnectForm::new();
+        let mut form = ConnectForm::new(&alone());
         assert_eq!(form.backend, None);
         form.cycle_backend(1);
         assert_eq!(form.backend, Some(Backend::Sqlite));
@@ -496,7 +558,7 @@ mod tests {
     /// The form defaults to storing the string, so a test that cares about the
     /// config's contents has to say so.
     fn in_the_config(name: &str, dsn: &str) -> ConnectForm {
-        let mut form = ConnectForm::new();
+        let mut form = ConnectForm::new(&alone());
         form.name = name.into();
         form.dsn = dsn.into();
         form.keychain = false;
@@ -523,7 +585,7 @@ mod tests {
 
     #[test]
     fn the_keychain_keeps_the_string_and_the_config_keeps_a_reference() {
-        let mut form = ConnectForm::new();
+        let mut form = ConnectForm::new(&alone());
         form.folder = "eimskip".into();
         form.name = "prod".into();
         form.dsn = "sqlserver://sa:hunter2@host/db".into();
@@ -547,7 +609,7 @@ mod tests {
             read_only: true,
             open_on_start: false,
         };
-        let mut form = ConnectForm::editing("eimskip/prod", &source);
+        let mut form = ConnectForm::editing("eimskip/prod", &source, &alone());
         assert!(form.keychain);
         assert_eq!(form.dsn, "keychain://eimskip/prod");
 
@@ -569,14 +631,14 @@ mod tests {
             read_only: false,
             open_on_start: false,
         };
-        let mut form = ConnectForm::editing("eimskip/prod", &source);
+        let mut form = ConnectForm::editing("eimskip/prod", &source, &alone());
         form.keychain = false;
         assert!(form.build().is_err());
     }
 
     #[test]
     fn the_separator_is_refused_inside_a_name() {
-        let mut form = ConnectForm::new();
+        let mut form = ConnectForm::new(&alone());
         form.name = "eimskip/prod".into();
         form.dsn = "sqlserver://host/db".into();
         assert!(form.build().is_err());
@@ -584,7 +646,7 @@ mod tests {
 
     #[test]
     fn form_rejects_an_unrecognisable_dsn() {
-        let mut form = ConnectForm::new();
+        let mut form = ConnectForm::new(&alone());
         form.name = "local".into();
         form.dsn = "something odd".into();
         assert!(form.build().is_err());
