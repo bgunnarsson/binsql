@@ -157,6 +157,56 @@ impl Console {
         self.editor = editor;
     }
 
+    /// Undo a run of typing, not a letter of it.
+    ///
+    /// The textarea records one entry per character, so its own undo unpicks a
+    /// word one letter at a time — which is slower than retyping the word and
+    /// makes the key not worth pressing. This keeps stepping while each step
+    /// looks like one more character of the same run: same number of lines,
+    /// one character different, and that character not whitespace. A space, a
+    /// newline, or anything bigger than a character ends the run.
+    pub fn undo(&mut self) -> bool {
+        self.step_history(true)
+    }
+
+    pub fn redo(&mut self) -> bool {
+        self.step_history(false)
+    }
+
+    fn step_history(&mut self, backwards: bool) -> bool {
+        /// A guard against a pathological history, not a rule anyone should
+        /// meet: no word is this long.
+        const RUN: usize = 1000;
+
+        let before = self.editor.lines().to_vec();
+        if !step(&mut self.editor, backwards) {
+            return false;
+        }
+        // Anything larger than a character was one action when it was made — a
+        // paste, a cut, a line deleted, a selection typed over — and running on
+        // past it would swallow the edit before it.
+        if single_character(&before, self.editor.lines()).is_none() {
+            return true;
+        }
+
+        for _ in 0..RUN {
+            let before = self.editor.lines().to_vec();
+            if !step(&mut self.editor, backwards) {
+                break;
+            }
+            match single_character(&before, self.editor.lines()) {
+                Some(ch) if !ch.is_whitespace() => {}
+                // One step too far. Undo and redo are each other's inverse, so
+                // handing it back is the same operation the other way.
+                _ => {
+                    step(&mut self.editor, !backwards);
+                    break;
+                }
+            }
+        }
+        true
+    }
+
     pub fn grid(&self) -> Option<&Grid> {
         match &self.outcome {
             Outcome::Rows(grid) => Some(grid),
@@ -187,6 +237,50 @@ impl Console {
             None => false,
         }
     }
+}
+
+fn step(editor: &mut TextArea<'static>, backwards: bool) -> bool {
+    if backwards {
+        editor.undo()
+    } else {
+        editor.redo()
+    }
+}
+
+/// The one character two buffers differ by, when that is the whole difference
+/// between them. `None` for anything else — a different number of lines, more
+/// than one line changed, more than one character.
+fn single_character(before: &[String], after: &[String]) -> Option<char> {
+    if before.len() != after.len() {
+        return None;
+    }
+
+    let mut change = None;
+    for (a, b) in before.iter().zip(after) {
+        if a == b {
+            continue;
+        }
+        if change.is_some() {
+            return None;
+        }
+        change = Some((a, b));
+    }
+
+    let (a, b) = change?;
+    let (long, short) = if a.chars().count() > b.chars().count() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    if long.chars().count() != short.chars().count() + 1 {
+        return None;
+    }
+
+    // Walk the two together; where they diverge is the character one has and
+    // the other does not. Past the end of the shorter, everything diverges,
+    // which is the case of a character appended.
+    let mut short = short.chars();
+    long.chars().find(|ch| Some(*ch) != short.next())
 }
 
 /// A result set plus where the cursor is in it.
@@ -402,6 +496,90 @@ mod tests {
         grid.row = 2;
         grid.scroll_into_view(10, 20);
         assert_eq!(grid.row_offset, 2);
+    }
+
+    /// Types `text` the way a person does, one character at a time, so the
+    /// history holds what it would really hold.
+    fn typed(text: &str) -> Console {
+        let mut console = Console::new("test");
+        for ch in text.chars() {
+            console.editor.insert_char(ch);
+        }
+        console
+    }
+
+    #[test]
+    fn undo_takes_a_word_not_a_letter() {
+        let mut console = typed("SELECT artist");
+        assert!(console.undo());
+        assert_eq!(console.sql(), "SELECT ", "a word should go at once");
+
+        assert!(console.undo());
+        assert_eq!(console.sql(), "", "and then the one before it");
+        assert!(!console.undo(), "nothing left to undo");
+    }
+
+    #[test]
+    fn redo_puts_the_same_run_back() {
+        let mut console = typed("SELECT artist");
+        console.undo();
+        assert_eq!(console.sql(), "SELECT ");
+
+        assert!(console.redo());
+        assert_eq!(console.sql(), "SELECT artist", "redo should match undo");
+    }
+
+    #[test]
+    fn a_newline_ends_a_run() {
+        let mut console = typed("SELECT 1\nFROM t");
+        console.undo();
+        assert_eq!(console.sql(), "SELECT 1\nFROM ", "a word at a time");
+
+        // The next run takes the rest of the line and stops at its start: a
+        // newline is not a character of a word, so it is where the run ends.
+        console.undo();
+        assert_eq!(console.sql(), "SELECT 1\n", "and stops at the line break");
+    }
+
+    /// An edit made in one go is undone in one go, and undoing it must not run
+    /// on into the typing before it.
+    #[test]
+    fn a_single_edit_undoes_as_one_step() {
+        let mut console = typed("SELECT everything");
+        console.editor.delete_line_by_head();
+        assert_eq!(console.sql(), "");
+
+        assert!(console.undo());
+        assert_eq!(
+            console.sql(),
+            "SELECT everything",
+            "the whole line should come back, and nothing more should go"
+        );
+    }
+
+    #[test]
+    fn one_character_apart_is_recognised() {
+        let before = vec!["SELECT".to_string()];
+        assert_eq!(
+            single_character(&before, &["SELEC".to_string()]),
+            Some('T'),
+            "a character taken off the end"
+        );
+        assert_eq!(
+            single_character(&before, &["SLECT".to_string()]),
+            Some('E'),
+            "a character taken out of the middle"
+        );
+        assert_eq!(
+            single_character(&before, &["SELECT".to_string(), String::new()]),
+            None,
+            "a line added is not one character"
+        );
+        assert_eq!(
+            single_character(&before, &["SEL".to_string()]),
+            None,
+            "three characters are not one"
+        );
     }
 
     #[test]
