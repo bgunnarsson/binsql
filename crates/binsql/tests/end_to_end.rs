@@ -369,17 +369,228 @@ async fn enter_shows_the_whole_record_stacked() {
     let _ = std::fs::remove_file(&path);
 }
 
+fn mouse(app: &mut App, kind: MouseEventKind, (column, row): (u16, u16)) {
+    binsql::app::mouse::handle(
+        app,
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+}
+
 /// A press, a drag and a release, in whatever direction the seam moves.
 fn drag(app: &mut App, from: (u16, u16), to: (u16, u16)) {
-    let at = |kind, (column, row)| MouseEvent {
-        kind,
-        column,
-        row,
-        modifiers: KeyModifiers::NONE,
+    mouse(app, MouseEventKind::Down(MouseButton::Left), from);
+    mouse(app, MouseEventKind::Drag(MouseButton::Left), to);
+    mouse(app, MouseEventKind::Up(MouseButton::Left), to);
+}
+
+fn click(app: &mut App, at: (u16, u16)) {
+    mouse(app, MouseEventKind::Down(MouseButton::Left), at);
+    mouse(app, MouseEventKind::Up(MouseButton::Left), at);
+}
+
+fn wheel(app: &mut App, at: (u16, u16), notches: i32) {
+    let kind = if notches < 0 {
+        MouseEventKind::ScrollUp
+    } else {
+        MouseEventKind::ScrollDown
     };
-    binsql::app::mouse::handle(app, at(MouseEventKind::Down(MouseButton::Left), from));
-    binsql::app::mouse::handle(app, at(MouseEventKind::Drag(MouseButton::Left), to));
-    binsql::app::mouse::handle(app, at(MouseEventKind::Up(MouseButton::Left), to));
+    for _ in 0..notches.abs() {
+        mouse(app, kind, at);
+    }
+}
+
+/// The one line of the screen the query editor's text starts on.
+fn text_top_line(app: &mut App) -> String {
+    let text = app.panes.text;
+    let screen = render(app);
+    screen
+        .lines()
+        .nth(text.y as usize)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The query editor scrolls, and a click afterwards lands on the line it looks
+/// like it is on.
+///
+/// tui-textarea keeps its viewport private, so binsql keeps a copy to turn a
+/// click into a position in the text. This is what proves the two agree: the
+/// assertion on the cursor reads binsql's copy, and the assertion on the
+/// screen reads what the widget actually drew.
+#[tokio::test]
+async fn the_editor_scrolls_and_a_click_lands_where_it_looks() {
+    let path = fixture("editorscroll");
+    let (mut app, _messages) = App::new(config(&path));
+
+    // Comfortably more lines than the pane can show.
+    let sql: String = (0..40).map(|i| format!("SELECT {i};\n")).collect();
+    app.console_mut().set_sql(&sql);
+    render(&mut app);
+
+    let text = app.panes.text;
+    assert!(text.height > 2 && text.height < 40, "a scrolling pane");
+
+    // Writing left the cursor at the end, so the view sits at the bottom.
+    let top = text_top_line(&mut app);
+    // The screen line carries the sidebar and the borders too, so take the
+    // statement out of the middle of it.
+    let first_visible: usize = top
+        .split("SELECT ")
+        .nth(1)
+        .and_then(|rest| rest.split(';').next())
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or_else(|| panic!("unexpected top line {top:?}"));
+    assert!(first_visible > 0, "the pane should have scrolled: {top:?}");
+
+    // A click on the top row is the line the top row is showing.
+    click(&mut app, (text.x + 2, text.y));
+    assert_eq!(
+        app.console().editor.cursor().0,
+        first_visible,
+        "clicking the top row put the cursor on the wrong line"
+    );
+
+    // Wheel up, and the same click is three lines earlier — in the widget's
+    // own rendering as much as in ours.
+    wheel(&mut app, (text.x + 2, text.y + 1), -1);
+    render(&mut app);
+    let top = text_top_line(&mut app);
+    assert!(
+        top.contains(&format!("SELECT {};", first_visible - 3)),
+        "the wheel should have scrolled the widget: {top:?}"
+    );
+
+    click(&mut app, (text.x + 2, text.y));
+    assert_eq!(
+        app.console().editor.cursor().0,
+        first_visible - 3,
+        "our copy of the viewport drifted from the widget's"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Select all, delete to the head of the line, and a mouse selection that a
+/// backspace removes.
+#[tokio::test]
+async fn the_query_editor_edits_like_an_editor() {
+    let path = fixture("editing");
+    let (mut app, _messages) = App::new(config(&path));
+
+    let ctrl = |app: &mut App, ch| {
+        binsql::app::keys::handle(app, KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL))
+    };
+
+    // Select all, then type: the selection is replaced, not pushed along.
+    app.console_mut().set_sql("SELECT 1;\nSELECT 2;");
+    app.focus = Pane::Editor;
+    render(&mut app);
+    ctrl(&mut app, 'a');
+    assert!(app.console().editor.is_selecting(), "⌃A should select");
+    press(&mut app, KeyCode::Char('X'));
+    assert_eq!(
+        app.console().sql(),
+        "X",
+        "typing should replace a selection"
+    );
+
+    // ⌘⌫ where the terminal sends it, ⌃U where it does not — both cut back to
+    // the head of the line.
+    for modifier in [KeyModifiers::SUPER, KeyModifiers::CONTROL] {
+        app.console_mut().set_sql("SELECT * FROM artist");
+        binsql::app::keys::handle(&mut app, KeyEvent::new(KeyCode::Backspace, modifier));
+        assert_eq!(
+            app.console().sql(),
+            "",
+            "backspace with {modifier:?} should clear the line"
+        );
+    }
+    app.console_mut().set_sql("SELECT * FROM artist");
+    ctrl(&mut app, 'u');
+    assert_eq!(app.console().sql(), "", "⌃U should clear the line");
+
+    // Drag across the first word, then delete it.
+    app.console_mut().set_sql("SELECT everything");
+    render(&mut app);
+    let text = app.panes.text;
+    drag(&mut app, (text.x, text.y), (text.x + 7, text.y));
+    assert!(
+        app.console().editor.is_selecting(),
+        "a drag should be selecting"
+    );
+    press(&mut app, KeyCode::Backspace);
+    assert_eq!(
+        app.console().sql(),
+        "everything",
+        "backspace should remove what the mouse selected"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A click takes focus, and lands on the thing under it.
+#[tokio::test]
+async fn clicking_a_pane_focuses_it() {
+    let path = fixture("clickfocus");
+    {
+        let session =
+            binsql_core::Session::open("seed", config(&path).get("demo").unwrap().clone())
+                .await
+                .expect("open seed session");
+        session
+            .run(None, "CREATE TABLE artist (id INTEGER, name TEXT)", None)
+            .await
+            .expect("create table");
+        session
+            .run(
+                None,
+                "INSERT INTO artist VALUES (1,'a'),(2,'b'),(3,'c')",
+                None,
+            )
+            .await
+            .expect("insert rows");
+    }
+
+    let (mut app, mut messages) = App::new(config(&path));
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+    app.console_mut().set_sql("SELECT * FROM artist");
+    app.run_query();
+    settle(&mut app, &mut messages).await;
+    render(&mut app);
+
+    // The editor.
+    let text = app.panes.text;
+    click(&mut app, (text.x + 3, text.y));
+    assert_eq!(app.focus, Pane::Editor, "a click should focus the editor");
+    assert_eq!(app.console().editor.cursor(), (0, 3), "and land the cursor");
+
+    // The grid: the third row, and a column past the first.
+    render(&mut app);
+    let grid = app.panes.grid;
+    let column = grid.x + app.console().grid().expect("grid").gutter() + 5;
+    click(&mut app, (column, grid.y + 3));
+    assert_eq!(app.focus, Pane::Results, "a click should focus the results");
+    assert_eq!(app.console().grid().expect("grid").row, 2, "the third row");
+    assert_eq!(
+        app.console().grid().expect("grid").column,
+        1,
+        "the second column"
+    );
+
+    // The tree.
+    render(&mut app);
+    let tree = app.panes.tree;
+    click(&mut app, (tree.x + 2, tree.y + 1));
+    assert_eq!(app.focus, Pane::Explorer, "a click should focus the tree");
+    assert_eq!(app.tree.selected, 1, "the second visible row");
+
+    let _ = std::fs::remove_file(&path);
 }
 
 /// The seam between the sidebar and the workspace, dragged sideways.

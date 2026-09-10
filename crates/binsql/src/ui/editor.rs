@@ -34,6 +34,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    app.panes.text = inner;
+
     let console = &mut app.consoles[app.active_console];
     // The cursor is only drawn in the pane that has focus, so two consoles
     // never look equally active.
@@ -42,6 +44,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         theme::body()
     });
+
+    // Keep our copy of the viewport level with the widget's, which it does not
+    // expose. Same rule, same inputs, re-derived here every frame — see
+    // `Console::editor_scroll`.
+    let (row, column) = console.editor.cursor();
+    console.editor_scroll = (
+        ui::scroll_offset(console.editor_scroll.0, row, inner.height as usize),
+        ui::scroll_offset(console.editor_scroll.1, column, inner.width as usize),
+    );
+
     frame.render_widget(&console.editor, inner);
 }
 

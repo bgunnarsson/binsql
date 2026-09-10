@@ -16,6 +16,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let total = app.config.len();
     let block = ui::counted_pane("Databases", format!("{connected}/{total}"), focused);
     let inner = block.inner(area);
+    app.panes.tree = inner;
     frame.render_widget(block, area);
 
     if app.config.is_empty() {

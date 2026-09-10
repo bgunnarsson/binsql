@@ -114,32 +114,39 @@ pub struct App {
     /// known — so a window resize re-fits them instead of stranding them.
     pub explorer_width: Option<u16>,
     pub editor_height: Option<u16>,
-    /// The edge being dragged, while one is.
-    pub dragging: Option<Divider>,
+    /// What the mouse is in the middle of doing, while it is doing it.
+    pub dragging: Option<Drag>,
     pub panes: PaneAreas,
     next_console_id: u64,
     tx: UnboundedSender<Message>,
 }
 
-/// A seam between panes that can be dragged.
+/// What a held mouse button is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Divider {
-    /// Between the sidebar and the workspace. Moves left and right.
+pub enum Drag {
+    /// The seam between the sidebar and the workspace. Moves left and right.
     Sidebar,
-    /// Between the query pane and the results. Moves up and down.
+    /// The seam between the query pane and the results. Moves up and down.
     Results,
+    /// Selecting text in the query editor. Kept for the whole gesture so a
+    /// selection carries on when the pointer wanders out of the pane.
+    Text,
 }
 
 /// Where the panes were last drawn.
 ///
 /// Written by the renderer, which is the only thing that knows the layout, and
 /// read by the mouse handler, which has nothing to go on but a column and a
-/// row.
+/// row. The bordered panes locate the seams between them; the areas inside
+/// those borders are what a click has to be measured against.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PaneAreas {
     pub explorer: Rect,
     pub editor: Rect,
     pub results: Rect,
+    pub tree: Rect,
+    pub text: Rect,
+    pub grid: Rect,
 }
 
 impl App {

@@ -172,15 +172,25 @@ wrapped, where `↑`/`↓` move between fields, `Enter` again opens the one you 
 on in full — JSON re-indented — and `←`/`→` step between records without
 closing it.
 
+In the query editor: `⌃A` selects all — typing over a selection replaces it —
+`⌃U` (or `⌘⌫` where the terminal sends it) deletes back to the start of the
+line, `⌃X` cuts, `⌃Z`/`⌃Y` undo and redo.
+
+## Mouse
+
+A click focuses the pane it landed in and lands the cursor with it: a position
+in the query, a cell in the grid, a row in the tree. Dragging across the query
+selects, and `⌫` removes what was selected. The wheel scrolls whatever the
+pointer is over, the query editor included.
+
 **Both pane seams drag.** The sidebar's edge widens it, for a schema whose
 table names are longer than the default fits — it never narrows below that
 default, which is already what ordinary names want. The seam under the query
 pane moves either way, so a query being written can have the room, or the
 result it returns can. Neither pane can be squeezed out of existence.
 
-The wheel scrolls whichever of the tree and the grid the pointer is over. That
-is the whole of what the mouse does, and it costs the terminal's own
-click-to-select — most terminals hand that back while `⇧` is held.
+All of this costs the terminal's own click-to-select, which is what mouse
+reporting takes away; most terminals hand it back while `⇧` is held.
 
 ## Command mode
 
