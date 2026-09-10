@@ -18,6 +18,28 @@ use crate::theme;
 const EXPLORER_PERCENT: u16 = 26;
 const EXPLORER_MIN: u16 = 24;
 const EXPLORER_MAX: u16 = 46;
+/// What the workspace keeps however far the sidebar is dragged. SQL in a pane
+/// narrower than this is not SQL anybody can read.
+const WORKSPACE_MIN: u16 = 34;
+
+/// How wide the sidebar is drawn: what someone dragged it to, or what suits the
+/// terminal when nobody has.
+///
+/// A drag can only widen it. The default is already what fits a tree of
+/// ordinary names, and the reason to reach for the edge is a schema whose names
+/// are longer than that — never the other way about. Clamping here rather than
+/// where the drag is recorded means a window resize re-fits the sidebar instead
+/// of leaving it at a width the terminal no longer has.
+fn explorer_width(app: &App, area: Rect) -> u16 {
+    let default =
+        (area.width * EXPLORER_PERCENT / 100).clamp(EXPLORER_MIN.min(area.width), EXPLORER_MAX);
+    let ceiling = area.width.saturating_sub(WORKSPACE_MIN).max(default);
+
+    match app.explorer_width {
+        Some(width) => width.clamp(default, ceiling),
+        None => default,
+    }
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -32,13 +54,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ])
         .split(area);
 
-    let explorer_width = (rows[1].width * EXPLORER_PERCENT / 100)
-        .clamp(EXPLORER_MIN.min(rows[1].width), EXPLORER_MAX);
-
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(explorer_width), Constraint::Min(20)])
+        .constraints([
+            Constraint::Length(explorer_width(app, rows[1])),
+            Constraint::Min(20),
+        ])
         .split(rows[1]);
+
+    // The mouse handler works from a column and a row, so where things landed
+    // has to be written down as they are drawn.
+    app.panes.explorer = columns[0];
 
     header::draw(frame, app, rows[0]);
     explorer::draw(frame, app, columns[0]);
@@ -80,6 +106,9 @@ fn draw_workspace(frame: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Min(5),
         ])
         .split(area);
+
+    app.panes.editor = rows[1];
+    app.panes.results = rows[2];
 
     editor::draw_tabs(frame, app, rows[0]);
     editor::draw(frame, app, rows[1]);

@@ -267,13 +267,13 @@ const SECTIONS: &[Section] = &[
     (
         "Databases",
         &[
-            ("j / k", "Move"),
+            ("j / k", "Move, g / G for the ends"),
             ("l / Space", "Expand"),
             ("h", "Collapse, or go to parent"),
             ("Enter", "Connect, or open the table"),
-            ("g / G", "First / last"),
             ("n / e / d", "New / edit / disconnect"),
             ("r", "Reload from the server"),
+            ("drag edge", "Widen the sidebar"),
         ],
     ),
     (

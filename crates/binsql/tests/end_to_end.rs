@@ -7,7 +7,7 @@ use std::time::Duration;
 use binsql::app::{App, Message, Pane};
 use binsql::ui;
 use binsql_core::{Backend, Config, DataSource};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -364,6 +364,116 @@ async fn enter_shows_the_whole_record_stacked() {
         app.console().grid().expect("grid").row,
         1,
         "stepping records should move the grid cursor with it"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A press, a drag and a release on the seam between the sidebar and the
+/// workspace.
+fn drag_divider(app: &mut App, from: u16, to: u16) {
+    let at = |kind, column| MouseEvent {
+        kind,
+        column,
+        row: 4,
+        modifiers: KeyModifiers::NONE,
+    };
+    binsql::app::mouse::handle(app, at(MouseEventKind::Down(MouseButton::Left), from));
+    binsql::app::mouse::handle(app, at(MouseEventKind::Drag(MouseButton::Left), to));
+    binsql::app::mouse::handle(app, at(MouseEventKind::Up(MouseButton::Left), to));
+}
+
+#[tokio::test]
+async fn the_sidebar_widens_by_dragging_its_edge() {
+    // A schema of long table names does not fit the width that suits a schema
+    // of short ones, and the layout cannot know which it is looking at.
+    let path = fixture("divider");
+    const LONG: &str = "_NestedContentMigrationBackup";
+    {
+        let session =
+            binsql_core::Session::open("seed", config(&path).get("demo").unwrap().clone())
+                .await
+                .expect("open seed session");
+        session
+            .run(None, &format!("CREATE TABLE {LONG} (id INTEGER)"), None)
+            .await
+            .expect("create table");
+    }
+
+    let (mut app, mut messages) = App::new(config(&path));
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+
+    // The renderer is what records where the panes landed, so nothing can be
+    // dragged before the first frame.
+    let screen = render(&mut app);
+    assert!(
+        !screen.contains(LONG),
+        "the default width should not fit this name, or the test proves nothing:\n{screen}"
+    );
+    let before = app.panes.explorer.width;
+    let edge = app.panes.explorer.right() - 1;
+
+    drag_divider(&mut app, edge, edge + 14);
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+    assert_eq!(
+        app.panes.explorer.width,
+        before + 14,
+        "the sidebar should follow the drag"
+    );
+    // Which is the whole point: the name that did not fit now does.
+    assert!(
+        screen.contains(LONG),
+        "a widened sidebar should show the whole name:\n{screen}"
+    );
+
+    // It only ever widens: the default is already what fits ordinary names.
+    let edge = app.panes.explorer.right() - 1;
+    drag_divider(&mut app, edge, 4);
+    render(&mut app);
+    assert_eq!(
+        app.panes.explorer.width, before,
+        "dragging in should stop at the default width"
+    );
+
+    // A press that missed the seam is not the start of a drag.
+    let edge = app.panes.explorer.right() - 1;
+    drag_divider(&mut app, edge.saturating_sub(6), edge + 20);
+    render(&mut app);
+    assert_eq!(
+        app.panes.explorer.width, before,
+        "a press away from the seam should not resize anything"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn a_dragged_sidebar_still_leaves_room_to_work() {
+    let path = fixture("dividerclamp");
+    let (mut app, _messages) = App::new(config(&path));
+    render(&mut app);
+
+    // Dragged past the right-hand edge of the terminal.
+    let edge = app.panes.explorer.right() - 1;
+    drag_divider(&mut app, edge, WIDTH + 40);
+    render(&mut app);
+    assert!(
+        app.panes.explorer.width < WIDTH,
+        "the workspace should keep a usable width: {}",
+        app.panes.explorer.width
+    );
+
+    // And a window that shrinks re-fits it rather than stranding it.
+    let mut terminal = Terminal::new(TestBackend::new(60, 20)).expect("terminal");
+    terminal
+        .draw(|frame| ui::draw(frame, &mut app))
+        .expect("draw");
+    assert!(
+        app.panes.explorer.width < 60,
+        "the sidebar should fit the smaller terminal: {}",
+        app.panes.explorer.width
     );
 
     let _ = std::fs::remove_file(&path);

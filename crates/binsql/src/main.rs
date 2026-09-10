@@ -2,10 +2,11 @@
 
 use anyhow::{Context, Result, bail};
 use binsql_core::{Backend, Config, DataSource};
-use crossterm::event::{Event, EventStream};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind};
+use crossterm::execute;
 use futures_util::StreamExt;
 
-use binsql::app::{self, App, keys};
+use binsql::app::{self, App, keys, mouse};
 use binsql::{cli, ui};
 
 const HELP: &str = "\
@@ -87,7 +88,13 @@ async fn main() -> Result<()> {
     }
 
     let mut terminal = ratatui::init();
+    // Mouse reporting buys one gesture — dragging the sidebar's edge — and
+    // costs the terminal's own click-to-select, which most terminals hand back
+    // while ⇧ is held. Worth it for a pane whose right width depends on the
+    // schema in front of you.
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let result = run(&mut terminal, &mut app, &mut messages).await;
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -98,15 +105,26 @@ async fn run(
     messages: &mut tokio::sync::mpsc::UnboundedReceiver<app::Message>,
 ) -> Result<()> {
     let mut events = EventStream::new();
+    // Mouse reporting means events arrive that change nothing on screen — a
+    // key release, a press that missed. Redrawing for those would repaint the
+    // whole layout every time the pointer twitched.
+    let mut dirty = true;
 
     loop {
-        terminal.draw(|frame| ui::draw(frame, app))?;
+        if dirty {
+            terminal.draw(|frame| ui::draw(frame, app))?;
+        }
+        dirty = true;
 
         tokio::select! {
             event = events.next() => match event {
-                Some(Ok(Event::Key(key))) => keys::handle(app, key),
+                Some(Ok(Event::Key(key))) => {
+                    dirty = key.kind == KeyEventKind::Press;
+                    keys::handle(app, key);
+                }
+                Some(Ok(Event::Mouse(event))) => dirty = mouse::handle(app, event),
                 Some(Ok(Event::Resize(_, _))) => {}
-                Some(Ok(_)) => {}
+                Some(Ok(_)) => dirty = false,
                 Some(Err(error)) => return Err(error.into()),
                 // stdin closed; there is no way to drive the UI any more.
                 None => break,
