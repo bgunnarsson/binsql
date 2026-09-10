@@ -109,15 +109,25 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub status: Status,
     pub should_quit: bool,
-    /// The sidebar width someone has dragged to, if they have. Held raw and
-    /// clamped at draw time, where the terminal's size is known — so a window
-    /// resize re-fits it instead of stranding it.
+    /// The sidebar width and query-pane height someone has dragged to, if they
+    /// have. Held raw and clamped at draw time, where the terminal's size is
+    /// known — so a window resize re-fits them instead of stranding them.
     pub explorer_width: Option<u16>,
-    /// Set while the sidebar's edge is being dragged.
-    pub dragging_divider: bool,
+    pub editor_height: Option<u16>,
+    /// The edge being dragged, while one is.
+    pub dragging: Option<Divider>,
     pub panes: PaneAreas,
     next_console_id: u64,
     tx: UnboundedSender<Message>,
+}
+
+/// A seam between panes that can be dragged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Divider {
+    /// Between the sidebar and the workspace. Moves left and right.
+    Sidebar,
+    /// Between the query pane and the results. Moves up and down.
+    Results,
 }
 
 /// Where the panes were last drawn.
@@ -152,7 +162,8 @@ impl App {
             status: Status::new("⌃K for commands, ? for help", Tone::Info),
             should_quit: false,
             explorer_width: None,
-            dragging_divider: false,
+            editor_height: None,
+            dragging: None,
             panes: PaneAreas::default(),
             next_console_id: 0,
             tx,

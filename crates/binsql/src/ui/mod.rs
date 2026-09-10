@@ -41,6 +41,17 @@ fn explorer_width(app: &App, area: Rect) -> u16 {
     }
 }
 
+/// A dragged query-pane height, bounded so neither it nor the grid below can be
+/// squeezed out.
+///
+/// Unlike the sidebar this goes both ways: the default suits writing a query,
+/// and reading a wide result is the other half of the job.
+fn clamp_editor(height: u16, area: Rect) -> u16 {
+    let available = area.height.saturating_sub(1); // the tab strip
+    let ceiling = available.saturating_sub(RESULTS_MIN).max(EDITOR_MIN);
+    height.clamp(EDITOR_MIN.min(ceiling), ceiling)
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(theme::body()), area);
@@ -97,14 +108,32 @@ fn recede(frame: &mut Frame, area: Rect, amount: f32) {
     }
 }
 
+/// The query pane's default share of the workspace.
+const EDITOR_PERCENT: u16 = 38;
+/// A border, a line of SQL, a border. Less than this is not a smaller pane but
+/// a broken one.
+const EDITOR_MIN: u16 = 3;
+/// Likewise for the grid: a border, a header, a row, a border.
+const RESULTS_MIN: u16 = 5;
+
 fn draw_workspace(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Untouched, the split is the one it has always been. Only a drag replaces
+    // it with an explicit height, so nobody who never reaches for the seam sees
+    // the layout shift under them.
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Percentage(38),
-            Constraint::Min(5),
-        ])
+        .constraints(match app.editor_height {
+            Some(height) => [
+                Constraint::Length(1),
+                Constraint::Length(clamp_editor(height, area)),
+                Constraint::Min(0),
+            ],
+            None => [
+                Constraint::Length(1),
+                Constraint::Percentage(EDITOR_PERCENT),
+                Constraint::Min(RESULTS_MIN),
+            ],
+        })
         .split(area);
 
     app.panes.editor = rows[1];

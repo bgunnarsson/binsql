@@ -252,6 +252,7 @@ const SECTIONS: &[Section] = &[
             ("⌥h ⌥k ⌥j", "Databases / query / results"),
             ("F1 or ?", "This help"),
             ("F5", "Refresh the selected node"),
+            ("drag an edge", "Resize the panes"),
             ("⌃Q", "Quit"),
         ],
     ),
@@ -273,7 +274,6 @@ const SECTIONS: &[Section] = &[
             ("Enter", "Connect, or open the table"),
             ("n / e / d", "New / edit / disconnect"),
             ("r", "Reload from the server"),
-            ("drag edge", "Widen the sidebar"),
         ],
     ),
     (

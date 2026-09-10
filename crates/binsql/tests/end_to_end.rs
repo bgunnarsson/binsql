@@ -369,18 +369,28 @@ async fn enter_shows_the_whole_record_stacked() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// A press, a drag and a release on the seam between the sidebar and the
-/// workspace.
-fn drag_divider(app: &mut App, from: u16, to: u16) {
-    let at = |kind, column| MouseEvent {
+/// A press, a drag and a release, in whatever direction the seam moves.
+fn drag(app: &mut App, from: (u16, u16), to: (u16, u16)) {
+    let at = |kind, (column, row)| MouseEvent {
         kind,
         column,
-        row: 4,
+        row,
         modifiers: KeyModifiers::NONE,
     };
     binsql::app::mouse::handle(app, at(MouseEventKind::Down(MouseButton::Left), from));
     binsql::app::mouse::handle(app, at(MouseEventKind::Drag(MouseButton::Left), to));
     binsql::app::mouse::handle(app, at(MouseEventKind::Up(MouseButton::Left), to));
+}
+
+/// The seam between the sidebar and the workspace, dragged sideways.
+fn drag_divider(app: &mut App, from: u16, to: u16) {
+    drag(app, (from, 4), (to, 4));
+}
+
+/// The seam between the query pane and the results, dragged up or down.
+fn drag_split(app: &mut App, from: u16, to: u16) {
+    let column = app.panes.editor.x + 4;
+    drag(app, (column, from), (column, to));
 }
 
 #[tokio::test]
@@ -444,6 +454,61 @@ async fn the_sidebar_widens_by_dragging_its_edge() {
     assert_eq!(
         app.panes.explorer.width, before,
         "a press away from the seam should not resize anything"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn the_results_pane_grows_by_dragging_the_split() {
+    // A query being written wants room the same query's results do not, so
+    // this one moves both ways rather than only outwards.
+    let path = fixture("split");
+    let (mut app, _messages) = App::new(config(&path));
+
+    render(&mut app);
+    let editor = app.panes.editor.height;
+    let results = app.panes.results.height;
+    let seam = app.panes.editor.bottom() - 1;
+
+    // Up: a smaller query pane, a bigger grid.
+    drag_split(&mut app, seam, seam - 6);
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+    assert_eq!(
+        app.panes.editor.height,
+        editor - 6,
+        "the query pane shrinks"
+    );
+    assert_eq!(
+        app.panes.results.height,
+        results + 6,
+        "and the grid takes what it gave up"
+    );
+
+    // Down again, past where it started.
+    let seam = app.panes.editor.bottom() - 1;
+    drag_split(&mut app, seam, seam + 10);
+    render(&mut app);
+    assert_eq!(app.panes.editor.height, editor + 4, "the query pane grows");
+
+    // Neither pane can be squeezed out, from either end.
+    let seam = app.panes.editor.bottom() - 1;
+    drag_split(&mut app, seam, 0);
+    render(&mut app);
+    assert!(
+        app.panes.editor.height >= 3,
+        "the query pane kept a line to write on: {}",
+        app.panes.editor.height
+    );
+
+    let seam = app.panes.editor.bottom() - 1;
+    drag_split(&mut app, seam, HEIGHT);
+    render(&mut app);
+    assert!(
+        app.panes.results.height >= 5,
+        "the grid kept room for a row: {}",
+        app.panes.results.height
     );
 
     let _ = std::fs::remove_file(&path);
