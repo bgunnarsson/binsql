@@ -10,8 +10,14 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
+use binsql_core::schema_cache::{Key, Level};
 use binsql_core::secrets::keychain;
-use binsql_core::{Catalog, Column, Error, ObjectKind, ObjectRef, ResultSet, Session, Workspace};
+use binsql_core::{
+    Catalog, Column, Error, ObjectKind, ObjectRef, ResultSet, SchemaCache, Session, SourceId,
+    Workspace,
+};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio_util::sync::CancellationToken;
 
@@ -102,6 +108,9 @@ pub struct App {
     /// Reads like a `Config`, because it derefs to the merged one. Writes name
     /// the file they mean.
     pub config: Workspace,
+    /// What the explorer found last time, so a tree that has been opened before
+    /// opens again without waiting on the server.
+    pub schema_cache: SchemaCache,
     pub sessions: HashMap<String, Arc<Session>>,
     pub tree: Tree,
     pub consoles: Vec<Console>,
@@ -128,6 +137,15 @@ pub struct App {
     pub tabs: Vec<TabSpan>,
     next_console_id: u64,
     tx: UnboundedSender<Message>,
+}
+
+/// One level as the cache handed it back, so `show_cached` can read the right
+/// type out and hand it to the right `apply_*` in one pass.
+enum Cached {
+    Catalogs(Vec<Catalog>),
+    Schemas(Vec<String>),
+    Objects(Vec<ObjectRef>),
+    Columns(Vec<Column>),
 }
 
 /// What a held mouse button is doing.
@@ -179,6 +197,7 @@ impl App {
 
         let mut app = App {
             config,
+            schema_cache: SchemaCache::from_env(),
             sessions: HashMap::new(),
             tree,
             consoles: Vec::new(),
@@ -387,6 +406,11 @@ impl App {
         let Some(id) = self.tree.selected_id() else {
             return;
         };
+        // Forgotten first, or the cache would hand back exactly what Refresh
+        // was pressed to get rid of.
+        if let Some(key) = self.schema_key(id) {
+            self.schema_cache.forget(&key);
+        }
         self.tree.invalidate(id);
         self.load_children(id);
     }
@@ -497,11 +521,93 @@ impl App {
         self.info(format!("Disconnected {name}"));
     }
 
+    // --- the schema cache ---
+    //
+    // See `binsql_core::schema_cache`. In short:
+    //
+    // Every level is shown from the cache the moment it is asked for, and the
+    // real query still goes out behind it. What comes back is only applied when
+    // it differs from what was shown, so an unchanged schema never redraws and
+    // a changed one corrects itself a moment later.
+
+    /// What a data source's cached schema is filed under: its name and what it
+    /// connects to.
+    fn source_id(&self, name: &str) -> Option<SourceId> {
+        let source = self.config.get(name)?;
+        Some(SourceId::new(name, &source.dsn))
+    }
+
+    /// The cache key for a node's *children* — what expanding it fetches.
+    fn schema_key(&self, node: NodeId) -> Option<Key> {
+        let kind = self.tree.find(node)?.kind.clone();
+        let context = self.tree.context(node)?;
+        let name = context.source?;
+        let source = self.source_id(&name)?;
+
+        match kind {
+            NodeKind::Source { .. } => Some(Key::catalogs(&source)),
+            NodeKind::Catalog { name: catalog, .. } => {
+                // Which level a catalog holds depends on the backend, so this
+                // needs the session that a catalog node can only have once it
+                // is connected.
+                let session = self.sessions.get(&name)?;
+                if session.backend().has_schemas() {
+                    Some(Key::schemas(&source, &catalog))
+                } else {
+                    Some(Key::objects(&source, &catalog, None))
+                }
+            }
+            NodeKind::Schema { name: schema } => {
+                Some(Key::objects(&source, &context.catalog?, Some(&schema)))
+            }
+            NodeKind::Object { object } => Some(Key::columns(&source, &object)),
+            NodeKind::Folder { .. } | NodeKind::Group { .. } => None,
+            NodeKind::ColumnNode { .. } | NodeKind::Note { .. } => None,
+        }
+    }
+
+    /// Fills a node from the cache if it can, and marks it loading if it
+    /// cannot. Either way the query that follows is what settles it.
+    fn show_cached(&mut self, node: NodeId) {
+        let cached = self.schema_key(node).and_then(|key| match key.level() {
+            Level::Catalogs => self.schema_cache.get(&key).map(Cached::Catalogs),
+            Level::Schemas => self.schema_cache.get(&key).map(Cached::Schemas),
+            Level::Objects => self.schema_cache.get(&key).map(Cached::Objects),
+            Level::Columns => self.schema_cache.get(&key).map(Cached::Columns),
+        });
+
+        match cached {
+            Some(Cached::Catalogs(catalogs)) => self.apply_catalogs(node, &catalogs),
+            Some(Cached::Schemas(schemas)) => self.apply_schemas(node, &schemas),
+            Some(Cached::Objects(objects)) => self.apply_objects(node, objects),
+            Some(Cached::Columns(columns)) => self.apply_columns(node, &columns),
+            None => self.tree.set_loading(node),
+        }
+    }
+
+    /// Whether a level that has just come back differs from what the cache
+    /// already put on screen — and, when it does, writes it through so the next
+    /// run starts from it. `false` means the revalidation agreed and the tree
+    /// is already right.
+    fn is_change<T>(&self, node: NodeId, fetched: &T) -> bool
+    where
+        T: Serialize + DeserializeOwned + PartialEq,
+    {
+        let Some(key) = self.schema_key(node) else {
+            return true;
+        };
+        if self.schema_cache.get::<T>(&key).as_ref() == Some(fetched) {
+            return false;
+        }
+        self.schema_cache.put(&key, fetched);
+        true
+    }
+
     fn load_catalogs(&mut self, node: NodeId, name: &str) {
         let Some(session) = self.sessions.get(name).cloned() else {
             return;
         };
-        self.tree.set_loading(node);
+        self.show_cached(node);
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let message = match session.catalogs().await {
@@ -516,7 +622,7 @@ impl App {
     }
 
     fn load_schemas(&mut self, node: NodeId, session: Arc<Session>, catalog: String) {
-        self.tree.set_loading(node);
+        self.show_cached(node);
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let message = match session.schemas(&catalog).await {
@@ -537,7 +643,7 @@ impl App {
         catalog: String,
         schema: Option<String>,
     ) {
-        self.tree.set_loading(node);
+        self.show_cached(node);
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let message = match session.objects(&catalog, schema.as_deref()).await {
@@ -552,7 +658,7 @@ impl App {
     }
 
     fn load_columns(&mut self, node: NodeId, session: Arc<Session>, object: ObjectRef) {
-        self.tree.set_loading(node);
+        self.show_cached(node);
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let message = match session.columns(&object).await {
@@ -707,47 +813,44 @@ impl App {
                 self.error(format!("{name}: {error}"));
             }
 
+            // The four levels all read the same: apply what came back only if
+            // it is not already what the cache put on screen.
             Message::Catalogs { node, catalogs } => {
-                let children: Vec<Node> = catalogs
-                    .iter()
-                    .map(|catalog| self.tree.catalog_node(&catalog.name, catalog.is_current))
-                    .collect();
-                self.tree.set_children(node, children);
-
-                // Drop straight into the database the connection is attached
-                // to; it is nearly always the one being worked in.
-                if let Some(current) = catalogs.iter().position(|catalog| catalog.is_current)
-                    && let Some(child) = self.tree.find(node).and_then(|n| n.children.get(current))
-                {
-                    let child = child.id;
-                    self.tree.select_id(child);
-                    self.load_children(child);
+                if self.is_change(node, &catalogs) {
+                    self.apply_catalogs(node, &catalogs);
                 }
             }
 
             Message::Schemas { node, schemas } => {
-                let children: Vec<Node> = schemas
-                    .iter()
-                    .map(|schema| self.tree.schema_node(schema))
-                    .collect();
-                self.tree.set_children(node, children);
+                if self.is_change(node, &schemas) {
+                    self.apply_schemas(node, &schemas);
+                }
             }
 
             Message::Objects { node, objects } => {
-                let children = self.group_objects(objects);
-                self.tree.set_children(node, children);
+                if self.is_change(node, &objects) {
+                    self.apply_objects(node, objects);
+                }
             }
 
             Message::Columns { node, columns } => {
-                let children: Vec<Node> = columns
-                    .iter()
-                    .map(|column| self.tree.column_node(column.clone()))
-                    .collect();
-                self.tree.set_children(node, children);
+                if self.is_change(node, &columns) {
+                    self.apply_columns(node, &columns);
+                }
             }
 
             Message::LoadFailed { node, error } => {
-                self.tree.set_failed(node, error.clone());
+                // A revalidation that fails leaves what the cache already
+                // showed standing. The tree is not wrong, only unconfirmed, and
+                // replacing a working listing with an error would be a
+                // regression on what you could see a moment ago.
+                let showing = self
+                    .tree
+                    .find(node)
+                    .is_some_and(|node| node.state == LoadState::Loaded);
+                if !showing {
+                    self.tree.set_failed(node, error.clone());
+                }
                 self.error(error);
             }
 
@@ -757,6 +860,48 @@ impl App {
                 result,
             } => self.finish_query(console, generation, result),
         }
+    }
+
+    /// Hangs a level's children off a node. Called with what the cache held and
+    /// again with what the query returned, so both paths build the same tree.
+    fn apply_catalogs(&mut self, node: NodeId, catalogs: &[Catalog]) {
+        let children: Vec<Node> = catalogs
+            .iter()
+            .map(|catalog| self.tree.catalog_node(&catalog.name, catalog.is_current))
+            .collect();
+        self.tree.set_children(node, children);
+
+        // Drop straight into the database the connection is attached to; it is
+        // nearly always the one being worked in. Cached, this cascades through
+        // the levels below it without a round trip anywhere.
+        if let Some(current) = catalogs.iter().position(|catalog| catalog.is_current)
+            && let Some(child) = self.tree.find(node).and_then(|n| n.children.get(current))
+        {
+            let child = child.id;
+            self.tree.select_id(child);
+            self.load_children(child);
+        }
+    }
+
+    fn apply_schemas(&mut self, node: NodeId, schemas: &[String]) {
+        let children: Vec<Node> = schemas
+            .iter()
+            .map(|schema| self.tree.schema_node(schema))
+            .collect();
+        self.tree.set_children(node, children);
+    }
+
+    fn apply_objects(&mut self, node: NodeId, objects: Vec<ObjectRef>) {
+        let children = self.group_objects(objects);
+        self.tree.set_children(node, children);
+    }
+
+    fn apply_columns(&mut self, node: NodeId, columns: &[Column]) {
+        let children: Vec<Node> = columns
+            .iter()
+            .map(|column| self.tree.column_node(column.clone()))
+            .collect();
+        self.tree.set_children(node, children);
     }
 
     /// Splits a schema's objects into Tables and Views. The whole schema is
@@ -893,11 +1038,14 @@ impl App {
 
     pub fn remove_data_source(&mut self, name: &str) {
         self.sessions.remove(name);
+        // Both read before the config drops the entry, since both are derived
+        // from the connection string it is about to take away.
         let secret = self
             .config
             .get(name)
             .and_then(|source| keychain::account(&source.dsn))
             .map(str::to_string);
+        let source_id = self.source_id(name);
 
         let removed = match self.config.remove(name) {
             Ok(removed) => removed,
@@ -915,6 +1063,9 @@ impl App {
                 && let Err(error) = keychain::delete(&account)
             {
                 self.warn(format!("Removed {name}, but {error}"));
+            }
+            if let Some(source) = &source_id {
+                self.schema_cache.forget_source(source);
             }
             self.tree.remove_source(name);
             self.warn(format!("Removed {name}"));

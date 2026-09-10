@@ -55,7 +55,8 @@ bad DSN. `-h`, `-V` and `--debug-keys` print and stop.
 Data sources live in `~/.config/binsql/connections.json`, honouring
 `BINSQL_CONFIG` and `XDG_CONFIG_HOME`. Add one from inside the app with `⌃N`
 rather than editing the file; it is written owner-only through a temp file, so a
-failed write cannot truncate a config that holds credentials.
+failed write cannot truncate a config that holds credentials. A repository can
+carry its own alongside it — see [project data sources](#project-data-sources).
 
 A connection can sit at the top level, or inside a **folder** — a client, a
 project — which becomes a group in the sidebar:
@@ -94,8 +95,9 @@ Folders are one level deep, and a connection is named `folder/name` everywhere
 it is referred to: `binsql eimskip/prod`, the `default` key, the command
 palette. A bare name works when only one folder has it, so `binsql scratch` and
 `binsql local` are fine above but `binsql prod` would not be if a second folder
-had one — it would name two things, so it would name neither. **A v2 config
-opens unchanged**; everything v3 adds is optional.
+had one — it would name two things, so it would name neither. A `default` that
+has stopped naming one thing says so at startup rather than quietly opening
+nothing. **A v2 config opens unchanged**; everything v3 adds is optional.
 
 A `dsn` that reads `keychain://eimskip/prod` keeps the connection string in the
 operating system's credential store rather than in the file — see [the
@@ -108,6 +110,42 @@ be registered — and checks the whole script rather than its first word: a
 `DELETE` under a comment, behind a `SELECT 1;`, or fronted by a `WITH` is still
 a write, and a statement binsql cannot classify counts as one too.
 `open_on_start` connects it at launch. `description` is a note to yourself.
+
+### Project data sources
+
+A repository can carry its own. binsql looks for the nearest `.binsql.json` at
+or above the working directory and stacks it over your config, so
+`cd eimskip && binsql` shows that project's databases without them living in
+your personal file. Command mode reads the same file.
+
+```json
+{
+  "connections": {
+    "eimskip": {
+      "local": { "driver": "mssql", "dsn": "keychain://eimskip/local" }
+    }
+  }
+}
+```
+
+The layers merge per connection rather than per file, so a project's
+`eimskip/local` joins your `eimskip/prod` in **one** `eimskip` folder in the
+sidebar rather than a second folder of the same name appearing beside it. Where
+both define the same name, the project wins — it is the more specific of the
+two. A DSN given on the command line sits above both and is never written
+anywhere.
+
+Since a connection string is a [keychain](#the-keychain) or [Key
+Vault](#azure-key-vault-references) reference, this file holds names, drivers
+and flags and nothing sensitive, which is what makes it worth committing. It is
+written without touching its own permissions or the repository's; your config
+keeps its owner-only treatment.
+
+When a project file is in play, the `⌃N` form grows a **Saved in** field naming
+the two files, and a new connection starts in the project you are standing in.
+An existing one goes back where it came from. Switching that field moves the
+connection between the files rather than copying it. `BINSQL_PROJECT` names one
+explicitly, and set empty turns the search off.
 
 ## Keys
 
@@ -352,6 +390,36 @@ could also use a managed identity or an `AZURE_CLIENT_ID` service principal via
 than two — `fedauth=` uses the same mechanism — but a CI job has no `az login`
 to lean on, so see [Status](#status).
 
+### The schema cache
+
+Every level of the explorer costs a round trip, and against a remote SQL Server
+four of them is the difference between opening a table and waiting to open one.
+So each answer is written to `~/.cache/binsql/schema` and read back the next
+time that node is expanded.
+
+The cache is never trusted on its own. A hit is shown immediately **and** the
+real query still runs; the answer is only applied when it differs from what was
+shown. The common case is instant and silent, a schema that has actually
+changed redraws itself a moment later, and there is no staleness window to
+reason about. `⌃F5` forgets the entry first, so a refresh cannot be answered by
+the thing it was pressed to get past.
+
+Entries are keyed by the data source's name **and** its connection string, so
+repointing a `local` at another server does not hand it the tree the old one
+had, and two projects that both call something `local` do not share one. A file
+that cannot be read, cannot be parsed or has gone stale is a miss rather than
+an error: the worst a broken cache can do is cost the round trip it was there
+to save.
+
+Nothing in it is a secret — object names, not data — so it is plain JSON in the
+cache directory rather than the encrypted secret cache above. Deleting the
+whole thing costs one slow expansion.
+
+| Variable | Effect |
+| --- | --- |
+| `BINSQL_SCHEMA_CACHE` | `0`, `off` or `false` turns it off, and every expansion is a round trip. |
+| `XDG_CACHE_HOME` | Where it lives, if not `~/.cache`. |
+
 ## Design
 
 Two crates:
@@ -433,7 +501,8 @@ v2 yet:
   script never built SQL by concatenation. Adding them means teaching every
   adapter to bind parameters; until then, command mode takes SQL and no values.
 - **Managing data sources from the command line.** v2 had `binsql conn add`. In
-  v3 a data source is added with `⌃N`, or by editing `connections.json`.
+  v3 a data source is added with `⌃N`, or by editing the config by hand — which
+  now means knowing whether you meant the user file or a project's.
 - **Managed identity and service-principal credentials** for Key Vault. The
   references work and so does the CLI credential; the other two arms of v2's
   chain are missing, which matters now that command mode is here and a CI job

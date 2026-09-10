@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use binsql::app::{App, Message, Pane};
 use binsql::ui;
-use binsql_core::{Backend, Config, DataSource, Workspace};
+use binsql_core::{Backend, Config, DataSource, SchemaCache, Workspace};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -40,6 +40,17 @@ fn config(path: &std::path::Path) -> Workspace {
         },
     );
     Workspace::single(config, path.with_extension("connections.json"))
+}
+
+/// The app under test, with its schema cache pointed at the fixture's own
+/// directory. The suite exercises the real cache without writing into the
+/// developer's `~/.cache`, and without one test's tree reaching another's.
+fn app(config: Workspace, at: &std::path::Path) -> (App, UnboundedReceiver<Message>) {
+    let (mut app, messages) = App::new(config);
+    let dir = at.with_extension("cache");
+    let _ = std::fs::remove_dir_all(&dir);
+    app.schema_cache = SchemaCache::new(dir, binsql_core::schema_cache::DEFAULT_TTL);
+    (app, messages)
 }
 
 /// Applies whatever background work has finished, waiting briefly for the first
@@ -123,7 +134,7 @@ async fn browses_a_database_and_shows_query_results() {
             .expect("insert rows");
     }
 
-    let (mut app, mut messages) = App::new(config(&path));
+    let (mut app, mut messages) = app(config(&path), &path);
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
 
@@ -181,7 +192,7 @@ async fn browses_a_database_and_shows_query_results() {
 #[tokio::test]
 async fn help_and_palette_open_over_the_layout() {
     let path = fixture("overlays");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
 
     binsql::app::keys::handle(
         &mut app,
@@ -208,7 +219,7 @@ async fn help_and_palette_open_over_the_layout() {
 #[tokio::test]
 async fn the_connection_form_reports_what_is_wrong() {
     let path = fixture("form");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
 
     binsql::app::keys::handle(
         &mut app,
@@ -258,7 +269,7 @@ async fn ctrl_q_always_quits() {
     ];
 
     for (what, opener) in openers {
-        let (mut app, _messages) = App::new(config(&path));
+        let (mut app, _messages) = app(config(&path), &path);
         binsql::app::keys::handle(&mut app, opener);
         binsql::app::keys::handle(&mut app, ctrl_q);
         assert!(app.should_quit, "⌃Q did not quit with {what} open");
@@ -270,7 +281,7 @@ async fn ctrl_q_always_quits() {
 #[tokio::test]
 async fn help_closes_on_any_key_as_it_claims() {
     let path = fixture("helpclose");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
 
     binsql::app::keys::handle(&mut app, KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
     assert!(render(&mut app).contains("Any key closes this"));
@@ -314,7 +325,7 @@ async fn enter_shows_the_whole_record_stacked() {
             .expect("insert rows");
     }
 
-    let (mut app, mut messages) = App::new(config(&path));
+    let (mut app, mut messages) = app(config(&path), &path);
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
 
@@ -428,7 +439,7 @@ fn text_top_line(app: &mut App) -> String {
 #[tokio::test]
 async fn the_editor_scrolls_and_a_click_lands_where_it_looks() {
     let path = fixture("editorscroll");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
 
     // Comfortably more lines than the pane can show.
     let sql: String = (0..40).map(|i| format!("SELECT {i};\n")).collect();
@@ -483,7 +494,7 @@ async fn the_editor_scrolls_and_a_click_lands_where_it_looks() {
 #[tokio::test]
 async fn the_query_editor_edits_like_an_editor() {
     let path = fixture("editing");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
 
     let ctrl = |app: &mut App, ch| {
         binsql::app::keys::handle(app, KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL))
@@ -602,7 +613,7 @@ async fn double_clicking_the_sidebar_opens_things() {
             .expect("insert row");
     }
 
-    let (mut app, mut messages) = App::new(config(&path));
+    let (mut app, mut messages) = app(config(&path), &path);
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
 
@@ -645,7 +656,7 @@ async fn double_clicking_the_sidebar_opens_things() {
 #[tokio::test]
 async fn a_single_click_only_selects() {
     let path = fixture("singleclick");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
     render(&mut app);
 
     // The source is registered but not connected, and one click must not
@@ -669,7 +680,7 @@ async fn a_single_click_only_selects() {
 #[tokio::test]
 async fn clicking_a_tab_switches_console() {
     let path = fixture("tabs");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
 
     // Three consoles, each with something in it to tell them apart.
     app.console_mut().set_sql("SELECT one");
@@ -742,7 +753,7 @@ async fn clicking_a_pane_focuses_it() {
             .expect("insert rows");
     }
 
-    let (mut app, mut messages) = App::new(config(&path));
+    let (mut app, mut messages) = app(config(&path), &path);
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
     app.console_mut().set_sql("SELECT * FROM artist");
@@ -807,7 +818,7 @@ async fn the_sidebar_widens_by_dragging_its_edge() {
             .expect("create table");
     }
 
-    let (mut app, mut messages) = App::new(config(&path));
+    let (mut app, mut messages) = app(config(&path), &path);
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
 
@@ -861,7 +872,7 @@ async fn the_results_pane_grows_by_dragging_the_split() {
     // A query being written wants room the same query's results do not, so
     // this one moves both ways rather than only outwards.
     let path = fixture("split");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
 
     render(&mut app);
     let editor = app.panes.editor.height;
@@ -914,7 +925,7 @@ async fn the_results_pane_grows_by_dragging_the_split() {
 #[tokio::test]
 async fn a_dragged_sidebar_still_leaves_room_to_work() {
     let path = fixture("dividerclamp");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
     render(&mut app);
 
     // Dragged past the right-hand edge of the terminal.
@@ -946,7 +957,7 @@ async fn a_dragged_sidebar_still_leaves_room_to_work() {
 #[tokio::test]
 async fn the_header_says_where_the_query_will_run() {
     let path = fixture("header");
-    let (mut app, mut messages) = App::new(config(&path));
+    let (mut app, mut messages) = app(config(&path), &path);
 
     // Before anything is bound there is nothing better to say than the name of
     // the program.
@@ -1013,10 +1024,10 @@ async fn the_header_marks_a_read_only_connection() {
         },
     );
 
-    let (mut app, mut messages) = App::new(Workspace::single(
-        config,
-        path.with_extension("connections.json"),
-    ));
+    let (mut app, mut messages) = app(
+        Workspace::single(config, path.with_extension("connections.json")),
+        &path,
+    );
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
 
@@ -1064,7 +1075,7 @@ async fn a_field_opens_in_full_from_the_record() {
             .expect("insert row");
     }
 
-    let (mut app, mut messages) = App::new(config(&path));
+    let (mut app, mut messages) = app(config(&path), &path);
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
 
@@ -1155,7 +1166,7 @@ async fn the_record_viewer_is_sized_to_the_record() {
             .expect("insert row");
     }
 
-    let (mut app, mut messages) = App::new(config(&path));
+    let (mut app, mut messages) = app(config(&path), &path);
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
 
@@ -1254,7 +1265,7 @@ async fn the_header_and_status_line_are_legible() {
     const FLOOR: f64 = 3.0;
 
     let path = fixture("contrast");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
 
     let mut terminal = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("terminal");
     terminal
@@ -1323,7 +1334,7 @@ async fn folders_group_the_sidebar() {
         std::fs::write(dir.join(name), b"").expect("create database");
     }
 
-    let (mut app, mut messages) = App::new(foldered(&dir));
+    let (mut app, mut messages) = app(foldered(&dir), &dir.join("cache"));
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
 
@@ -1384,7 +1395,10 @@ async fn folders_start_closed() {
     );
     let config: Config = serde_json::from_str(&raw).expect("config parses");
 
-    let (mut app, _messages) = App::new(Workspace::single(config, dir.join("connections.json")));
+    let (mut app, _messages) = app(
+        Workspace::single(config, dir.join("connections.json")),
+        &dir.join("cache"),
+    );
     let screen = render(&mut app);
     println!("\n{screen}\n");
 
@@ -1423,7 +1437,7 @@ fn cell_colours(app: &mut App, x: u16, y: u16) -> (ratatui::style::Color, ratatu
 #[tokio::test]
 async fn an_open_modal_dims_what_is_behind_it() {
     let path = fixture("scrim");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
 
     // A cell in the header, well away from any modal.
     let (bright_fg, _) = cell_colours(&mut app, 1, 0);
@@ -1486,7 +1500,7 @@ fn distance(a: ratatui::style::Color, b: ratatui::style::Color) -> i32 {
 #[tokio::test]
 async fn the_splash_greets_and_any_key_dismisses_it() {
     let path = fixture("splash");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
     app.show_splash();
 
     let screen = render(&mut app);
@@ -1523,7 +1537,7 @@ async fn the_splash_greets_and_any_key_dismisses_it() {
 #[tokio::test]
 async fn the_splash_falls_back_in_a_narrow_terminal() {
     let path = fixture("splashnarrow");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
     app.show_splash();
 
     // Narrower than the wordmark, which must not overflow its own box.
@@ -1579,7 +1593,7 @@ async fn every_modal_hugs_its_content() {
     ];
 
     for (what, opener, title) in cases {
-        let (mut app, _messages) = App::new(config(&path));
+        let (mut app, _messages) = app(config(&path), &path);
         binsql::app::keys::handle(&mut app, opener);
         let screen = render(&mut app);
 
@@ -1623,7 +1637,7 @@ async fn every_modal_hugs_its_content() {
 #[tokio::test]
 async fn ctrl_c_cancels_a_running_query() {
     let path = fixture("cancel");
-    let (mut app, mut messages) = App::new(config(&path));
+    let (mut app, mut messages) = app(config(&path), &path);
     app.open_startup_sources();
     settle(&mut app, &mut messages).await;
 
@@ -1687,7 +1701,7 @@ async fn ctrl_c_cancels_a_running_query() {
 #[tokio::test]
 async fn the_tab_spans_match_what_was_drawn() {
     let path = fixture("tabspans");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
     for _ in 0..2 {
         binsql::app::keys::handle(
             &mut app,
@@ -1757,7 +1771,7 @@ async fn a_project_file_joins_the_user_config_in_one_sidebar() {
     std::fs::create_dir_all(&dir).expect("scratch dir");
     std::fs::write(dir.join("a.db"), b"").expect("create database");
 
-    let (mut app, _messages) = App::new(layered(&dir));
+    let (mut app, _messages) = app(layered(&dir), &dir.join("cache"));
 
     // One eimskip folder holding both, not one folder per file.
     assert_eq!(app.config.len(), 3);
@@ -1801,7 +1815,7 @@ async fn a_project_file_joins_the_user_config_in_one_sidebar() {
 #[tokio::test]
 async fn one_config_alone_does_not_offer_a_choice_of_file() {
     let path = fixture("no-project");
-    let (mut app, _messages) = App::new(config(&path));
+    let (mut app, _messages) = app(config(&path), &path);
 
     binsql::app::keys::handle(
         &mut app,
@@ -1832,7 +1846,10 @@ async fn an_ambiguous_default_says_which_two_it_found() {
     );
     let config: Config = serde_json::from_str(&raw).expect("config parses");
 
-    let (mut app, _messages) = App::new(Workspace::single(config, dir.join("connections.json")));
+    let (mut app, _messages) = app(
+        Workspace::single(config, dir.join("connections.json")),
+        &dir.join("cache"),
+    );
     app.open_startup_sources();
 
     let screen = render(&mut app);
@@ -1843,4 +1860,139 @@ async fn an_ambiguous_default_says_which_two_it_found() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Seeds one table into a fixture database.
+async fn seed(path: &std::path::Path) {
+    let session = binsql_core::Session::open("seed", config(path).get("demo").unwrap().clone())
+        .await
+        .expect("open seed session");
+    session
+        .run(None, "CREATE TABLE artist (id INTEGER PRIMARY KEY)", None)
+        .await
+        .expect("create table");
+}
+
+/// What a data source's cached schema is filed under, as the app computes it.
+fn cache_key(path: &std::path::Path) -> binsql_core::schema_cache::Key {
+    let source = binsql_core::SourceId::new("demo", &path.display().to_string());
+    binsql_core::schema_cache::Key::catalogs(&source)
+}
+
+#[tokio::test]
+async fn browsing_writes_the_tree_to_the_schema_cache() {
+    let path = fixture("cache-written");
+    seed(&path).await;
+
+    let (mut app, mut messages) = app(config(&path), &path);
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+    assert!(render(&mut app).contains("artist"), "the tree never loaded");
+
+    let catalogs: Vec<binsql_core::Catalog> = app
+        .schema_cache
+        .get(&cache_key(&path))
+        .expect("the catalogs should have been cached");
+    assert!(catalogs.iter().any(|catalog| catalog.name == "main"));
+
+    // Filed under the connection string as well as the name, so the same name
+    // pointing elsewhere finds nothing.
+    let elsewhere = binsql_core::SourceId::new("demo", "/somewhere/else.db");
+    assert!(
+        app.schema_cache
+            .get::<Vec<binsql_core::Catalog>>(&binsql_core::schema_cache::Key::catalogs(&elsewhere))
+            .is_none()
+    );
+
+    let _ = std::fs::remove_dir_all(path.with_extension("cache"));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The cache's whole claim, both halves: what it holds is on screen before the
+/// server has answered, and what the server then says replaces it if it differs.
+#[tokio::test]
+async fn the_cache_paints_first_and_the_server_corrects_it() {
+    let path = fixture("cache-first");
+    seed(&path).await;
+
+    let (mut app, mut messages) = app(config(&path), &path);
+
+    // A catalog this database does not have, so its presence on screen can
+    // only have come off the disk.
+    app.schema_cache.put(
+        &cache_key(&path),
+        &vec![binsql_core::Catalog {
+            name: "from-the-cache".into(),
+            is_current: false,
+        }],
+    );
+
+    app.open_startup_sources();
+
+    // Just the connection — the catalogs have not come back yet.
+    let connected = messages.recv().await.expect("a Connected message");
+    app.handle(connected);
+
+    let screen = render(&mut app);
+    println!("\n{screen}\n");
+    assert!(
+        screen.contains("from-the-cache"),
+        "the cache should have painted before the query returned:\n{screen}"
+    );
+
+    // Now let the real answer land.
+    settle(&mut app, &mut messages).await;
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("main"),
+        "the server's answer should have replaced it:\n{screen}"
+    );
+    assert!(
+        !screen.contains("from-the-cache"),
+        "the stale catalog should be gone:\n{screen}"
+    );
+
+    let _ = std::fs::remove_dir_all(path.with_extension("cache"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn refreshing_forgets_the_cache_and_refetches() {
+    let path = fixture("cache-refresh");
+    seed(&path).await;
+
+    let (mut app, mut messages) = app(config(&path), &path);
+    app.open_startup_sources();
+    settle(&mut app, &mut messages).await;
+
+    let key = cache_key(&path);
+    assert!(
+        app.schema_cache
+            .get::<Vec<binsql_core::Catalog>>(&key)
+            .is_some(),
+        "browsing should have cached the catalogs"
+    );
+
+    let node = app.tree.source_node("demo").expect("the source node").id;
+    app.tree.select_id(node);
+    binsql::app::keys::handle(&mut app, KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
+
+    // Dropped the moment Refresh is pressed, so the refetch is authoritative
+    // rather than being answered by the entry it was pressed to get past.
+    assert!(
+        app.schema_cache
+            .get::<Vec<binsql_core::Catalog>>(&key)
+            .is_none(),
+        "refresh should have forgotten the entry"
+    );
+
+    settle(&mut app, &mut messages).await;
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("main"),
+        "refresh should refetch, not empty the tree:\n{screen}"
+    );
+
+    let _ = std::fs::remove_dir_all(path.with_extension("cache"));
+    let _ = std::fs::remove_file(&path);
 }

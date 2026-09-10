@@ -33,6 +33,7 @@ futures-util.workspace = true
 tokio-util = "0.7"
 serde_json.workspace = true
 dirs = "7.0.0"
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 serde_json.workspace = true

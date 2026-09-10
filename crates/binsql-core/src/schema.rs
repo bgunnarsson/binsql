@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use crate::backend::Dialect;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ObjectKind {
     Table,
     View,
@@ -18,7 +20,7 @@ impl ObjectKind {
 /// A database, as the tree's second level. `is_current` marks the one the
 /// connection is actually attached to, which is the only one Postgres can read
 /// without reconnecting.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Catalog {
     pub name: String,
     pub is_current: bool,
@@ -26,7 +28,7 @@ pub struct Catalog {
 
 /// Everything needed to name one table or view in a query, kept together so a
 /// tree node can be turned into SQL without the caller reassembling it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectRef {
     pub catalog: Option<String>,
     pub schema: Option<String>,
