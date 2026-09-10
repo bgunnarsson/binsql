@@ -160,9 +160,13 @@ wrapped, where `↑`/`↓` move between fields, `Enter` again opens the one you 
 on in full — JSON re-indented — and `←`/`→` step between records without
 closing it.
 
-**Dragging the sidebar's edge** widens it, for a schema whose table names are
-longer than the default width fits; it never narrows below that default, and
-the wheel scrolls whichever of the tree and the grid the pointer is over. This
+**Both pane seams drag.** The sidebar's edge widens it, for a schema whose
+table names are longer than the default fits — it never narrows below that
+default, which is already what ordinary names want. The seam under the query
+pane moves either way, so a query being written can have the room, or the
+result it returns can. Neither pane can be squeezed out of existence.
+
+The wheel scrolls whichever of the tree and the grid the pointer is over. That
 is the whole of what the mouse does, and it costs the terminal's own
 click-to-select — most terminals hand that back while `⇧` is held.
 
