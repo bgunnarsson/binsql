@@ -10,7 +10,7 @@ Version 3 is a rewrite in Rust. The Go implementation is archived under
 not been carried across.
 
 ```
- ✻ binsql  ·  acme/local  ·  app  ·  PostgreSQL               2/3 connected
+ ✻  acme/local › app                        PostgreSQL 16.2  ·  db.acme.internal:5432 
 ╭─ Databases ───────── 2/3 ─╮ artist   +
 │ ▾  acme  2                │╭─ Query ───────────────────────────────────────── 1/2 ─╮
 │   ▾  local  PostgreSQL    ││SELECT * FROM "artist" LIMIT 500                       │
@@ -23,21 +23,26 @@ not been carried across.
 │   ▸  prod  SQL Server  ro │╰───────────────────────────────────────────────────────╯
 │ ▸  warehouse  MySQL       │
 ╰───────────────────────────╯
- 3 rows in 0.24ms                ⇥ panes · ⌃R run · ⌃K commands · ⌃Q quit
+ 3 rows in 0.24ms                  ⇥ panes · ⌃R run · ⌃K commands · F1 help · ⌃Q quit 
 ```
+
+The header answers one question — where `⌃R` sends this SQL. The left is what
+you call that connection and which database it is in; the right is what it
+actually reaches, so two connections both nicknamed `prod` are told apart. A
+read-only data source says so there too.
 
 `Enter` on a row opens it as a record, so a value too long for the grid is
 still readable:
 
 ```
-╭─ Row 17 of 500 · comment nvarchar ──────────────── 6 fields ─╮
+╭─ Row 17 of 500 · comment nvarchar ────────────── 4/6 fields ─╮
 │id        17                                                  │
 │delta     1                                                   │
 │entity    User                                                │
 │comment   "binni@vettvangur.is" <binni@vettvangur.is> changed  │
 │          the publication schedule for the shipping page      │
 │reviewed  NULL                                                │
-│↑↓ fields · ←→ record · Esc close                             │
+│↑↓ field · ↵ value · ←→ record · Esc close                    │
 ╰──────────────────────────────────────────────────────────────╯
 ```
 
@@ -46,20 +51,23 @@ registered, and the three keys worth knowing. Any key dismisses it.
 
 ## Install
 
-Each release carries a build for macOS, Linux and Windows on
-[the releases page](https://github.com/bgunnarsson/binsql/releases), with a
-`checksums.txt` beside them:
-
-```sh
-tar -xzf binsql-3.0.0-darwin-arm64.tar.gz
-sudo mv binsql-3.0.0-darwin-arm64/binsql /usr/local/bin/
-```
-
-Or from source:
+**v3 is not tagged yet.** The crate says `3.0.0-dev` and
+[the releases page](https://github.com/bgunnarsson/binsql/releases) still ends
+at v2, which is the Go build. Until there is a tag, build it:
 
 ```sh
 cargo build --release
 # the binary lands at target/release/binsql
+```
+
+Tagging is what makes a release: `v3.0.0` sends GitHub Actions off to build
+darwin-arm64, darwin-amd64, linux-amd64, linux-arm64 and windows-amd64, and
+attaches the five archives and a `checksums.txt` to the tag. Each unpacks into a
+directory of its own, so it cannot overwrite anything where it lands:
+
+```sh
+tar -xzf binsql-3.0.0-darwin-arm64.tar.gz
+sudo mv binsql-3.0.0-darwin-arm64/binsql /usr/local/bin/
 ```
 
 Rust 1.90 or newer to build, and a Nerd Font in your terminal either way —
@@ -79,6 +87,9 @@ binsql --driver mysql "user:pass@tcp(host:3306)/app"
 
 A first argument that names a verb — `query`, `exec`, `inspect` — is
 [command mode](#command-mode) instead; anything else is a data source to open.
+Anything binsql can neither find among the saved ones nor read as a connection
+string is an error naming both ways out, since a mistyped verb lands there as
+readily as a bad DSN. `-h`, `-V` and `--debug-keys` print and stop.
 
 Data sources live in `~/.config/binsql/connections.json`, honouring
 `BINSQL_CONFIG` and `XDG_CONFIG_HOME`. Add one from inside the app with `⌃N`
@@ -99,7 +110,8 @@ project — which becomes a group in the sidebar:
       },
       "local": {
         "driver": "mssql",
-        "dsn": "keyvault://kv-eimskip-local/ConnectionStrings--umbracoDbDSN"
+        "dsn": "keyvault://kv-eimskip-local/ConnectionStrings--umbracoDbDSN",
+        "description": "the docker one"
       }
     },
     "osar": {
@@ -146,7 +158,14 @@ script is checked, not its first word: a `DELETE` under a comment, behind a
 `SELECT 1;`, or fronted by a `WITH` is still a write, and a statement binsql
 cannot classify counts as one too.
 `open_on_start` connects it when binsql launches; with none set, the `default`
-one is opened.
+one is opened. `description` is a note to yourself and is optional, as are all
+three — a connection is a `driver` and a `dsn` and nothing else has to be there.
+
+The file is written back the way it was found: folders stay folders, top-level
+connections stay at the top level, and the three optional keys are omitted
+rather than written out as `false`. It is saved through a temp file so a failed
+write cannot truncate a config holding credentials, and both it and its
+directory are owner-only.
 
 ## Keys
 
@@ -157,23 +176,31 @@ one is opened.
 | `⌃K` | Command palette |
 | `⌃T` / `⌃W` | New console / close console |
 | `⌥1`…`⌥9` | Jump to a console |
+| `⌃PgUp` / `⌃PgDn` | Previous / next console |
 | `⌃N` | New data source |
 | `Tab` / `⇧Tab` | Cycle panes |
-| `⌥h` `⌥k` `⌥j` | Databases / query / results |
+| `⌥h` `⌥j` `⌥k` `⌥l` | The pane that way — databases, results, query, query |
 | `F1` or `?` | Help |
 | `F5` | Reload the selected node from the server |
 | `⌃Q` | Quit |
 
-In the tree: `j`/`k` to move, `l`/`Space` to expand, `h` to collapse or step up,
-`Enter` to connect or open a table, `n`/`e`/`d` to add, edit or disconnect a
-data source. In the grid: `hjkl` by cell, `g`/`G` and `0`/`$` for the edges,
-`Enter` opens the whole record with every column stacked and long values
-wrapped, where `↑`/`↓` move between fields, `Enter` again opens the one you are
-on in full — JSON re-indented — and `←`/`→` step between records without
-closing it.
+`⌃Q` is read before anything else can claim it. Raw mode has already taken `⌃C`
+away from the terminal — it arrives as an ordinary key and cancels the query,
+not the program — so a modal that swallowed `⌃Q` would leave no way out at all.
+
+In the tree: `j`/`k` to move, `⌃D`/`⌃U` by half a page, `g`/`G` for the ends,
+`l`/`Space` to expand, `h` to collapse or step up, `Enter` to connect or open a
+table, `r` to reload it from the server, and `n`/`e`/`d` to add, edit or
+disconnect a data source. In the grid: `hjkl` by cell, `⌃D`/`⌃U` by half a page,
+`g`/`G` and `0`/`$` for the edges, `Enter` opens the whole record with every
+column stacked and long values wrapped, where `↑`/`↓` move between fields,
+`Enter` again opens the one you are on in full — JSON re-indented — and `←`/`→`
+step between records without closing it. Moving between fields moves the grid's
+cursor with it, so paging through records in the modal does not lose your place.
 
 In the query editor: `⌃A` selects all — typing over a selection replaces it —
-`⌃U` or `⌃⌫` deletes back to the start of the line, `⌃X` cuts, and `⌃Z` undoes.
+`⌃U` or `⌃⌫` deletes back to the start of the line, `⌃X` cuts, `⌃Z` undoes, and
+`Esc` hands focus back to the tree.
 
 **Undo works in runs, not letters.** One `⌃Z` takes back a word, not the last
 character of it; a space, a line break, or anything done in one go — a paste, a
@@ -255,8 +282,10 @@ binsql inspect --conn scratch -o markdown
 ```
 
 `query` takes `-f, --file FILE` (`-` for stdin, as does a bare pipe), `--limit N`
-to stop after N rows, and `--allow-write` for the rare statement that has to
-write from the reading verb.
+to stop after N rows (`0` for all of them), and `--allow-write` for the rare
+statement that has to write from the reading verb. It runs exactly one
+statement: handed a script, it says so and points at `exec` rather than running
+the first and dropping the rest.
 
 `exec` takes `-f, --file FILE`, and:
 
@@ -269,7 +298,21 @@ write from the reading verb.
 Without `--force`, the two statements most likely to be a mistake are refused
 before they are sent. `--dry-run` is transactional everywhere except MySQL DDL,
 which MySQL commits as it runs; binsql says so rather than letting a dry run
-imply otherwise.
+imply otherwise. A batch of two or more is one transaction by default; a lone
+statement is not worth wrapping, and `--tx` is how to say it should be anyway.
+
+`inspect` reads the connected database, and every schema in it:
+
+| | |
+| --- | --- |
+| `--catalog NAME` | another database on the same connection |
+| `--schema NAME` | one schema rather than all of them |
+
+A table may carry its own schema — `binsql inspect dbo.orders` — which wins over
+`--schema`, being the more specific of the two. Either way the name is matched
+against what the server says it has rather than pasted into a query, so a
+misspelling comes back as binsql saying there is no such table instead of as a
+syntax error from the database.
 
 Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake — so a script can tell "you asked wrong" from "it did not work".
@@ -280,7 +323,7 @@ usage mistake — so a script can tell "you asked wrong" from "it did not work".
 | Driver names | Connection string |
 | --- | --- |
 | `sqlite`, `sqlite3` | a path, or `sqlite://path` |
-| `postgres`, `postgresql`, `pg` | `postgres://user:pass@host:5432/db`, or the libpq `host=… dbname=…` form |
+| `postgres`, `postgresql`, `pg`, `pgx` | `postgres://user:pass@host:5432/db`, or the libpq `host=… dbname=…` form |
 | `mssql`, `sqlserver`, `azuresql` | ADO `server=tcp:host,1433;…`, or `sqlserver://user:pass@host:1433?database=db` |
 | `mysql`, `mariadb` | `mysql://user:pass@host:3306/db`, or `user:pass@tcp(host:3306)/db` |
 
@@ -337,8 +380,11 @@ is v2's, so both versions share it while both are installed.
 Secrets are fetched through the Azure CLI, so this needs `az` and `az login`
 just as `fedauth=` does. **This is narrower than v2**, which linked the Azure
 SDK and could also use a managed identity or an `AZURE_CLIENT_ID` service
-principal via `BINSQL_AZURE_CREDENTIAL`. Those arms served CI, which is command
-mode's territory; they come back with it.
+principal via `BINSQL_AZURE_CREDENTIAL`. Shelling out to `az` was chosen so
+binsql has one Azure story rather than two — it is the same mechanism
+`fedauth=` uses — and it was enough while there was nothing here for CI to run.
+Command mode has since arrived and CI is exactly what it is for, so that is now
+a gap rather than a deferral: see [Status](#status).
 
 ## Design
 
@@ -348,9 +394,12 @@ Two crates:
   database difference resolved behind an `Adapter`. Nothing above it knows which
   engine is on the other end. SQLite, PostgreSQL and MySQL go through `sqlx`;
   SQL Server goes through `tiberius`.
-- **`binsql`** — the terminal front end: `app` holds state and drives background
-  work over a channel, `ui` draws it. The core is a library so a headless
-  command mode can be added over the same guarantees.
+- **`binsql`** — the terminal front end and the command line: `app` holds state
+  and drives background work over a channel, `ui` draws it, `cli` is the same
+  core with neither. Keeping the core a library is what let command mode be
+  built over the same guarantees rather than beside them — a read-only data
+  source refuses a write in one line of `Session`, and both front ends inherit
+  it without restating it.
 
 ### Look
 
@@ -406,6 +455,14 @@ the thing people look at is asserted rather than assumed. Command mode is
 tested by running the built binary as a subprocess and reading its stdout, its
 stderr and its exit code, because those three are its whole interface.
 
+`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
+warnings` and this suite run on every push and pull request, and again on a tag
+before anything is built — so a release is never the first time the gate has
+seen a commit. The release workflow also runs by hand, which builds all five
+targets and publishes nothing, and refuses a tag that disagrees with
+`Cargo.toml`: a release that reports the wrong version reports it for the rest
+of its life.
+
 ## Status
 
 What works today is everything above. What has **not** been carried across from
@@ -419,8 +476,9 @@ v2 yet:
   In v3 a data source is added with ⌃N in the TUI, or by editing
   `connections.json`.
 - **Managed identity and service-principal credentials** for Key Vault. The
-  references themselves work; only the CLI credential is wired up, for the
-  reason given under [Azure Key Vault references](#azure-key-vault-references).
+  references themselves work, and so does the CLI credential; the other two arms
+  of v2's chain are missing, which now matters because command mode is here and
+  a CI job has no `az login` to lean on.
 - Exporting a result set, editing values in the grid, query history, and
   filtering the tree.
 
