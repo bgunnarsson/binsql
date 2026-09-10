@@ -73,7 +73,7 @@ fn format_bytes(bytes: &[u8]) -> String {
     out
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Column {
     pub name: String,
     /// The backend's own type name, shown verbatim — `int4` and `INT` are
