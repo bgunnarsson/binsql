@@ -1,7 +1,7 @@
 ---
 title: binsql source test reports the stage a connection fails at, --fresh bypasses the secret cache, and source clear-cache empties it
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
