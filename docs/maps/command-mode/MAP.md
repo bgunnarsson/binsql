@@ -79,6 +79,7 @@ changes to `query`, `exec` and `inspect`.
 - [43](43-exec-reports-the-actual-transaction-outcome.md): A failed transactional `exec` batch says how it ended — `transaction` is `rolled_back` when the rollback was confirmed, `unknown` when the rollback or commit failed or the batch may have committed part of itself, and `none` when nothing was sent — and the text says the same instead of always claiming a rollback.
 - [15](15-require-rows.md): `query --require-rows` prints the result as usual, then exits 1 with category `assertion`, phase `output`, when it had no rows; `--plan` with it is a usage error.
 - [14](14-capability-probe.md): `binsql --capabilities` prints an offline JSON manifest of version, backends, command flags, formats and exit codes.
+- [50](50-az-and-keychain-reads-can-be-interrupted.md): Dropping an `az` read kills `az` and everything it started (its own process group on unix), and keychain reads run on a blocking thread, so 51's deadline can cut either.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.

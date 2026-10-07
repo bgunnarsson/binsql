@@ -1,7 +1,7 @@
 ---
 title: "`az` and keychain reads can be interrupted"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
@@ -22,8 +22,18 @@ no AI mentions in commits. No flags, so HELP and the README stay as they are.
   `binsql-core`, as its only test, because it has to set `PATH` for the whole
   process; it reaches `azure::fetch` through `Resolver::resolve_fresh` with a
   zero-TTL cache, since the `azure` module is private.
-- The stub records its pid in a file named by an environment variable the
-  test sets, and the test checks the pid with `kill -0`.
+- Both `az` calls go through one helper, `az::output`, which puts `az` in a
+  process group of its own on unix and kills the group when the read is
+  dropped: `az` is usually a shell script that runs Python without `exec`,
+  so killing the direct child alone leaves the work running. It pipes
+  stdout and stderr and closes stdin, as `Command::output()` did.
+- The stub records the pid of the sleep it starts, without `exec`, in a file
+  the script names, and the test checks it with `ps`, a zombie counting as
+  gone. The same stub answers two secrets at once, so the test also shows a
+  read that finishes returns `az`'s output and its refusal.
+- Trade-off: in its own group, `az` no longer gets the terminal's SIGINT. If
+  ⌃C ends binsql while `az` runs, `az` finishes its one request alone. The
+  TUI is unaffected, since ⌃C is a key there.
 - A join error from `spawn_blocking` becomes
   `Error::config("reading the keychain: …")`.
 - `adapter/mssql.rs`'s `az account get-access-token` gets the same
@@ -38,10 +48,11 @@ never name a zsh variable `status`.
 ## Acceptance criteria
 
 - On unix, `Resolver::resolve_fresh` on a `keyvault://` reference, dropped
-  after 500 ms while a stub `az` sleeps, leaves no stub process alive within
-  2 s.
-- Both `az` commands are built with `kill_on_drop(true)`; nothing else in
-  either function changes.
+  once a stub `az` has started its sleep, leaves the sleep dead within 2 s.
+- A read that finishes still returns what `az` printed, and a refusal still
+  carries `az`'s stderr.
+- Both `az` calls run through `az::output`; nothing else in either function
+  changes.
 - A keychain reference is read inside `spawn_blocking`; its errors, the
   `NoEntry` hint included, come through unchanged.
 - The existing resolver and keychain tests still pass.
@@ -49,7 +60,8 @@ never name a zsh variable `status`.
 ## Tasks
 
 - [x] **1. Kill `az` on drop, read the keychain off the runtime.**
-  `secrets/azure.rs` and `adapter/mssql.rs`: `.kill_on_drop(true)`.
+  `az.rs`: `az::output`, killing `az`'s process group on drop.
+  `secrets/azure.rs` and `adapter/mssql.rs`: call it.
   `secrets/mod.rs`: `keychain::get` in `spawn_blocking`.
   `tests/az_interrupt.rs`: the stub-`az` test.
   Verify: `cargo test --workspace`.
