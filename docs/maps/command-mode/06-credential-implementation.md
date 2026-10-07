@@ -2,7 +2,7 @@
 title: Which credentials does Key Vault resolution support, in what order, and built how?
 kind: grilling
 mode: hitl
-status: open
+status: dropped
 blocked_by: [2]
 claimed_by:
 ---
@@ -29,3 +29,5 @@ The answer settles enough for the build to be cut into task tickets.
   next step. Whatever replaces it should keep that quality.
 
 ## Answer
+
+Dropped: its premise, ticket 02, was dropped; credentials beyond `az` are out of scope.

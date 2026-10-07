@@ -3,7 +3,7 @@ title: How does the verb list grow without shadowing saved data sources?
 kind: grilling
 mode: hitl
 status: open
-blocked_by: [1]
+blocked_by: []
 claimed_by:
 ---
 
@@ -27,7 +27,6 @@ becomes a verb, given that breaking changes are out of scope.
 
 - `crates/binsql/src/main.rs` (how the first argument is dispatched) and
   `cli/mod.rs` (`VERBS`, `is_verb`).
-- Ticket 01, for the names v2 spent.
 - Ticket 03, if it is resolved by then, for which verbs are likely coming.
 
 ## Answer

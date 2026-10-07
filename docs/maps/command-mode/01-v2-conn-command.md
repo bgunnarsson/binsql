@@ -2,7 +2,7 @@
 title: What did v2's `binsql conn` do, and how does each part map onto v3's Workspace?
 kind: research
 mode: afk
-status: open
+status: dropped
 blocked_by: []
 claimed_by:
 ---
@@ -30,3 +30,5 @@ longer make sense.
   or `ui`, and the scope rule described in README "Project data sources".
 
 ## Answer
+
+Dropped: the CLI's data-source commands are designed fresh for agents on top of the TUI's lookup, not carried over from v2 (see 07).

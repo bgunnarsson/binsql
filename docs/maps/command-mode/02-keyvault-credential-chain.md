@@ -2,7 +2,7 @@
 title: How did v2 get Key Vault tokens without `az`, and what are v3's options in Rust?
 kind: research
 mode: afk
-status: open
+status: dropped
 blocked_by: []
 claimed_by:
 ---
@@ -37,3 +37,5 @@ deciding between.
 - Wherever `fedauth` is handled in `crates/binsql-core/src/adapter`.
 
 ## Answer
+
+Dropped: the CLI resolves secrets exactly as the TUI does; credentials beyond `az` are out of scope for this map.
