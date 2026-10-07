@@ -14,8 +14,8 @@ names, the keychain, and Key Vault references through `az`. The commands
 themselves are designed fresh for agents, not carried over from v2. Beyond
 managing data sources, command mode carries the ergonomics an agent leans on,
 each chosen by research rather than guessed. Not part of it: anything with a
-pane, new database drivers, new ways of looking up or authenticating to a data
-source, and breaking changes to `query`, `exec` and `inspect`.
+pane, new database drivers, new places to look data sources up, and breaking
+changes to `query`, `exec` and `inspect`.
 
 ## Notes
 
@@ -23,6 +23,9 @@ source, and breaking changes to `query`, `exec` and `inspect`.
   different things, the agent wins.
 - Data sources are looked up exactly as the TUI does. The CLI only adds
   commands on top of that.
+- Nearly every database the person uses keeps its connection string in Azure
+  Key Vault. Key Vault working well for an agent is central to the map, not an
+  edge case.
 - The person prefers building over long upfront design talk: decide routine
   calls yourself and flag the gaps afterwards.
 - `query` reads, `exec` writes, `inspect` describes. That split is a safety
@@ -53,6 +56,9 @@ None yet.
   call, a task where it is not).
 - **Errors a program can parse**: whether failures get a structured form on
   stderr, and how that sits beside the exit codes. This waits on 03.
+- **Key Vault credentials beyond `az`**: whether an agent ever runs where
+  `az login` is not available, and what binsql should do then. This waits on
+  09.
 - **README Status**: rewriting the section once the data-source commands land.
 
 ## Out of scope
@@ -60,9 +66,6 @@ None yet.
 - TUI work. The map is about the command line; the grid, tree and history in
   the app are separate.
 - New drivers. The four backends stay as they are.
-- Lookup and authentication beyond what the TUI does, such as managed
-  identity or service principals for Key Vault. The CLI uses the TUI's
-  methods.
 - Basing anything on v2's `binsql conn`. The commands are designed fresh.
 - Breaking changes to existing verbs, flags, exit codes or output formats.
   Scripts already depend on them. Additions only.
