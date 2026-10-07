@@ -14,8 +14,10 @@ mod source;
 
 use std::io::{IsTerminal, Read, Write};
 use std::sync::OnceLock;
+use std::time::Duration;
 
-use binsql_core::{Backend, DataSource, Session, Value, Workspace};
+use binsql_core::{Backend, DataSource, Resolver, Session, Value, Workspace};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use args::Args;
@@ -222,6 +224,7 @@ pub enum Category {
     Config,
     Secret,
     Connect,
+    ConnectTimeout,
     Refused,
     Database,
     Assertion,
@@ -238,6 +241,7 @@ impl Category {
             Category::Config => "config",
             Category::Secret => "secret",
             Category::Connect => "connect",
+            Category::ConnectTimeout => "connect-timeout",
             Category::Refused => "refused",
             Category::Database => "database",
             Category::Assertion => "assertion",
@@ -752,6 +756,7 @@ const SHARED_VALUES: &[&str] = &[
     "catalog",
     "schema",
     "error-format",
+    "connect-timeout-ms",
 ];
 const SHARED_SWITCHES: &[&str] = &["pretty", "no-header", "no-footer"];
 
@@ -780,6 +785,10 @@ pub fn output(args: &Args) -> Result<Options> {
 /// the flags left out — the order a script expects, where the command line
 /// overrides what the shell already set.
 pub async fn connect(args: &Args) -> Result<Session> {
+    // Fixed before anything else, so the budget covers the whole of opening.
+    let budget = connect_budget(args)?;
+    let deadline = budget.and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms)));
+
     // A Workspace, so command mode sees the same project `.binsql.json` the
     // TUI does when it is run from inside a repository.
     let config = Workspace::load()
@@ -832,7 +841,7 @@ pub async fn connect(args: &Args) -> Result<Session> {
     };
 
     let (backend, dsn) = (source.backend, source.dsn.clone());
-    Session::open(name.clone(), source).await.map_err(|error| {
+    let failure = |error: binsql_core::Error| {
         // A config error out of opening is a secret that would not resolve.
         let category = match error {
             binsql_core::Error::Config(_) | binsql_core::Error::Secret { .. } => Category::Secret,
@@ -841,8 +850,57 @@ pub async fn connect(args: &Args) -> Result<Session> {
         caused(format!("connecting to {name}: {error}"), &error)
             .category(category)
             .phase(Phase::Connect)
-            .dsn(backend, dsn)
-    })
+            .dsn(backend, dsn.clone())
+    };
+    let timed_out = |stage: &str| {
+        failed(format!(
+            "connect timeout: no connection to {name} within {} ms, while {stage}",
+            budget.unwrap_or_default()
+        ))
+        .category(Category::ConnectTimeout)
+        .phase(Phase::Connect)
+        .dsn(backend, dsn.clone())
+    };
+
+    // The stored DSN may name a secret, so it is resolved first; the two
+    // steps are timed apart to say which one ran out.
+    let resolved = within(deadline, Resolver::from_env().resolve(&source.dsn))
+        .await
+        .ok_or_else(|| timed_out("resolving the connection string"))?
+        .map_err(&failure)?;
+    within(deadline, Session::connect(name.clone(), source, &resolved))
+        .await
+        .ok_or_else(|| timed_out("connecting"))?
+        .map_err(&failure)
+}
+
+/// How long opening a connection may take, in milliseconds: from
+/// `--connect-timeout-ms`, or else `BINSQL_CONNECT_TIMEOUT_MS`. `0` is no
+/// limit, as is neither.
+fn connect_budget(args: &Args) -> Result<Option<u64>> {
+    let value = match args.value(&["connect-timeout-ms"]) {
+        Some(value) => value.to_string(),
+        None => match std::env::var("BINSQL_CONNECT_TIMEOUT_MS") {
+            Ok(value) => value,
+            Err(_) => return Ok(None),
+        },
+    };
+    match value.parse::<u64>() {
+        Ok(0) => Ok(None),
+        Ok(ms) => Ok(Some(ms)),
+        Err(_) => Err(usage(format!(
+            "--connect-timeout-ms wants a number of milliseconds, got {value}"
+        ))),
+    }
+}
+
+/// Runs `step` to the end, or gives `None` if `deadline` passes first. A step
+/// that is ready when polled finishes even after the deadline.
+async fn within<T>(deadline: Option<Instant>, step: impl Future<Output = T>) -> Option<T> {
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, step).await.ok(),
+        None => Some(step.await),
+    }
 }
 
 /// The data source the config names as its default, and its qualified name.

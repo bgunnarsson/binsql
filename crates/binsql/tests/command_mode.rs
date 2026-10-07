@@ -78,6 +78,7 @@ impl Fixture {
             .env_remove("BINSQL_DSN")
             .env_remove("BINSQL_DRIVER")
             .env_remove("BINSQL_ERROR_FORMAT")
+            .env_remove("BINSQL_CONNECT_TIMEOUT_MS")
             .envs(variables.iter().copied())
             .output()
             .expect("run binsql");
@@ -2000,4 +2001,141 @@ fn capabilities_prints_a_manifest_without_reading_the_config() {
         version.stdout,
         format!("binsql {}\n", env!("CARGO_PKG_VERSION"))
     );
+}
+
+/// A server that accepts connections and never says a word.
+fn silent_server() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a port");
+    let port = listener.local_addr().expect("the bound port").port();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming() {
+            held.push(stream);
+        }
+    });
+    port
+}
+
+#[test]
+fn connect_timeout_stops_a_server_that_never_answers() {
+    let fixture = Fixture::new("connect-timeout-silent");
+    let dsn = format!("postgres://u:hunter2@127.0.0.1:{}/db", silent_server());
+    let started = std::time::Instant::now();
+    let run = fixture
+        .binsql(&[
+            "query",
+            "SELECT 1",
+            "--dsn",
+            &dsn,
+            "--connect-timeout-ms",
+            "300",
+        ])
+        .failed()
+        .stderr_has("connect timeout: ")
+        .stderr_has("within 300 ms, while connecting");
+    assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+    assert!(!run.stderr.contains("hunter2"), "{}", run.stderr);
+
+    let run = fixture
+        .binsql_with_env(
+            &["query", "SELECT 1", "--dsn", &dsn, "--error-format", "json"],
+            "",
+            &[("BINSQL_CONNECT_TIMEOUT_MS", "300")],
+        )
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "connect-timeout");
+    assert_eq!(record["phase"], "connect");
+}
+
+#[cfg(unix)]
+#[test]
+fn connect_timeout_stops_a_vault_read_that_hangs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new("connect-timeout-vault");
+    let bin = fixture.directory.join("bin");
+    std::fs::create_dir_all(&bin).expect("create the stub directory");
+    let stub = bin.join("az");
+    std::fs::write(&stub, "#!/bin/sh\nsleep 30\n").expect("write the stub");
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+        .expect("make the stub runnable");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let started = std::time::Instant::now();
+    fixture
+        .binsql_with_env(
+            &[
+                "query",
+                "SELECT 1",
+                "--dsn",
+                "keyvault://kv-demo/app-dsn",
+                "-d",
+                "postgres",
+                "--connect-timeout-ms",
+                "300",
+            ],
+            "",
+            &[("PATH", &path), ("BINSQL_SECRET_TTL", "0")],
+        )
+        .failed()
+        .stderr_has("while resolving the connection string");
+    assert!(started.elapsed() < std::time::Duration::from_secs(3));
+}
+
+#[test]
+fn connect_timeout_wants_a_number() {
+    let fixture = Fixture::new("connect-timeout-usage");
+    fixture.write_config();
+    fixture
+        .binsql(&["query", "SELECT 1", "--connect-timeout-ms", "abc"])
+        .refused()
+        .stderr_has("--connect-timeout-ms wants a number of milliseconds, got abc");
+    fixture
+        .binsql_with_env(
+            &["query", "SELECT 1"],
+            "",
+            &[("BINSQL_CONNECT_TIMEOUT_MS", "abc")],
+        )
+        .refused();
+}
+
+#[test]
+fn connect_timeout_of_zero_changes_nothing() {
+    // Without the footer, whose timing differs run to run.
+    let fixture = Fixture::new("connect-timeout-zero");
+    fixture.seed();
+    let plain = fixture
+        .direct(&[
+            "query",
+            "SELECT name FROM artist ORDER BY id",
+            "--no-footer",
+        ])
+        .succeeds();
+    let zero = fixture
+        .direct(&[
+            "query",
+            "SELECT name FROM artist ORDER BY id",
+            "--no-footer",
+            "--connect-timeout-ms",
+            "0",
+        ])
+        .succeeds();
+    let roomy = fixture
+        .direct(&[
+            "query",
+            "SELECT name FROM artist ORDER BY id",
+            "--no-footer",
+            "--connect-timeout-ms",
+            "60000",
+        ])
+        .succeeds();
+    assert_eq!(plain.stdout, zero.stdout);
+    assert_eq!(plain.stderr, zero.stderr);
+    assert_eq!(plain.stdout, roomy.stdout);
 }

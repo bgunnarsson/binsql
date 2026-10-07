@@ -56,7 +56,7 @@ the README.
 
 ## Tasks
 
-- [ ] **1. The budget.** `session.rs`: `Session::connect`. `cli/mod.rs`:
+- [x] **1. The budget.** `session.rs`: `Session::connect`. `cli/mod.rs`:
   `connect-timeout-ms` in `SHARED_VALUES`, the budget parsed from the flag or
   the variable, `timeout_at` around resolving and connecting, and
   `Category::ConnectTimeout`.

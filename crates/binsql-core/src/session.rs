@@ -101,13 +101,22 @@ impl Session {
         source: DataSource,
         resolver: &Resolver,
     ) -> Result<Session> {
-        let name = name.into();
         // The stored DSN may name a secret rather than hold one, so it is
         // resolved before anything tries to parse it as a connection string.
         let dsn = resolver.resolve(&source.dsn).await?;
-        let primary: Arc<dyn Adapter> = Arc::from(adapter::connect(source.backend, &dsn).await?);
+        Session::connect(name, source, &dsn).await
+    }
+
+    /// Opens with `dsn`, the source's connection string already resolved, so
+    /// a caller can time resolving and connecting apart.
+    pub async fn connect(
+        name: impl Into<String>,
+        source: DataSource,
+        dsn: &str,
+    ) -> Result<Session> {
+        let primary: Arc<dyn Adapter> = Arc::from(adapter::connect(source.backend, dsn).await?);
         Ok(Session {
-            name,
+            name: name.into(),
             source,
             primary,
             per_catalog: RwLock::new(HashMap::new()),
