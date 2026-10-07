@@ -44,6 +44,7 @@ const SWITCHES: &[&str] = &[
     "open-on-start",
     "no-open-on-start",
     "no-keychain",
+    "force",
 ];
 
 /// The flags only `add` and `edit` take, each with the names it goes by.
@@ -66,7 +67,7 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     let (operation, names) = match args.positional() {
         [] => {
             return Err(usage(
-                "source needs a command: list, show, default, test, clear-cache, add or edit",
+                "source needs a command: list, show, default, test, clear-cache, add, edit or remove",
             ));
         }
         [operation, names @ ..] => (operation.as_str(), names),
@@ -99,6 +100,14 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     if fresh && operation != "test" {
         return Err(usage("--fresh applies only to source test"));
     }
+    let force = args.is_set(&["force"]);
+    if force && operation != "remove" {
+        return Err(usage("--force applies only to source remove"));
+    }
+
+    // Why a removed source's secret is still in the store, reported once its
+    // row is printed.
+    let mut leftover = None;
 
     let rows = match (operation, names) {
         ("list", []) => {
@@ -179,6 +188,18 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             vec![row(&workspace, &id, source)]
         }
         ("edit", _) => return Err(usage("source edit takes one name")),
+        ("remove", [name]) => {
+            if !force {
+                return Err(usage(format!(
+                    "source remove deletes {name} and its {STORE_NAME} secret; add --force to do it"
+                )));
+            }
+            let mut workspace = load()?;
+            let (row, error) = remove(&mut workspace, name, &Keychain)?;
+            leftover = error;
+            vec![row]
+        }
+        ("remove", _) => return Err(usage("source remove takes one name")),
         (other, _) => return Err(usage(format!("unknown source command {other}"))),
     };
 
@@ -190,7 +211,10 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     for message in notes.into_iter().flatten() {
         note(&options, &message);
     }
-    Ok(())
+    match leftover {
+        Some(message) => Err(failed(message)),
+        None => Ok(()),
+    }
 }
 
 /// Resolves and connects to the named source, or the default, and prints how
@@ -471,6 +495,27 @@ fn is_path(dsn: &str) -> bool {
     !lower.contains('=') || lower.starts_with("sqlite:") || lower.starts_with("file:")
 }
 
+/// Removes the named source from every file that holds it, then its secret.
+/// Returns its row as it was, and why its secret is still in the store when
+/// deleting it failed: the config is written by then, so that is not undone.
+fn remove(
+    workspace: &mut Workspace,
+    name: &str,
+    store: &impl SecretStore,
+) -> Result<(Row, Option<String>)> {
+    let id = find(workspace, name)?;
+    // Built first, since its scope and default are read from the entry.
+    let row = row(workspace, &id, workspace.get(&id).expect("resolved"));
+    let removed = workspace
+        .delete(&id, store)
+        .map_err(|error| failed(format!("removing {id}: {error}")))?
+        .expect("resolved");
+    let leftover = removed
+        .secret_error
+        .map(|error| format!("removed {id}, but its {STORE_NAME} entry is still there: {error}"));
+    Ok((row, leftover))
+}
+
 fn load() -> Result<Workspace> {
     Workspace::load().map_err(|error| failed(format!("loading connections: {error}")))
 }
@@ -484,7 +529,9 @@ fn find(workspace: &Workspace, name: &str) -> Result<String> {
 
 /// One data source as a row, and the note that goes with it when a command
 /// takes its bare name.
-fn row(workspace: &Workspace, id: &str, source: &DataSource) -> (Vec<Value>, Option<String>) {
+type Row = (Vec<Value>, Option<String>);
+
+fn row(workspace: &Workspace, id: &str, source: &DataSource) -> Row {
     let scope = match workspace.scope_of(id) {
         Some(Scope::User) => Value::Text("user".into()),
         Some(Scope::Project) => Value::Text("project".into()),
@@ -636,6 +683,46 @@ mod tests {
         let workspace =
             Workspace::load_at(Config::load_from(&user).unwrap(), &user, Some(project)).unwrap();
         (workspace, user)
+    }
+
+    #[test]
+    fn source_remove_deletes_the_secret_once_the_config_is_written() {
+        let (mut workspace, user) = workspace("remove-filed");
+        let store = Recorder::default();
+        let ((row, _), leftover) = remove(&mut workspace, "kc", &store).unwrap();
+        assert_eq!(row[0], Value::Text("kc".into()));
+        assert!(leftover.is_none());
+        assert_eq!(store.calls(), ["delete kc"]);
+        assert!(workspace.get("kc").is_none());
+        let config = std::fs::read_to_string(user).unwrap();
+        assert!(!config.contains("keychain://kc"), "{config}");
+
+        // A path holds no secret, so the store is not asked.
+        remove(&mut workspace, "lite", &store).unwrap();
+        assert_eq!(store.calls(), ["delete kc"]);
+        assert!(workspace.get("lite").is_none());
+
+        assert!(
+            remove(&mut workspace, "nothing", &store)
+                .err()
+                .unwrap()
+                .usage
+        );
+    }
+
+    #[test]
+    fn source_remove_keeps_the_removal_when_the_store_fails() {
+        let (mut workspace, user) = workspace("remove-failing");
+        let store = Recorder {
+            fail: true,
+            ..Recorder::default()
+        };
+        let (_, leftover) = remove(&mut workspace, "kc", &store).unwrap();
+        let leftover = leftover.unwrap();
+        assert!(leftover.starts_with("removed kc, but its "), "{leftover}");
+        assert!(leftover.ends_with("the store said no"), "{leftover}");
+        let config = std::fs::read_to_string(user).unwrap();
+        assert!(!config.contains("keychain://kc"), "{config}");
     }
 
     fn typed(dsn: &str) -> Change {

@@ -1510,3 +1510,63 @@ fn source_edit_changes_only_what_it_is_given() {
         .stderr_has("a connection string is not written into .binsql.json");
     assert_eq!(files(&fixture, &project), before);
 }
+
+#[test]
+fn source_remove_needs_force_and_a_saved_name() {
+    let fixture = Fixture::new("source-remove-refused");
+    let project = write_sources(&fixture);
+    let before = files(&fixture, &project);
+    let refused = |args: &[&str], message: &str| {
+        fixture
+            .binsql_with_project(args, &project)
+            .refused()
+            .stderr_has(message);
+        assert_eq!(files(&fixture, &project), before, "{args:?}");
+    };
+
+    refused(&["source", "remove", "pg"], "add --force to do it");
+    refused(
+        &["source", "remove", "nothing", "--force"],
+        "no saved data source named nothing",
+    );
+    refused(
+        &["source", "remove", "--force"],
+        "source remove takes one name",
+    );
+    refused(
+        &["source", "list", "--force"],
+        "--force applies only to source remove",
+    );
+}
+
+#[test]
+fn source_remove_takes_it_out_of_whichever_file_held_it() {
+    let fixture = Fixture::new("source-remove");
+    let project = write_sources(&fixture);
+
+    let removed = fixture
+        .binsql_with_project(
+            &["source", "remove", "here", "--force", "-o", "json"],
+            &project,
+        )
+        .succeeds();
+    let row = saved_row(removed);
+    assert_eq!(row["name"], "here");
+    assert_eq!(row["scope"], "project");
+    let (config, written) = files(&fixture, &project);
+    assert!(!written.contains("/tmp/h.db"), "{written}");
+    assert!(config.contains("ann:hunter2"), "{config}");
+
+    let removed = fixture
+        .binsql_with_project(
+            &["source", "remove", "pg", "--force", "-o", "json"],
+            &project,
+        )
+        .succeeds();
+    let row = saved_row(removed);
+    assert_eq!(row["scope"], "user");
+    assert!(!row["dsn"].as_str().unwrap().contains("hunter2"), "{row}");
+    let (config, _) = files(&fixture, &project);
+    assert!(!config.contains("ann:hunter2"), "{config}");
+    assert!(config.contains("/tmp/q.db"), "{config}");
+}

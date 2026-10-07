@@ -55,7 +55,7 @@ Assumed, not asked:
 
 ## Tasks
 
-- [ ] `source remove` in `crates/binsql/src/cli/source.rs`, with unit and
+- [x] `source remove` in `crates/binsql/src/cli/source.rs`, with unit and
   integration tests. Verify with `cargo test -p binsql --lib source` and
   `cargo test -p binsql --test command_mode source_`.
   - Add `"force"` to `SWITCHES`.
