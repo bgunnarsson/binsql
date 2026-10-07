@@ -322,19 +322,28 @@ impl Workspace {
     /// Removes a connection and then its secret, returning `None` when there
     /// was no such connection.
     pub fn delete(&mut self, id: &str, store: &impl SecretStore) -> Result<Option<Removed>> {
-        // Read before the config drops the entry, since it is derived from the
-        // connection string it is about to take away.
-        let account = self
-            .get(id)
-            .and_then(|source| keychain::account(&source.dsn))
-            .map(str::to_string);
+        // Read before the config drops the entries, since they are derived
+        // from the connection strings it is about to take away. Every file's,
+        // as `remove` takes the entry out of each, shadowed ones included.
+        let mut accounts: Vec<String> = [self.project.as_ref(), Some(&self.user)]
+            .into_iter()
+            .flatten()
+            .filter_map(|config| config.get(id))
+            .filter_map(|source| keychain::account(&source.dsn))
+            .map(str::to_string)
+            .collect();
+        accounts.dedup();
         if !self.remove(id)? {
             return Ok(None);
         }
         // Only after the config is written: a secret left behind by a failed
         // save is recoverable, one deleted for a connection that is still
         // listed is not.
-        let secret_error = account.and_then(|account| store.delete(&account).err());
+        let errors: Vec<Error> = accounts
+            .iter()
+            .filter_map(|account| store.delete(account).err())
+            .collect();
+        let secret_error = errors.into_iter().next();
         Ok(Some(Removed { secret_error }))
     }
 
@@ -800,6 +809,18 @@ mod tests {
         let store = Recorder::default();
         assert!(workspace.delete("scratch", &store).unwrap().is_some());
         assert!(store.calls().is_empty());
+    }
+
+    #[test]
+    fn delete_removes_the_secret_of_a_shadowed_entry_too() {
+        let project = r#"{ "connections": {
+            "eimskip": { "prod": { "driver": "sqlite", "dsn": "/tmp/p.db" } }
+        } }"#;
+        let mut workspace = workspace("delete-shadowed", USER, Some(project));
+        let store = Recorder::default();
+        assert!(workspace.delete("eimskip/prod", &store).unwrap().is_some());
+        assert_eq!(store.calls(), ["delete eimskip/prod listed=false"]);
+        assert!(workspace.get("eimskip/prod").is_none());
     }
 
     #[test]
