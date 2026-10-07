@@ -111,7 +111,7 @@ never reach `ratatui::init`; every `source default` form ends before it.
     (as `:498` does for `set`);
   - an ephemeral source and an unknown id are refused.
   Verify: `cargo test -p binsql-core workspace`, clippy.
-- [ ] **CLI.** The `default` arms, `--scope` parsing and the empty-print
+- [x] **CLI.** The `default` arms, `--scope` parsing and the empty-print
   rule in `cli/source.rs`. Integration tests in `tests/command_mode.rs`,
   through `write_sources` (`:865`, user default `inspect`, project without a
   default) and `binsql_with_project` (`:65`):

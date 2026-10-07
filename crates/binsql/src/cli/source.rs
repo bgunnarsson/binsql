@@ -17,16 +17,25 @@ use binsql_core::{
 use super::args::Args;
 use super::{Result, failed, note, output, print, render, usage};
 
-const VALUES: &[&str] = &["format", "o"];
+const VALUES: &[&str] = &["format", "o", "scope"];
 const SWITCHES: &[&str] = &["pretty", "no-header", "no-footer"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     let args = Args::parse(args, VALUES, SWITCHES)?;
     let options = output(&args)?;
     let (operation, names) = match args.positional() {
-        [] => return Err(usage("source needs a command: list or show")),
+        [] => return Err(usage("source needs a command: list, show or default")),
         [operation, names @ ..] => (operation.as_str(), names),
     };
+    let scope = match args.value(&["scope"]) {
+        None => None,
+        Some("user") => Some(Scope::User),
+        Some("project") => Some(Scope::Project),
+        Some(_) => return Err(usage("--scope takes user or project")),
+    };
+    if scope.is_some() && operation != "default" {
+        return Err(usage("--scope applies only to source default"));
+    }
 
     let rows = match (operation, names) {
         ("list", []) => {
@@ -44,11 +53,43 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             vec![row(&workspace, &id, source)]
         }
         ("show", _) => return Err(usage("source show takes one name")),
+        ("default", []) => {
+            let workspace = load()?;
+            match workspace.default.as_deref() {
+                None => Vec::new(),
+                Some(default) => match workspace.resolve(default) {
+                    Some(id) => {
+                        let source = workspace.get(&id).expect("resolved");
+                        vec![row(&workspace, &id, source)]
+                    }
+                    None => {
+                        note(
+                            &options,
+                            &format!("note: the default {default} is not a saved data source"),
+                        );
+                        Vec::new()
+                    }
+                },
+            }
+        }
+        ("default", [name]) => {
+            let mut workspace = load()?;
+            let id = find(&workspace, name)?;
+            workspace
+                .set_default(&id, scope)
+                .map_err(|error| failed(error.to_string()))?;
+            let source = workspace.get(&id).expect("resolved");
+            vec![row(&workspace, &id, source)]
+        }
+        ("default", _) => return Err(usage("source default takes at most one name")),
         (other, _) => return Err(usage(format!("unknown source command {other}"))),
     };
 
     let (rows, notes): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
-    print(&render::rows(&table(rows), &options))?;
+    // No default set is nothing at all, not an empty table or `[]`.
+    if !rows.is_empty() || operation != "default" {
+        print(&render::rows(&table(rows), &options))?;
+    }
     for message in notes.into_iter().flatten() {
         note(&options, &message);
     }

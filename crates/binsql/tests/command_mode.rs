@@ -983,6 +983,84 @@ fn source_show_finds_one_data_source_as_conn_does() {
 }
 
 #[test]
+fn source_default_prints_the_default_and_sets_it_in_its_own_file() {
+    let fixture = Fixture::new("source-default");
+    let project = write_sources(&fixture);
+    let default_of = |run: Run| {
+        let parsed: serde_json::Value = serde_json::from_str(&run.stdout).expect("valid json");
+        assert_eq!(parsed["rows"].as_array().expect("rows").len(), 1);
+        assert_eq!(parsed["rows"][0]["default"], true);
+        parsed["rows"][0]["name"]
+            .as_str()
+            .expect("name")
+            .to_string()
+    };
+
+    let shown = fixture
+        .binsql_with_project(&["source", "default", "-o", "json"], &project)
+        .succeeds();
+    assert_eq!(default_of(shown), "team/inspect");
+
+    let set = fixture
+        .binsql_with_project(&["source", "default", "pg", "-o", "json"], &project)
+        .succeeds();
+    assert!(!set.stdout.contains("hunter2"), "{}", set.stdout);
+    assert_eq!(default_of(set), "pg");
+    let config = std::fs::read_to_string(fixture.config()).expect("read the config");
+    assert!(config.contains(r#""default": "pg""#), "{config}");
+    let shown = fixture
+        .binsql_with_project(&["source", "default", "-o", "json"], &project)
+        .succeeds();
+    assert_eq!(default_of(shown), "pg");
+
+    std::fs::write(
+        &project,
+        r#"{ "default": "here", "connections": { "here": { "driver": "sqlite", "dsn": "/tmp/h.db" } } }"#,
+    )
+    .expect("write the project config");
+    fixture
+        .binsql_with_project(&["source", "default", "kc"], &project)
+        .failed()
+        .stderr_has("--scope project");
+    let config = std::fs::read_to_string(fixture.config()).expect("read the config");
+    assert!(config.contains(r#""default": "pg""#), "{config}");
+    fixture
+        .binsql_with_project(&["source", "default", "kc", "--scope", "project"], &project)
+        .succeeds();
+    let written = std::fs::read_to_string(&project).expect("read the project config");
+    assert!(written.contains(r#""default": "kc""#), "{written}");
+
+    fixture
+        .binsql_with_project(&["source", "default", "nope"], &project)
+        .refused();
+    fixture
+        .binsql_with_project(&["source", "default", "pg", "kc"], &project)
+        .refused();
+    fixture
+        .binsql_with_project(&["source", "default", "pg", "--scope", "other"], &project)
+        .refused();
+    fixture
+        .binsql_with_project(&["source", "list", "--scope", "user"], &project)
+        .refused();
+}
+
+#[test]
+fn source_default_with_none_set_prints_nothing() {
+    let fixture = Fixture::new("source-no-default");
+    std::fs::write(
+        fixture.config(),
+        r#"{ "connections": { "pg": { "driver": "postgres", "dsn": "postgres://db/app" } } }"#,
+    )
+    .expect("write the config");
+    for format in ["table", "json"] {
+        let run = fixture
+            .binsql(&["source", "default", "-o", format])
+            .succeeds();
+        assert_eq!(run.stdout, "", "{format}");
+    }
+}
+
+#[test]
 fn a_file_and_stdin_are_both_read() {
     let fixture = Fixture::new("input");
     fixture.seed();
