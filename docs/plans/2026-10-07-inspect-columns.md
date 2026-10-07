@@ -95,7 +95,7 @@ Decisions made here (the user asked for no questions, and we chose whatever chan
       from today's output before the change.
   - Verify: `cargo test -p binsql inspect`, then `cargo test -p binsql --test
     command_mode inspect`, `cargo clippy -p binsql --all-targets`.
-- [ ] **HELP and README.**
+- [x] **HELP and README.**
   - Add `--columns` to the INSPECT section in `cli/mod.rs:118-120`. It lists
     every table and view's columns with catalog, schema, object and kind.
     Naming a table with it is not supported yet.

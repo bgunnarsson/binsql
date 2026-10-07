@@ -222,6 +222,7 @@ binsql query "SELECT * FROM artist ORDER BY id"      # read
 binsql exec  -f migration.sql --dry-run              # write, and keep nothing
 binsql inspect                                       # what tables are there
 binsql inspect artist                                # what columns has it got
+binsql inspect --columns -o jsonl                    # every column of everything
 ```
 
 The split between the verbs is a safety boundary rather than a convenience.
@@ -309,12 +310,24 @@ forms, such as `jsonb_exists`.
 | --- | --- |
 | `--catalog NAME` | another database on the same connection |
 | `--schema NAME` | one schema rather than all of them |
+| `--columns` | every table and view's columns in one call |
 
 A table may carry its own schema — `binsql inspect dbo.orders` — which wins over
 `--schema`, being the more specific of the two. Either way the name is matched
 against what the server says it has rather than pasted into a query, so a
 misspelling comes back as binsql saying there is no such table instead of as a
 syntax error from the database.
+
+`--columns` answers with one row per column — `catalog, schema, object, kind,
+column, type, nullable, default, primary_key` — so an agent learns the whole
+schema in one call rather than one per table. Objects come sorted by schema
+(none first), then name, then kind, comparing bytes, the same on every backend;
+columns keep the order they were declared in. `schema` is null on SQLite and
+MySQL, which have no schema level. A table or view that comes back with no
+columns still gets a row, everything past its identity null, and a note on
+stderr. Read it as JSON or JSONL: CSV and TSV print a null and an empty string
+the same way. SQL Server's `type` is the bare type name, without its length or
+precision, and generated or hidden columns are not listed.
 
 Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".
@@ -547,6 +560,8 @@ v2 yet:
   [Azure Key Vault references](#azure-key-vault-references)).
 - Exporting a result set, editing values in the grid, query history, and
   filtering the tree.
+- **Naming one table with `inspect --columns`.** It is refused for now, until
+  the name is matched exactly; `inspect <name>` describes one table meanwhile.
 
 ## Licence
 
