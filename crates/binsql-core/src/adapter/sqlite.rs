@@ -21,6 +21,7 @@ const CODEC: Codec<Sqlite> = Codec {
     affected,
     bind,
     describe: false,
+    interrupt: None,
 };
 
 pub struct SqliteAdapter {

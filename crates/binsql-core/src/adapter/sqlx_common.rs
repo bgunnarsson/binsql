@@ -7,6 +7,7 @@
 use std::time::Instant;
 
 use futures_util::TryStreamExt;
+use futures_util::future::BoxFuture;
 use sqlx::query::Query;
 use sqlx::{Column as _, Database, Either, Executor, IntoArguments, Pool, Row, TypeInfo as _};
 use tokio_util::sync::CancellationToken;
@@ -37,6 +38,68 @@ pub struct Codec<DB: Database> {
     /// Only Postgres needs to: it types a parameter by the value sent for it,
     /// where the others convert a value to what the column holds.
     pub describe: bool,
+    /// How to stop the server running a statement nobody is waiting for any
+    /// more. SQLite runs in-process and stops when the stream is dropped.
+    pub interrupt: Option<Interrupt<DB>>,
+}
+
+/// Dropping a stream only stops binsql listening: the server runs the
+/// statement to its end, and holds the connection, and any transaction on it,
+/// until it does. Stopping it takes naming the connection first and then
+/// asking from another one, and no two servers spell either step the same way.
+pub struct Interrupt<DB: Database> {
+    /// Asks the connection for its id on the server, before anything that
+    /// might need stopping runs on it. `None` when the server would not say.
+    pub identify: for<'c> fn(&'c mut DB::Connection) -> BoxFuture<'c, Option<i64>>,
+    /// Stops what the named connection is running, from another connection
+    /// in the pool. Best-effort: nothing it reports would change what the
+    /// caller does next.
+    pub stop: for<'p> fn(&'p Pool<DB>, i64) -> BoxFuture<'p, ()>,
+}
+
+/// Runs one statement on a connection of its own, so that a cancel has a
+/// connection to name to the server.
+pub async fn run_alone<DB>(
+    pool: &Pool<DB>,
+    statement: &Bound,
+    limit: Option<usize>,
+    prepare: bool,
+    codec: &Codec<DB>,
+    cancel: &CancellationToken,
+) -> Result<ResultSet>
+where
+    DB: Database,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
+{
+    let mut connection = pool.acquire().await.map_err(Error::query)?;
+    let id = identify(&mut *connection, codec).await;
+    let result = run::<DB>(&mut connection, statement, limit, prepare, codec, cancel).await;
+    if let Err(error) = &result {
+        // Sent while the connection is still checked out, so the pool is not
+        // left draining a query nobody is waiting for.
+        stop(pool, error, id, codec).await;
+    }
+    result
+}
+
+/// One small round-trip per statement or batch, and the price of being able to
+/// stop the large one that follows it.
+async fn identify<DB: Database>(connection: &mut DB::Connection, codec: &Codec<DB>) -> Option<i64> {
+    match &codec.interrupt {
+        Some(interrupt) => (interrupt.identify)(connection).await,
+        None => None,
+    }
+}
+
+/// Stops the statement on the server when it was the cancel that ended it; an
+/// error the server reported means it has stopped already.
+async fn stop<DB: Database>(pool: &Pool<DB>, error: &Error, id: Option<i64>, codec: &Codec<DB>) {
+    if matches!(error, Error::Cancelled)
+        && let (Some(interrupt), Some(id)) = (&codec.interrupt, id)
+    {
+        (interrupt.stop)(pool, id).await;
+    }
 }
 
 /// Runs several statements inside one transaction, on one connection, ending
@@ -58,7 +121,13 @@ where
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
 {
-    let mut transaction = pool.begin().await.map_err(Error::query)?;
+    let mut connection = pool.acquire().await.map_err(Error::query)?;
+    // Named before `BEGIN`: on Postgres a lookup that failed inside the
+    // transaction would abort it.
+    let id = identify(&mut *connection, codec).await;
+    let mut transaction = sqlx::Connection::begin(&mut *connection)
+        .await
+        .map_err(Error::query)?;
     let mut results = Vec::with_capacity(statements.len());
 
     for (index, statement) in statements.iter().enumerate() {
@@ -66,6 +135,9 @@ where
         match outcome {
             Ok(result) => results.push(result),
             Err(error) => {
+                // The rollback cannot start until the server has finished the
+                // statement, so a cancelled one is stopped first.
+                stop(pool, &error, id, codec).await;
                 // The statement's own error is the one worth reporting; a
                 // rollback that also fails only says the connection is gone,
                 // and that nothing can be said about what was kept.
@@ -122,8 +194,8 @@ async fn end<DB: Database>(
 /// A cancel stops the drain and drops the stream, which is what sqlx asks of a
 /// caller that wants out early: the pool tests the connection as it comes back
 /// and discards it if the interrupted query left it mid-conversation. Stopping
-/// the *server* is a separate matter and belongs to each adapter, since no two
-/// of them spell it the same way.
+/// the *server* is a separate matter, which [`run_alone`] and
+/// [`run_transaction`] see to through the codec's [`Interrupt`].
 pub async fn run<DB>(
     connection: &mut DB::Connection,
     statement: &Bound,
@@ -261,7 +333,7 @@ pub(crate) use {bind_as_given, decode_as, decode_fallback};
 #[cfg(test)]
 mod tests {
     use sqlx::Sqlite;
-    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::sqlite::{SqliteConnection, SqlitePoolOptions, SqliteQueryResult, SqliteTypeInfo};
 
     use super::*;
 
@@ -326,6 +398,111 @@ mod tests {
             .await
             .expect("commit");
         assert_eq!(rows(&pool).await, 1);
+    }
+
+    /// The id `identify` hands out, and the one `stop` was last asked to stop.
+    const NAMED: i64 = 7;
+    static STOPPED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+    fn identify(_: &mut SqliteConnection) -> BoxFuture<'_, Option<i64>> {
+        Box::pin(async { Some(NAMED) })
+    }
+
+    fn record_stop(_: &Pool<Sqlite>, id: i64) -> BoxFuture<'_, ()> {
+        Box::pin(async move { STOPPED.store(id, std::sync::atomic::Ordering::SeqCst) })
+    }
+
+    fn refuse_stop(_: &Pool<Sqlite>, _: i64) -> BoxFuture<'_, ()> {
+        panic!("a statement the database ended needs no stop")
+    }
+
+    fn bind_nothing<'q>(
+        query: Binding<'q, Sqlite>,
+        _: &'q Value,
+        _: Option<&SqliteTypeInfo>,
+    ) -> std::result::Result<Binding<'q, Sqlite>, String> {
+        Ok(query)
+    }
+
+    /// SQLite with a server-side stop, as Postgres and MySQL have one.
+    fn codec(stop: for<'p> fn(&'p Pool<Sqlite>, i64) -> BoxFuture<'p, ()>) -> Codec<Sqlite> {
+        Codec {
+            decode: |_, _| Value::Null,
+            affected: SqliteQueryResult::rows_affected,
+            bind: bind_nothing,
+            describe: false,
+            interrupt: Some(Interrupt { identify, stop }),
+        }
+    }
+
+    fn statement(sql: &str) -> Bound {
+        Bound {
+            sql: sql.to_string(),
+            params: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cancel_inside_a_transaction_stops_the_statement_before_rolling_back() {
+        let pool = pool().await;
+        let cancel = CancellationToken::new();
+        let later = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            later.cancel();
+        });
+        let statements = [
+            statement("INSERT INTO t VALUES (1)"),
+            statement(
+                "WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM r) SELECT i FROM r",
+            ),
+        ];
+        let codec = codec(record_stop);
+        let ran = run_transaction(&pool, &statements, None, true, &codec, &cancel);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(5), ran)
+            .await
+            .expect("the cancel ends the batch")
+            .expect_err("a cancelled batch does not commit");
+        assert!(
+            matches!(
+                &error,
+                Error::Transaction { error, outcome: TransactionOutcome::RolledBack, statement: Some(2) }
+                    if matches!(**error, Error::Cancelled)
+            ),
+            "{error:?}"
+        );
+        assert_eq!(STOPPED.load(std::sync::atomic::Ordering::SeqCst), NAMED);
+        assert_eq!(rows(&pool).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_statement_that_fails_inside_a_transaction_is_not_stopped() {
+        let pool = pool().await;
+        let error = run_transaction(
+            &pool,
+            &[
+                statement("INSERT INTO t VALUES (1)"),
+                statement("SELECT * FROM missing"),
+            ],
+            None,
+            true,
+            &codec(refuse_stop),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("the batch fails");
+        assert!(
+            matches!(
+                &error,
+                Error::Transaction {
+                    outcome: TransactionOutcome::RolledBack,
+                    statement: Some(2),
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(rows(&pool).await, 0);
     }
 
     #[tokio::test]

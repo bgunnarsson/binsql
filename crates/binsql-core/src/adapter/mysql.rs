@@ -1,15 +1,18 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
+use futures_util::future::BoxFuture;
 use sqlx::Row;
 use sqlx::mysql::{
-    MySql, MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlQueryResult, MySqlRow,
-    MySqlTypeInfo,
+    MySql, MySqlConnectOptions, MySqlConnection, MySqlPool, MySqlPoolOptions, MySqlQueryResult,
+    MySqlRow, MySqlTypeInfo,
 };
 use tokio_util::sync::CancellationToken;
 
 use super::Adapter;
-use super::sqlx_common::{self, Binding, Codec, bind_as_given, decode_as, decode_fallback};
+use super::sqlx_common::{
+    self, Binding, Codec, Interrupt, bind_as_given, decode_as, decode_fallback,
+};
 use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
@@ -21,6 +24,7 @@ const CODEC: Codec<MySql> = Codec {
     affected,
     bind,
     describe: false,
+    interrupt: Some(Interrupt { identify, stop }),
 };
 
 pub struct MySqlAdapter {
@@ -53,45 +57,28 @@ impl MySqlAdapter {
             database,
         })
     }
+}
 
-    /// Runs the statement on a connection of its own so that a cancel has
-    /// something to name: `KILL QUERY` stops the statement running on one
-    /// connection and has to be sent from another.
-    ///
-    /// It sits outside the `Adapter` impl because a boxed trait future cannot
-    /// hold a borrow of a pooled connection.
-    async fn run_on_own_connection(
-        &self,
-        statement: &Bound,
-        limit: Option<usize>,
-        prepare: bool,
-        cancel: &CancellationToken,
-    ) -> Result<ResultSet> {
-        let mut connection = self.pool.acquire().await.map_err(Error::query)?;
-        // One small round-trip per statement, and the price of being able to
-        // stop the large one that follows it.
-        let id: Option<u64> = sqlx::query_scalar("SELECT CONNECTION_ID()")
-            .fetch_one(&mut *connection)
+/// `KILL QUERY` stops the statement running on one connection and has to be
+/// sent from another, so the first is asked its id before it starts.
+fn identify(connection: &mut MySqlConnection) -> BoxFuture<'_, Option<i64>> {
+    Box::pin(async move {
+        sqlx::query_scalar::<_, u64>("SELECT CONNECTION_ID()")
+            .fetch_one(connection)
             .await
-            .ok();
+            .ok()
+            .and_then(|id| i64::try_from(id).ok())
+    })
+}
 
-        let result =
-            sqlx_common::run::<MySql>(&mut connection, statement, limit, prepare, &CODEC, cancel)
-                .await;
-
-        if matches!(result, Err(Error::Cancelled))
-            && let Some(id) = id
-        {
-            // `KILL QUERY` ends the statement and leaves the connection open.
-            // The id is a number MySQL gave us, and the statement takes no
-            // placeholder anyway.
-            let _ = sqlx::raw_sql(&format!("KILL QUERY {id}"))
-                .execute(&self.pool)
-                .await;
-        }
-
-        result
-    }
+/// `KILL QUERY` ends the statement and leaves the connection open. The id is a
+/// number MySQL gave us, and the statement takes no placeholder anyway.
+fn stop(pool: &MySqlPool, id: i64) -> BoxFuture<'_, ()> {
+    Box::pin(async move {
+        let _ = sqlx::raw_sql(&format!("KILL QUERY {id}"))
+            .execute(pool)
+            .await;
+    })
 }
 
 /// Accepts both the URL form sqlx wants and the `go-sql-driver` form that v2
@@ -278,8 +265,7 @@ impl Adapter for MySqlAdapter {
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
-        self.run_on_own_connection(statement, limit, false, cancel)
-            .await
+        sqlx_common::run_alone::<MySql>(&self.pool, statement, limit, false, &CODEC, cancel).await
     }
 
     /// Prepared, so a second statement the lexer missed — hidden behind a
@@ -295,8 +281,7 @@ impl Adapter for MySqlAdapter {
             sql: sql::plan_sql(&statement.sql, Backend::MySql),
             params: statement.params.clone(),
         };
-        self.run_on_own_connection(&planned, limit, true, cancel)
-            .await
+        sqlx_common::run_alone::<MySql>(&self.pool, &planned, limit, true, &CODEC, cancel).await
     }
 
     async fn run_transaction(

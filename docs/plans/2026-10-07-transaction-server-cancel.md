@@ -53,7 +53,7 @@ never name a zsh variable `status`; no `tempfile` crate.
 
 ## Tasks
 
-- [ ] **1. The hook.** `sqlx_common.rs`: `Interrupt`, the transaction named
+- [x] **1. The hook.** `sqlx_common.rs`: `Interrupt`, the transaction named
   before `BEGIN` and the stop sent before the rollback, the single-statement
   path shared. `postgres.rs`, `mysql.rs`: their `Interrupt`. `sqlite.rs`:
   none. `tests/cancel_servers.rs`: the live tests.
