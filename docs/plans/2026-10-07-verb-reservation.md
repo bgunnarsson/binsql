@@ -86,7 +86,7 @@ None found. (No `docs/solutions` in this repo.) Project note: command-mode
   check in Verification.
   Verify: `cargo build -p binsql && cargo test -p binsql`.
 
-- [ ] **4. `parse_args` accepts `--`.**
+- [x] **4. `parse_args` accepts `--`.**
   `crates/binsql/src/main.rs:237`: add a `positional` bool. A `"--"` arm,
   placed before the `starts_with('-')` arm and guarded `if !positional`, sets
   `positional = true`. Guard the option arms (`-h`, `-V`, `--debug-keys`,

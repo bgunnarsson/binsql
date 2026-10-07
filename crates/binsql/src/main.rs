@@ -20,6 +20,7 @@ USAGE
     binsql <connection>        open a saved data source, or a DSN
     binsql eimskip/prod        a connection inside a folder
     binsql --driver <name> <dsn>
+    binsql -- <connection>     open a saved data source named like a command
 
 OPTIONS
     -d, --driver <name>   sqlite | postgres | mssql | mysql (default: inferred)
@@ -238,30 +239,36 @@ fn parse_args(args: Vec<String>) -> Result<Option<Options>> {
     let mut target = None;
     let mut backend = None;
     let mut rest = args.into_iter();
+    // After `--` every argument is a target, so a data source named like a
+    // verb or an option can still be opened.
+    let mut positional = false;
 
     while let Some(arg) = rest.next() {
-        match arg.as_str() {
-            "-h" | "--help" => {
+        match (positional, arg.as_str()) {
+            (false, "--") => positional = true,
+            (false, "-h" | "--help") => {
                 print!("{HELP}\n{}", cli::HELP);
                 return Ok(None);
             }
-            "-V" | "--version" => {
+            (false, "-V" | "--version") => {
                 println!("binsql {}", env!("CARGO_PKG_VERSION"));
                 return Ok(None);
             }
-            "--debug-keys" => {
+            (false, "--debug-keys") => {
                 debug_keys()?;
                 return Ok(None);
             }
-            "-d" | "--driver" => {
+            (false, "-d" | "--driver") => {
                 let name = rest
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("--driver needs a name"))?;
                 backend = Some(Backend::parse(&name)?);
             }
-            other if other.starts_with('-') => bail!("Unknown option {other}. Try --help."),
-            other if target.is_none() => target = Some(other.to_string()),
-            other => bail!("Unexpected argument {other}. Try --help."),
+            (false, other) if other.starts_with('-') => {
+                bail!("Unknown option {other}. Try --help.")
+            }
+            (_, other) if target.is_none() => target = Some(other.to_string()),
+            (_, other) => bail!("Unexpected argument {other}. Try --help."),
         }
     }
 
@@ -300,5 +307,37 @@ mod tests {
     #[test]
     fn rejects_unknown_options() {
         assert!(parse_args(args(&["--nope"])).is_err());
+    }
+
+    #[test]
+    fn a_double_dash_makes_a_verb_a_target() {
+        let options = parse_args(args(&["--", "query"])).unwrap().unwrap();
+        assert_eq!(options.target.as_deref(), Some("query"));
+    }
+
+    #[test]
+    fn options_before_a_double_dash_still_apply() {
+        let options = parse_args(args(&["-d", "sqlite", "--", "exec"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(options.backend, Some(Backend::Sqlite));
+        assert_eq!(options.target.as_deref(), Some("exec"));
+    }
+
+    #[test]
+    fn a_double_dash_ends_options() {
+        let options = parse_args(args(&["--", "--help"])).unwrap().unwrap();
+        assert_eq!(options.target.as_deref(), Some("--help"));
+    }
+
+    #[test]
+    fn a_double_dash_alone_opens_the_list() {
+        let options = parse_args(args(&["--"])).unwrap().unwrap();
+        assert_eq!(options.target, None);
+    }
+
+    #[test]
+    fn a_double_dash_allows_one_target() {
+        assert!(parse_args(args(&["--", "a", "b"])).is_err());
     }
 }
