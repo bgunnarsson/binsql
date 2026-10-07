@@ -682,6 +682,8 @@ QUERY
                           it; `-o raw` for the bare document
         --require-rows    exit 1 if the query returns no rows, after printing
                           what it did return
+        --stream          write each record as its row arrives (jsonl, csv or
+                          tsv); reads only, and only exit 0 means complete
 
 EXEC
     -f, --file FILE       read the script from a file, or from stdin for `-`

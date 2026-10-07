@@ -330,6 +330,26 @@ permission (`GRANT SHOWPLAN TO <user>`), and says so when it is missing.
 binsql query --plan "SELECT * FROM orders WHERE customer_id = 31" -o raw | jq .
 ```
 
+`--stream` writes each record as its row arrives instead of holding the whole
+result first, so a large export starts at once and holds a few hundred rows at
+a time. It writes `-o jsonl`, `-o csv` and `-o tsv`, a record per row, and
+refuses any other format, since a table, JSON array or plan needs every row
+before its first byte. It reads only: a write is refused even with
+`--allow-write`, and so is `--plan`.
+
+The records are the same bytes the query prints without the flag, but a
+failure part-way leaves the records already written in place and exits `1`
+after them: only exit `0` means the output is complete. A query cut short by
+`--limit` says `stopped at --limit N; more rows were available` on stderr. A
+reader that goes away — `| head` — stops the query and exits `0`. The limit
+bounds the rows binsql holds, not the work the database does to produce them
+or the size of any one row. `--require-rows` and `--timeout-ms` apply as they
+do without it.
+
+```sh
+binsql query --stream -o csv "SELECT * FROM events" | gzip > events.csv.gz
+```
+
 `exec` takes `-f, --file FILE`, and:
 
 | | |

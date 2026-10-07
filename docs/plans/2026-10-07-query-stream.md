@@ -65,7 +65,7 @@ the CLI takes `--driver sqlite` with a plain path for a DSN.
   anything is sent, the note, `--require-rows`.
   Verify: `cargo test --workspace` — the integration tests above.
 
-- [ ] **2. HELP and the README.** `--stream` under QUERY; in the README, the
+- [x] **2. HELP and the README.** `--stream` under QUERY; in the README, the
   three formats, the `--allow-write` refusal, that only exit 0 means complete,
   the note on stderr, and that the limit bounds rows held, not server work or
   row size.
