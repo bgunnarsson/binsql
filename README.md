@@ -421,15 +421,15 @@ A CI job, a container or an agent gets its login the same way, with one of the
 Azure CLI's non-interactive forms run before binsql:
 
 ```sh
-az login --service-principal -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID"
+az login --service-principal -u "$AZURE_CLIENT_ID" --password="$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID"
 az login --service-principal -u "$AZURE_CLIENT_ID" --federated-token "$TOKEN" --tenant "$AZURE_TENANT_ID"
 az login --identity    # a managed identity, on Azure compute
 ```
 
-Both Key Vault references and `fedauth=` then use that login. `az` is run with
-no stdin, so a missing login fails with its error rather than waiting at a
-prompt. There is no deadline on the call yet, so a hung `az` holds binsql with
-it.
+Both Key Vault references and `fedauth=` then use that login. Without one,
+`az` fails with its own error, which binsql passes on. There is no deadline on
+the call yet, and `az` shares binsql's stdin, so an `az` that hangs or stops at
+a prompt holds binsql with it.
 
 ### The schema cache
 
