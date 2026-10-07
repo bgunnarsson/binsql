@@ -66,12 +66,17 @@ Spend one bare verb, `source`, on all data-source management (`binsql source <op
    options (`binsql source -d postgres`, `binsql source --help`), keeps the
    TUI path exactly as today: it opens whatever `Config::resolve`
    (`binsql-core/src/config.rs:283`) finds for `source`, a top-level `source`
-   or a unique `folder/source` by its leaf. Only when `source` resolves to
-   nothing does bare `binsql source` print the `source` usage and exit 2, where
-   today it fails with "not a saved data source" (`main.rs:58`): an error
-   message reworded, the exit staying a failure. No invocation that succeeded
-   before changes meaning, so the map's no-breaking-changes rule holds without
-   an exception. `query`, `exec` and `inspect` already shadow their names,
+   or a unique `folder/source` by its leaf. When `source` resolves to
+   nothing, bare `binsql source` also stays on that path and fails as it does
+   today, with "not a saved data source" and exit 1 (`main.rs:58`, `:61`); it
+   does not print the `source` usage, since that would change exit 1 to 2.
+   Every invocation without a non-flag second argument behaves byte for byte
+   as before, message and exit code included, so the map's
+   no-breaking-changes rule holds without an exception. The build ticket that
+   adds `source` verifies this: bare `binsql source` with no saved match exits
+   1 with today's message, `binsql source -d postgres` and `binsql source
+   --help` behave as today, and a saved `source` (top-level or a unique folder
+   leaf) still opens by `binsql source`. `query`, `exec` and `inspect` already shadow their names,
    folder leaves included; that is existing behaviour and stays.
 3. **Reserve, but only for new top-level names.** `Workspace::set`
    (`binsql-core/src/workspace.rs:177`) refuses an id that is a verb, has no

@@ -67,7 +67,8 @@ changes to `query`, `exec` and `inspect`.
 - **Building the data-source commands**: these become task tickets under
   `binsql source <op>` (05) once 08 settles their shape. The one that
   adds the verb carries 05's dispatch rule: `source` is command mode only when a
-  non-flag argument follows it. Some may first need logic moved from the app into the
+  non-flag argument follows it, and bare `binsql source` keeps today's
+  message and exit 1 when nothing resolves. Some may first need logic moved from the app into the
   core, depending on 07.
 - **Richer schema context**: 03 ranks one-call schema context as worth having;
   its shape and build tickets wait on 04's per-backend inventory.
