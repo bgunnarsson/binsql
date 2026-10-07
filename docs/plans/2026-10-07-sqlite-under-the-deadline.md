@@ -54,6 +54,6 @@ never name a zsh variable `status`; no `tempfile` crate.
   helper that starts binsql without waiting for it.
   Verify: `cargo test --workspace`.
 
-- [ ] **2. The README.** The `query` timeout paragraph and the Cancelling
+- [x] **2. The README.** The `query` timeout paragraph and the Cancelling
   section say what SQLite does with a statement that yields no rows.
   Verify: `cargo test -p binsql`.

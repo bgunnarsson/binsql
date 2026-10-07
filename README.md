@@ -286,6 +286,14 @@ A read says nothing was changed by binsql; a write under `--allow-write` says
 whether it took effect is unknown, because a timeout is not proof of a
 rollback. `0`, or no flag, is no limit.
 
+On SQLite, a statement that returns nothing until it ends — an aggregate, an
+`INSERT … SELECT` — does not stop at the cancel, since SQLite's worker notices
+it only when it next hands over a row. binsql exits at the deadline all the
+same, and the statement and its lock end with the process. A wait for another
+connection's lock counts against the deadline, but the driver stops waiting
+after 5 s on its own, with `database is locked`, category `database`: a
+deadline longer than that is not what ends the wait.
+
 `--require-rows` turns an empty result into a failure: the result prints as it
 would without the flag, and then the query exits `1` with `the query returned no
 rows (--require-rows)`, category `assertion`. A check reads as a predicate
@@ -777,7 +785,10 @@ the only way either of them hears it, since neither notices a client that has
 stopped listening. SQL Server has no such statement and tiberius does not expose
 TDS's attention signal, so the connection is dropped and replaced, which the
 server reads as a disconnect and abandons the batch for. SQLite runs in this
-process and has no server to call off.
+process and has no server to call off: its statement runs on a worker thread
+that notices the cancel when it next hands over a row. One that returns nothing
+until it ends, such as a `count(*)` or an `INSERT … SELECT`, runs on, holding
+its lock, until binsql quits.
 
 The same holds inside a transaction, as `exec` runs a batch. The transaction
 names its server session as it begins, so a cancelled statement is stopped on
