@@ -1,7 +1,7 @@
 ---
 title: "Database errors carry the native code when the driver types it"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
@@ -47,19 +47,19 @@ never name a zsh variable `status`.
 
 ## Tasks
 
-- [ ] **1. The core reads the code.**
+- [x] **1. The core reads the code.**
   `error.rs`: `native_code()` walks the chain, downcasting to `sqlx::Error`
   (its database error's `code()`) and `tiberius::error::Error` (`code()`).
   `adapter/mssql.rs`: `showplan_hint` adds its hint as context.
   Verify: `cargo test -p binsql-core` — a SQLite UNIQUE violation, a
   non-database error, the SHOWPLAN text unchanged.
 
-- [ ] **2. The record carries it.**
+- [x] **2. The record carries it.**
   `cli/mod.rs`: `Failure` gains `code`, filled in `caused`; `error_record`
   writes it after `reason`.
   Verify: `cargo test -p binsql` — the UNIQUE violation's record and a
   refusal without one.
 
-- [ ] **3. HELP and the README.** The field table gains `code` and its
+- [x] **3. HELP and the README.** The field table gains `code` and its
   meaning per backend.
   Verify: `cargo test -p binsql`.

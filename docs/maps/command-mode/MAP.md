@@ -75,6 +75,7 @@ changes to `query`, `exec` and `inspect`.
 - [34](34-source-remove.md): binsql source remove NAME --force deletes a data source from every file that holds it, then its keychain secret, and prints the row it had.
 - [40](40-error-format-json-gives-one-structured-error-recor.md): `--error-format json`, or `BINSQL_ERROR_FORMAT=json`, prints a failure as one JSON line on stderr — type, schema 1, exit, category, phase, a redacted message without SQL, and statement/completed when set — and notices as notice records.
 - [41](41-key-vault-and-azure-ad-failures-carry-a-reason.md): A Key Vault failure is an `Error::Secret` and the Azure AD token failure a `Connect` with a reason; in JSON they carry `reason` (`az-missing`, `az-unauthenticated`, `vault-forbidden`, `secret-not-found`, `vault-not-found`, `azure-ad-token`), and a secret failure `hint` and a redacted, 1000-character `detail`.
+- [42](42-database-errors-carry-the-native-code-when-the-dri.md): A database failure's JSON record carries `code`, the driver's own typed error code as a string — the SQLSTATE on PostgreSQL and MySQL, the extended result code on SQLite, the error number on SQL Server — read by `Error::native_code()` from the error chain, never from the message.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
