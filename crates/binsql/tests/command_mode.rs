@@ -1694,6 +1694,33 @@ fn error_format_json_says_a_failed_batch_was_rolled_back() {
 }
 
 #[test]
+fn a_batch_that_commits_itself_does_not_claim_a_rollback() {
+    let fixture = Fixture::new("error-json-own-commit");
+    fixture.seed();
+    // The rollback after the failure succeeds, but only undoes what came
+    // after the batch's own COMMIT.
+    let run = fixture
+        .direct(&[
+            "exec",
+            "INSERT INTO artist (name) VALUES ('Plaid'); COMMIT; BEGIN; SELECT * FROM nowhere",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["statement"], 4);
+    assert_eq!(record["transaction"], "unknown");
+
+    fixture
+        .direct(&args(
+            "query",
+            &["SELECT count(*) FROM artist", "-o", "raw"],
+        ))
+        .succeeds()
+        .stdout_has("4");
+}
+
+#[test]
 fn a_refused_batch_does_not_claim_a_rollback() {
     let fixture = Fixture::new("error-json-refused-batch");
     fixture.write_config();

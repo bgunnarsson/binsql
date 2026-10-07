@@ -433,7 +433,10 @@ A failure binsql raises itself, such as a refusal, has no `code`.
 `transaction` is `rolled_back` when a statement failed and the rollback went
 through, so nothing was kept; `unknown` when the rollback, the commit, or the
 rollback that ends a `--dry-run` failed, so the database alone knows; and `none`
-when no statement was sent. A failed commit has no `statement`. `exec --no-tx`
+when no statement was sent. A batch that could have committed part of itself —
+one with its own `COMMIT`, `SET` or other control statement, or DDL on MySQL —
+is `unknown` rather than `rolled_back`, since the rollback may have had nothing
+left to undo. A failed commit has no `statement`. `exec --no-tx`
 has no `transaction`; it has `completed`.
 
 The message is redacted: a stored connection string, the password in

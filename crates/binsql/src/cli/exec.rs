@@ -63,7 +63,11 @@ pub async fn run(args: Vec<String>) -> Result<()> {
                 // Only an error from inside the transaction says how it
                 // ended; any other came before the batch began.
                 let failure = core(error);
+                let ran = &statements[..failure.statement.unwrap_or(0)];
                 match failure.transaction {
+                    Some(Transaction::RolledBack) if commits_on_its_own(ran, backend) => failure
+                        .transaction(Transaction::Unknown)
+                        .context("whether the transaction was committed or rolled back is unknown"),
                     Some(Transaction::RolledBack) => {
                         failure.context("the transaction was rolled back; nothing was kept")
                     }
@@ -150,6 +154,17 @@ fn refuse_the_obviously_destructive(statements: &[Statement], backend: Backend) 
         }
     }
     Ok(())
+}
+
+/// Whether a statement that ran could have ended the transaction itself: a
+/// control statement such as `COMMIT` (the lexer does not tell it from `SET`),
+/// or DDL on MySQL, which commits as it runs. A rollback that succeeds after
+/// one may have had nothing left to undo.
+fn commits_on_its_own(statements: &[Statement], backend: Backend) -> bool {
+    statements.iter().any(|statement| {
+        statement.kind == binsql_core::Kind::Control
+            || (backend == Backend::MySql && statement.kind == binsql_core::Kind::Ddl)
+    })
 }
 
 /// MySQL commits DDL implicitly, so a dry run there cannot put a schema change
