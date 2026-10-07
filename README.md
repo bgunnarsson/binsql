@@ -485,7 +485,8 @@ SECURITY`, so it names the account that created the view. SQL Server keeps no
 text for a table either; a view's is its module as it was written
 (`sys.sql_modules`), so comments before the `CREATE` stay, `CREATE OR ALTER`
 stays as typed, and a view renamed with `sp_rename` still has its old name in
-the text. A view created `WITH ENCRYPTION` gives `withheld`.
+the text. A view created `WITH ENCRYPTION`, or one the login has no VIEW DEFINITION
+permission on, gives `withheld`.
 
 Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".

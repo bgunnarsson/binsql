@@ -716,9 +716,10 @@ fn qualify(catalog: &str, view: &str) -> String {
 
 /// Escapes a string for inlining. Introspection has to inline schema and table
 /// names because a catalog cannot be parameterised, so the literals beside them
-/// are inlined the same way.
+/// are inlined the same way. `N` keeps it Unicode: a plain literal is read in
+/// the database's code page, and a name that does not fit it would never match.
 fn quote_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+    format!("N'{}'", value.replace('\'', "''"))
 }
 
 fn type_label(column_type: ColumnType) -> String {
@@ -979,6 +980,11 @@ async fn azure_cli_token() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_literal_is_unicode_and_doubles_its_quotes() {
+        assert_eq!(quote_literal("视图's"), "N'视图''s'");
+    }
 
     #[test]
     fn a_view_gives_its_module_text() {
