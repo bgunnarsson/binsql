@@ -1,7 +1,7 @@
 ---
 title: "inspect under the deadline"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
