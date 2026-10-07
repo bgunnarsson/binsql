@@ -451,7 +451,8 @@ fn mask_userinfo(dsn: &str) -> String {
 /// it, as SQL Server's URL, rewritten to ADO, would read it.
 fn holds_password(encoded: &str) -> bool {
     let decoded = decode_percent(encoded);
-    mask_ado(&decoded) != decoded
+    let term = format!("k={decoded}");
+    mask_ado(&decoded) != decoded || mask_ado(&term) != term
 }
 
 /// libpq's keyword form, as `connect_options` reads it: terms split on any
@@ -664,6 +665,16 @@ mod tests {
                 MsSql,
                 "Server=h;fedauth={x;Password=secret;y=z};Database=d",
                 "Server=h;fedauth={x;Password=****;y=z};Database=d",
+            ),
+            (
+                MsSql,
+                "sqlserver://h?database=foo%3D%27bar%3Bpassword%3Dsecret",
+                "sqlserver://h?database=****",
+            ),
+            (
+                MsSql,
+                "sqlserver://foo%3D%27bar%3Bpassword%3Dsecret@h",
+                "sqlserver://****@h",
             ),
             (
                 MySql,
