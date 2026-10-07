@@ -93,6 +93,32 @@ pub fn rename(from: &str, to: &str) -> Result<()> {
     delete(from)
 }
 
+/// The writes saving and removing a data source make to the credential store,
+/// so the sequences in [`Workspace`](crate::Workspace) can be tested without
+/// touching the real one.
+pub trait SecretStore {
+    fn set(&self, account: &str, secret: &str) -> Result<()>;
+    fn rename(&self, from: &str, to: &str) -> Result<()>;
+    fn delete(&self, account: &str) -> Result<()>;
+}
+
+/// The operating system's credential store.
+pub struct Keychain;
+
+impl SecretStore for Keychain {
+    fn set(&self, account: &str, secret: &str) -> Result<()> {
+        set(account, secret)
+    }
+
+    fn rename(&self, from: &str, to: &str) -> Result<()> {
+        rename(from, to)
+    }
+
+    fn delete(&self, account: &str) -> Result<()> {
+        delete(account)
+    }
+}
+
 fn entry(account: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(SERVICE, account).map_err(|err| failed("opening", account, err))
 }

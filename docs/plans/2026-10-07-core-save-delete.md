@@ -115,7 +115,7 @@ None found.
   in `overlay.rs` and `app/mod.rs:25`. `effective_backend` stays for the
   display code.
   Verify: `cargo test -p binsql overlay`
-- [ ] **The secret-store seam.** In `secrets/keychain.rs`, add
+- [x] **The secret-store seam.** In `secrets/keychain.rs`, add
   `pub trait SecretStore { fn set(&self, account: &str, secret: &str) -> Result<()>; fn rename(&self, from: &str, to: &str) -> Result<()>; fn delete(&self, account: &str) -> Result<()>; }`
   and `pub struct Keychain;` implementing it via the free functions.
   Verify: `cargo test -p binsql-core keychain`
