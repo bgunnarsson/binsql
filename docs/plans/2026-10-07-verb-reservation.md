@@ -107,7 +107,7 @@ None found. (No `docs/solutions` in this repo.) Project note: command-mode
   `help_stops_before_starting`, `rejects_unknown_options` pass unchanged.
   Verify: `cargo test -p binsql`.
 
-- [ ] **5. Document `--`.**
+- [x] **5. Document `--`.**
   `HELP` (`main.rs:15`): under USAGE add
   `binsql -- <connection>     open a saved data source named like a command`.
   `README.md:42-54`: add `binsql -- query                 # a saved data source named like a verb`
@@ -116,6 +116,7 @@ None found. (No `docs/solutions` in this repo.) Project note: command-mode
   source cannot take a verb's name (inside a folder it can; one already saved
   stays editable).
   Verify: `cargo build --release && ./target/release/binsql --help` shows the line.
+  Deviation: the `HELP` line went in with task 4's commit, since it is in `main.rs`.
 
 ## Files
 

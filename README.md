@@ -45,13 +45,17 @@ binsql eimskip/prod             # open one saved data source
 binsql scratch                  # a bare name, when only one folder has it
 binsql ./app.db                 # open a DSN directly, driver inferred
 binsql --driver mysql "user:pass@tcp(host:3306)/app"
+binsql -- query                 # a saved data source named like a verb
 ```
 
 A first argument that names a verb — `query`, `exec`, `inspect` — is
 [command mode](#command-mode); anything else is a data source to open. Anything
 binsql can neither find among the saved ones nor read as a connection string is
 an error naming both ways out, since a mistyped verb lands there as readily as a
-bad DSN. `-h`, `-V` and `--debug-keys` print and stop.
+bad DSN. `-h`, `-V` and `--debug-keys` print and stop. After `--` the next
+argument is always a data source, even one named like a verb. A new top-level
+data source cannot take a verb's name, though one inside a folder can, and one
+saved under it before stays editable.
 
 Data sources live in `~/.config/binsql/connections.json`, honouring
 `BINSQL_CONFIG` and `XDG_CONFIG_HOME`. Add one from inside the app with `⌃N`
