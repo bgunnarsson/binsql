@@ -366,22 +366,22 @@ fn commit(
         .backend
         .or_else(|| change.dsn.as_deref().and_then(Backend::infer))
         .or(stored.as_ref().map(|source| source.backend));
-    let sqlite = backend == Some(Backend::Sqlite);
+    let path = backend == Some(Backend::Sqlite) && is_path(&dsn);
     let filed = keychain::is_reference(&dsn);
     // A path or a reference holds no secret, so it goes where it was given.
-    let literal = !filed && !sqlite && !Reference::is_reference(&dsn);
+    let literal = !filed && !path && !Reference::is_reference(&dsn);
 
-    if change.dsn_on_flag {
-        if filed {
-            return Err(usage(
-                "a keychain:// reference names a secret binsql filed; pass the connection string with --dsn-stdin or --dsn-env",
-            ));
-        }
-        if literal {
-            return Err(usage(
-                "--dsn takes a sqlite path or a secret reference; pass a connection string with --dsn-stdin or --dsn-env VAR, so it stays out of your shell history",
-            ));
-        }
+    // One binsql filed under another name would be re-keyed to this one
+    // with nothing filed under it.
+    if change.dsn.is_some() && filed {
+        return Err(usage(
+            "a keychain:// reference names a secret binsql filed; pass the connection string with --dsn-stdin or --dsn-env",
+        ));
+    }
+    if change.dsn_on_flag && literal {
+        return Err(usage(
+            "--dsn takes a sqlite path or a secret reference; pass a connection string with --dsn-stdin or --dsn-env VAR, so it stays out of your shell history",
+        ));
     }
 
     // A literal already in the config stays there unless it is retyped.
@@ -437,6 +437,23 @@ fn commit(
             Some(_) => format!("{id} already exists"),
         }));
     }
+    // The config would replace the one with the other.
+    if let Some((folder, _)) = id.split_once('/')
+        && workspace.get(folder).is_some()
+    {
+        return Err(usage(format!(
+            "{folder} is a data source, so it cannot be a folder too"
+        )));
+    }
+    let inside = format!("{id}/");
+    if workspace
+        .iter()
+        .any(|(other, _)| other.starts_with(&inside))
+    {
+        return Err(usage(format!(
+            "{id} is a folder of data sources; save it under another name, or inside it as {id}/NAME"
+        )));
+    }
     workspace
         .check_new_id(&id)
         .map_err(|error| usage(error.to_string()))?;
@@ -444,6 +461,14 @@ fn commit(
         .save(saved, store)
         .map_err(|error| failed(format!("saving {id}: {error}")))?;
     Ok(id)
+}
+
+/// Whether a sqlite connection string is a path, which holds no secret. A
+/// keyword string such as `host=h password=p.db` reads as sqlite by its
+/// extension, so one with an `=` counts only as a `sqlite:` or `file:` URL.
+fn is_path(dsn: &str) -> bool {
+    let lower = dsn.trim().to_ascii_lowercase();
+    !lower.contains('=') || lower.starts_with("sqlite:") || lower.starts_with("file:")
 }
 
 fn load() -> Result<Workspace> {
@@ -601,7 +626,8 @@ mod tests {
             &user,
             r#"{ "connections": {
                 "kc": { "driver": "postgres", "dsn": "keychain://kc" },
-                "lite": { "driver": "sqlite", "dsn": "/tmp/l.db" }
+                "lite": { "driver": "sqlite", "dsn": "/tmp/l.db" },
+                "team": { "a": { "driver": "sqlite", "dsn": "/tmp/a.db" } }
             } }"#,
         )
         .unwrap();
@@ -630,6 +656,10 @@ mod tests {
         let config = std::fs::read_to_string(user).unwrap();
         assert!(config.contains("keychain://pg"), "{config}");
         assert!(!config.contains("u:p"), "{config}");
+
+        // A keyword string ending in .db reads as sqlite, but is no path.
+        add(&mut workspace, "kw", &typed("host=h password=p.db"), &store).unwrap();
+        assert_eq!(store.calls()[1], "set kw host=h password=p.db");
     }
 
     #[test]
@@ -730,6 +760,32 @@ mod tests {
             ),
             ("pg", None, typed("not a dsn")),
             ("a/b/c", None, typed("postgres://h/db")),
+            (
+                "pg",
+                None,
+                Change {
+                    backend: Some(Backend::Postgres),
+                    ..typed("keychain://kc")
+                },
+            ),
+            ("team", None, typed("./x.db")),
+            ("kc/x", None, typed("./x.db")),
+            (
+                "lite",
+                Some("lite"),
+                Change {
+                    rename: Some("team".into()),
+                    ..Change::default()
+                },
+            ),
+            (
+                "pg",
+                None,
+                Change {
+                    dsn_on_flag: true,
+                    ..typed("host=h password=p.db")
+                },
+            ),
             (
                 "kc",
                 Some("lite"),
