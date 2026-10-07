@@ -44,3 +44,11 @@ Assumed, not asked:
 - The type-to-form decision is a plain function so it is unit tested without a server.
 - The text is the module as written: leading comments, `CREATE OR ALTER` and a name from before `sp_rename` stay. The README says so.
 - The live test is added to the ignored `tests/definitions_servers.rs` and reads `BINSQL_TEST_MSSQL`.
+
+Live, 2026-10-07, on `eimskip/local` (Azure SQL 12.0.2000.8, read-only source):
+
+- `inspect --definitions -o csv` exits 0 in about 5 s. It prints the header and 103 table rows, each `form` `unsupported` with an empty `definition`, and stderr reads `103 definitions not given: 103 unsupported`.
+- `inspect --definitions -o json __EFMigrationsHistory` gives one row with `definition: null`.
+- A system view (`sys.database_firewall_rules`) is not selected: "no table or view named …".
+
+Neither `eimskip/local` nor `osar/local` has a user view, so a view's `create` text and a view with null text (`WITH ENCRYPTION`) remain unchecked live.

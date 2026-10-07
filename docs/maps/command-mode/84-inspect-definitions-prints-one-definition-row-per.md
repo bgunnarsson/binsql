@@ -55,3 +55,11 @@ Assumed, not asked:
 - An acquisition failure reads `definition of <object>: <error>`.
 - The README's MySQL caveat is left for 82, since MySQL is `unsupported` until then.
 - `--definitions --columns` is refused before connecting.
+
+Live, 2026-10-07, on `eimskip/local` (Azure SQL 12.0.2000.8, read-only source):
+
+- `inspect --definitions -o csv` exits 0 in about 5 s. It prints the header and 103 table rows, each `form` `unsupported` with an empty `definition`, and stderr reads `103 definitions not given: 103 unsupported`.
+- `inspect --definitions -o json __EFMigrationsHistory` gives one row with `definition: null`.
+- A system view (`sys.database_firewall_rules`) is not selected: "no table or view named …".
+
+Neither `eimskip/local` nor `osar/local` has a user view, so a view's `create` text and a view with null text (`WITH ENCRYPTION`) remain unchecked live.
