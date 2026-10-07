@@ -358,19 +358,22 @@ fn words(sql: &str, backend: Backend, limit: usize) -> Vec<String> {
     out
 }
 
-/// A bare word (letters, digits, `_`) or one punctuation character from the
-/// executable text, and where in the scanned text it starts.
+/// A bare word (letters, digits, `_`), a quoted string or identifier, or one
+/// punctuation character from the statement, and where in the scanned text it
+/// starts.
 struct Lexeme {
     text: String,
     at: usize,
 }
 
 /// The statement's characters as `scan` gave them, and its lexemes. Words are
-/// upper-cased; comments, literals and whitespace produce nothing.
+/// upper-cased, and so is what a quote holds, without its quotes, since
+/// PostgreSQL takes `"analyze"` as an option name; comments and whitespace
+/// produce nothing.
 fn lexemes(sql: &str, backend: Backend) -> (Vec<char>, Vec<Lexeme>) {
     let mut text = Vec::new();
     let mut out: Vec<Lexeme> = Vec::new();
-    let mut in_word = false;
+    let mut run = None;
     let mut done = false;
 
     scan(sql, backend, &mut |token| {
@@ -386,23 +389,33 @@ fn lexemes(sql: &str, backend: Backend) -> (Vec<char>, Vec<Lexeme>) {
         };
         let at = text.len();
         text.push(ch);
-        if class != Class::Code || ch.is_whitespace() {
-            in_word = false;
-        } else if ch.is_alphanumeric() || ch == '_' {
-            match out.last_mut() {
-                Some(word) if in_word => word.text.extend(ch.to_uppercase()),
-                _ => out.push(Lexeme {
-                    text: ch.to_uppercase().collect(),
+        let class = match class {
+            Class::Code if ch.is_alphanumeric() || ch == '_' => Class::Code,
+            Class::Literal => Class::Literal,
+            Class::Code if !ch.is_whitespace() => {
+                out.push(Lexeme {
+                    text: ch.to_string(),
                     at,
-                }),
+                });
+                run = None;
+                return;
             }
-            in_word = true;
-        } else {
+            _ => {
+                run = None;
+                return;
+            }
+        };
+        if run != Some(class) {
             out.push(Lexeme {
-                text: ch.to_string(),
+                text: String::new(),
                 at,
             });
-            in_word = false;
+            run = Some(class);
+        }
+        if (class == Class::Code || !matches!(ch, '\'' | '"' | '`' | '[' | ']'))
+            && let Some(lexeme) = out.last_mut()
+        {
+            lexeme.text.extend(ch.to_uppercase());
         }
     });
     (text, out)
@@ -749,7 +762,7 @@ mod tests {
     fn lexemes_keep_digits_and_punctuation_and_where_they_start() {
         let (text, lexemes) = lexemes("EXPLAIN (ANALYZE 0) /* x */ DELETE 'a'", Backend::Sqlite);
         let words: Vec<&str> = lexemes.iter().map(|lexeme| lexeme.text.as_str()).collect();
-        assert_eq!(words, ["EXPLAIN", "(", "ANALYZE", "0", ")", "DELETE"]);
+        assert_eq!(words, ["EXPLAIN", "(", "ANALYZE", "0", ")", "DELETE", "A"]);
         let inner: String = text[lexemes[5].at..].iter().collect();
         assert_eq!(inner, "DELETE 'a'");
     }
@@ -796,6 +809,16 @@ mod tests {
                 "explain (analyze, buffers) drop table t",
                 Backend::Postgres,
                 Kind::Ddl,
+            ),
+            (
+                "explain (\"analyze\") delete from t",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            (
+                "explain (analyze 'on') delete from t",
+                Backend::Postgres,
+                Kind::Write,
             ),
             (
                 "explain analyze select * from t",
@@ -859,6 +882,7 @@ mod tests {
                 Backend::Postgres,
             ),
             ("explain (analyze 0) delete from t", Backend::Postgres),
+            ("explain (analyze 'off') delete from t", Backend::Postgres),
             ("-- plan only\nexplain delete from t", Backend::Postgres),
             ("describe t", Backend::MySql),
             ("desc t", Backend::MySql),
