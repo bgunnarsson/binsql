@@ -5,12 +5,14 @@ mod sqlite;
 mod sqlx_common;
 
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::backend::Backend;
 use crate::error::Result;
 use crate::schema::{Catalog, ObjectRef};
 use crate::sql::{self, Bound};
+use crate::stream::{self, StreamSummary, Streamed};
 use crate::value::{Column, ResultSet};
 
 /// One live connection to one database, with every backend difference already
@@ -51,6 +53,25 @@ pub trait Adapter: Send + Sync {
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet>;
+
+    /// Runs one statement as [`Adapter::run`] does, sending the columns, once
+    /// they are known, and then each row into `sink` as it arrives instead of
+    /// keeping them. A full channel holds the reader back. A receiver that
+    /// goes away stops the query as a cancel does, and yields
+    /// [`Error::Cancelled`] the same way.
+    ///
+    /// The default runs the statement whole and forwards it, which bounds
+    /// nothing; every adapter here drains into the channel instead.
+    async fn stream(
+        &self,
+        statement: &Bound,
+        limit: Option<usize>,
+        sink: mpsc::Sender<Streamed>,
+        cancel: &CancellationToken,
+    ) -> Result<StreamSummary> {
+        let result = self.run(statement, limit, cancel).await?;
+        stream::forward(result, &sink, cancel).await
+    }
 
     /// Asks for the estimated plan of one statement without running it, and
     /// returns the backend's own result set for it unchanged. The statement is

@@ -9,6 +9,7 @@ use sqlx::postgres::{
     PgSslMode, PgTypeInfo, Postgres,
 };
 use sqlx::{Row, Type, TypeInfo as _};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::Adapter;
@@ -17,6 +18,7 @@ use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
 use crate::sql::{self, Bound};
+use crate::stream::{StreamSummary, Streamed};
 use crate::value::{Column, ResultSet, Value};
 
 const CODEC: Codec<Postgres> = Codec {
@@ -259,6 +261,17 @@ impl Adapter for PostgresAdapter {
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
         sqlx_common::run_alone::<Postgres>(&self.pool, statement, limit, false, &CODEC, cancel)
+            .await
+    }
+
+    async fn stream(
+        &self,
+        statement: &Bound,
+        limit: Option<usize>,
+        sink: mpsc::Sender<Streamed>,
+        cancel: &CancellationToken,
+    ) -> Result<StreamSummary> {
+        sqlx_common::stream_alone::<Postgres>(&self.pool, statement, limit, &CODEC, &sink, cancel)
             .await
     }
 

@@ -49,7 +49,7 @@ SQLite test files go in the temp dir, without the `tempfile` crate.
 
 ## Tasks
 
-- [ ] **1. The sink.** `stream.rs`; `Adapter::stream`; the sink through
+- [x] **1. The sink.** `stream.rs`; `Adapter::stream`; the sink through
   `sqlx_common` and `mssql`'s drain loops; each adapter's `stream`;
   `Session::stream_bound`; the SQLite tests.
   Verify: `cargo test --workspace`.

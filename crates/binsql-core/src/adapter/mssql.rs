@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use tiberius::{AuthMethod, ColumnData, ColumnType, Config, QueryItem, Row, ToSql};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 use tokio_util::sync::CancellationToken;
 
@@ -15,6 +15,7 @@ use crate::backend::Backend;
 use crate::error::{Error, Result, TransactionOutcome};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
 use crate::sql::{self, Bound};
+use crate::stream::{Drained, Sink, StreamSummary, Streamed};
 use crate::value::{Column, ResultSet, Value};
 
 type Connection = tiberius::Client<Compat<TcpStream>>;
@@ -119,10 +120,26 @@ impl MsSqlAdapter {
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
+        let mut sink = Sink::Keep(Vec::new());
+        let drained = self.drain(sql, values, limit, &mut sink, cancel).await?;
+        Ok(drained.kept(sink))
+    }
+
+    /// [`MsSqlAdapter::query`] into a sink. A receiver that went away costs
+    /// the connection as a cancel does, since the rows it left unread are
+    /// still on it.
+    async fn drain(
+        &self,
+        sql: &str,
+        values: &[Value],
+        limit: Option<usize>,
+        sink: &mut Sink<'_>,
+        cancel: &CancellationToken,
+    ) -> Result<Drained> {
         let mut client = self.client.lock().await;
         self.settle(&mut client).await?;
-        match run_one(&mut client, sql, values, limit, cancel).await? {
-            Some(result) => Ok(result),
+        match drain_one(&mut client, sql, values, limit, sink, cancel).await? {
+            Some(drained) => Ok(drained),
             None => self.cancelled(&mut client).await,
         }
     }
@@ -158,11 +175,37 @@ async fn run_one(
     limit: Option<usize>,
     cancel: &CancellationToken,
 ) -> Result<Option<ResultSet>> {
+    let mut sink = Sink::Keep(Vec::new());
+    let drained = drain_one(client, sql, values, limit, &mut sink, cancel).await?;
+    Ok(drained.map(|drained| drained.kept(sink)))
+}
+
+/// [`collect`] as one batch with no values, kept as a result.
+async fn collect_kept(
+    client: &mut Connection,
+    sql: &str,
+    limit: Option<usize>,
+    cancel: &CancellationToken,
+) -> Result<Option<ResultSet>> {
+    let mut sink = Sink::Keep(Vec::new());
+    let drained = collect(client, sql, &[], limit, &mut sink, cancel).await?;
+    Ok(drained.map(|drained| drained.kept(sink)))
+}
+
+/// [`run_one`] into a sink, where a receiver that went away is a cancel.
+async fn drain_one(
+    client: &mut Connection,
+    sql: &str,
+    values: &[Value],
+    limit: Option<usize>,
+    sink: &mut Sink<'_>,
+    cancel: &CancellationToken,
+) -> Result<Option<Drained>> {
     let wrapped: Vec<Param<'_>> = values.iter().map(Param).collect();
     let params: Vec<&dyn ToSql> = wrapped.iter().map(|param| param as &dyn ToSql).collect();
 
     if returns_rows(sql, Backend::MsSql) {
-        collect(client, sql, &params, limit, cancel).await
+        collect(client, sql, &params, limit, sink, cancel).await
     } else {
         execute_one(client, sql, &params, cancel).await
     }
@@ -195,9 +238,10 @@ async fn collect(
     sql: &str,
     params: &[&dyn ToSql],
     limit: Option<usize>,
+    sink: &mut Sink<'_>,
     cancel: &CancellationToken,
-) -> Result<Option<ResultSet>> {
-    let start = Instant::now();
+) -> Result<Option<Drained>> {
+    let mut drained = Drained::new(Instant::now());
     // Sending the batch is not the part worth interrupting — the waiting is,
     // and that is the loop below, which notices a token cancelled in the
     // meantime on its first turn.
@@ -208,9 +252,6 @@ async fn collect(
     }
     .map_err(Error::query)?;
 
-    let mut columns: Vec<Column> = Vec::new();
-    let mut rows: Vec<Vec<Value>> = Vec::new();
-    let mut truncated = false;
     let mut cancelled = false;
 
     loop {
@@ -225,29 +266,28 @@ async fn collect(
             break;
         };
 
-        match item {
-            QueryItem::Metadata(meta) => {
-                if columns.is_empty() {
-                    columns = meta
-                        .columns()
-                        .iter()
-                        .map(|c| Column::new(c.name(), type_label(c.column_type())))
-                        .collect();
-                }
+        let columns = match &item {
+            QueryItem::Metadata(meta) => meta.columns(),
+            QueryItem::Row(row) => row.columns(),
+        };
+        if drained.columns.is_empty() && !columns.is_empty() {
+            drained.columns = columns
+                .iter()
+                .map(|c| Column::new(c.name(), type_label(c.column_type())))
+                .collect();
+            if sink.columns(&drained.columns, cancel).await.is_err() {
+                cancelled = true;
+                break;
             }
-            QueryItem::Row(row) => {
-                if columns.is_empty() {
-                    columns = row
-                        .columns()
-                        .iter()
-                        .map(|c| Column::new(c.name(), type_label(c.column_type())))
-                        .collect();
-                }
-                if limit.is_some_and(|max| rows.len() >= max) {
-                    truncated = true;
-                    break;
-                }
-                rows.push(decode_row(&row));
+        }
+        if let QueryItem::Row(row) = item {
+            if limit.is_some_and(|max| sink.len() >= max) {
+                drained.truncated = true;
+                break;
+            }
+            if sink.row(decode_row(&row), cancel).await.is_err() {
+                cancelled = true;
+                break;
             }
         }
     }
@@ -256,13 +296,7 @@ async fn collect(
         return Ok(None);
     }
 
-    Ok(Some(ResultSet {
-        columns,
-        rows,
-        rows_affected: None,
-        elapsed: start.elapsed(),
-        truncated,
-    }))
+    Ok(Some(drained))
 }
 
 async fn execute_one(
@@ -270,13 +304,16 @@ async fn execute_one(
     sql: &str,
     params: &[&dyn ToSql],
     cancel: &CancellationToken,
-) -> Result<Option<ResultSet>> {
-    let start = Instant::now();
+) -> Result<Option<Drained>> {
+    let mut drained = Drained::new(Instant::now());
     let finished = tokio::select! {
         result = client.execute(sql, params) => Some(result.map_err(Error::query)?),
         () = cancel.cancelled() => None,
     };
-    Ok(finished.map(|result| ResultSet::affected(result.total(), start.elapsed())))
+    Ok(finished.map(|result| {
+        drained.rows_affected = Some(result.total());
+        drained
+    }))
 }
 
 /// Opens one TDS connection. `label` names the data source in a connect error,
@@ -460,6 +497,20 @@ impl Adapter for MsSqlAdapter {
             .await
     }
 
+    async fn stream(
+        &self,
+        statement: &Bound,
+        limit: Option<usize>,
+        sink: mpsc::Sender<Streamed>,
+        cancel: &CancellationToken,
+    ) -> Result<StreamSummary> {
+        let mut sink = Sink::Send(&sink, 0);
+        let drained = self
+            .drain(&statement.sql, &statement.params, limit, &mut sink, cancel)
+            .await?;
+        Ok(drained.summary(&sink))
+    }
+
     /// SQL Server plans for the session rather than for a prefixed statement,
     /// so plans are turned on, the statement sent and plans turned off again —
     /// under one lock, and off even when the statement failed, or the next
@@ -479,11 +530,11 @@ impl Adapter for MsSqlAdapter {
         let mut client = self.client.lock().await;
         self.settle(&mut client).await?;
         self.showplan.store(true, Ordering::Relaxed);
-        // Each goes through `collect` with no values, so each is a batch of its
+        // Each goes through `collect_kept`, with no values, so each is a batch of its
         // own: a `SET SHOWPLAN_XML` has to be alone in its batch.
         let sql = sql::plan_sql(&statement.sql, Backend::MsSql);
-        let planned = match collect(&mut client, "SET SHOWPLAN_XML ON", &[], None, cancel).await {
-            Ok(Some(_)) => collect(&mut client, &sql, &[], limit, cancel).await,
+        let planned = match collect_kept(&mut client, "SET SHOWPLAN_XML ON", None, cancel).await {
+            Ok(Some(_)) => collect_kept(&mut client, &sql, limit, cancel).await,
             other => other,
         };
         let planned = match planned {
@@ -495,10 +546,9 @@ impl Adapter for MsSqlAdapter {
             Err(error) => Err(showplan_hint(error)),
         };
 
-        let off = collect(
+        let off = collect_kept(
             &mut client,
             "SET SHOWPLAN_XML OFF",
-            &[],
             None,
             &CancellationToken::new(),
         )

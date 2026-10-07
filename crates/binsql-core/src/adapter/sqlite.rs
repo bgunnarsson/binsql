@@ -6,6 +6,7 @@ use sqlx::sqlite::{
     Sqlite, SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteQueryResult, SqliteRow,
     SqliteTypeInfo,
 };
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::Adapter;
@@ -14,6 +15,7 @@ use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
 use crate::sql::Bound;
+use crate::stream::{StreamSummary, Streamed};
 use crate::value::{Column, ResultSet, Value};
 
 const CODEC: Codec<Sqlite> = Codec {
@@ -164,6 +166,18 @@ impl Adapter for SqliteAdapter {
     ) -> Result<ResultSet> {
         let mut connection = self.pool.acquire().await.map_err(Error::query)?;
         sqlx_common::run::<Sqlite>(&mut connection, statement, limit, false, &CODEC, cancel).await
+    }
+
+    async fn stream(
+        &self,
+        statement: &Bound,
+        limit: Option<usize>,
+        sink: mpsc::Sender<Streamed>,
+        cancel: &CancellationToken,
+    ) -> Result<StreamSummary> {
+        let mut connection = self.pool.acquire().await.map_err(Error::query)?;
+        sqlx_common::stream::<Sqlite>(&mut connection, statement, limit, &CODEC, &sink, cancel)
+            .await
     }
 
     async fn run_transaction(

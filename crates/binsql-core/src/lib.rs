@@ -17,6 +17,7 @@ pub mod secrets;
 pub mod session;
 pub mod source;
 pub mod sql;
+pub mod stream;
 pub mod value;
 pub mod workspace;
 
@@ -29,5 +30,6 @@ pub use schema_cache::{Level, SchemaCache, SourceId};
 pub use secrets::{Reference, Resolver};
 pub use session::{ProbeFailure, Session, Stage};
 pub use sql::{Bound, Kind, Statement};
+pub use stream::{StreamSummary, Streamed};
 pub use value::{Column, ResultSet, Value};
 pub use workspace::{RESERVED_NAMES, Removed, Scope, Workspace};

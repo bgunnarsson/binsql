@@ -10,10 +10,12 @@ use futures_util::TryStreamExt;
 use futures_util::future::BoxFuture;
 use sqlx::query::Query;
 use sqlx::{Column as _, Database, Either, Executor, IntoArguments, Pool, Row, TypeInfo as _};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{Error, Result, TransactionOutcome};
 use crate::sql::Bound;
+use crate::stream::{Drained, Sink, StreamSummary, Streamed};
 use crate::value::{Column, ResultSet, Value};
 
 /// A query with its values being bound to it, one at a time.
@@ -72,9 +74,56 @@ where
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
 {
+    let mut sink = Sink::Keep(Vec::new());
+    let drained = drain_alone(pool, statement, limit, prepare, codec, &mut sink, cancel).await?;
+    Ok(drained.kept(sink))
+}
+
+/// [`run_alone`], sending the rows on as they arrive rather than keeping them.
+pub async fn stream_alone<DB>(
+    pool: &Pool<DB>,
+    statement: &Bound,
+    limit: Option<usize>,
+    codec: &Codec<DB>,
+    sender: &mpsc::Sender<Streamed>,
+    cancel: &CancellationToken,
+) -> Result<StreamSummary>
+where
+    DB: Database,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
+{
+    let mut sink = Sink::Send(sender, 0);
+    let drained = drain_alone(pool, statement, limit, false, codec, &mut sink, cancel).await?;
+    Ok(drained.summary(&sink))
+}
+
+async fn drain_alone<DB>(
+    pool: &Pool<DB>,
+    statement: &Bound,
+    limit: Option<usize>,
+    prepare: bool,
+    codec: &Codec<DB>,
+    sink: &mut Sink<'_>,
+    cancel: &CancellationToken,
+) -> Result<Drained>
+where
+    DB: Database,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
+{
     let mut connection = pool.acquire().await.map_err(Error::query)?;
     let id = identify(&mut *connection, codec).await;
-    let result = run::<DB>(&mut connection, statement, limit, prepare, codec, cancel).await;
+    let result = drain::<DB>(
+        &mut connection,
+        statement,
+        limit,
+        prepare,
+        codec,
+        sink,
+        cancel,
+    )
+    .await;
     if let Err(error) = &result {
         // Sent while the connection is still checked out, so the pool is not
         // left draining a query nobody is waiting for.
@@ -210,11 +259,52 @@ where
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
 {
-    let start = Instant::now();
-    let mut columns: Vec<Column> = Vec::new();
-    let mut rows: Vec<Vec<Value>> = Vec::new();
-    let mut rows_affected: Option<u64> = None;
-    let mut truncated = false;
+    let mut sink = Sink::Keep(Vec::new());
+    let drained = drain::<DB>(
+        connection, statement, limit, prepare, codec, &mut sink, cancel,
+    )
+    .await?;
+    Ok(drained.kept(sink))
+}
+
+/// [`run`], sending the rows on as they arrive rather than keeping them. A
+/// receiver that goes away ends it as a cancel does.
+pub async fn stream<DB>(
+    connection: &mut DB::Connection,
+    statement: &Bound,
+    limit: Option<usize>,
+    codec: &Codec<DB>,
+    sender: &mpsc::Sender<Streamed>,
+    cancel: &CancellationToken,
+) -> Result<StreamSummary>
+where
+    DB: Database,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
+{
+    let mut sink = Sink::Send(sender, 0);
+    let drained = drain::<DB>(
+        connection, statement, limit, false, codec, &mut sink, cancel,
+    )
+    .await?;
+    Ok(drained.summary(&sink))
+}
+
+async fn drain<DB>(
+    connection: &mut DB::Connection,
+    statement: &Bound,
+    limit: Option<usize>,
+    prepare: bool,
+    codec: &Codec<DB>,
+    sink: &mut Sink<'_>,
+    cancel: &CancellationToken,
+) -> Result<Drained>
+where
+    DB: Database,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
+{
+    let mut drained = Drained::new(Instant::now());
 
     let expected: Vec<DB::TypeInfo> = if codec.describe && !statement.params.is_empty() {
         let described = (&mut *connection)
@@ -253,37 +343,31 @@ where
             match item {
                 Either::Left(result) => {
                     let count = (codec.affected)(&result);
-                    rows_affected = Some(rows_affected.unwrap_or(0) + count);
+                    drained.rows_affected = Some(drained.rows_affected.unwrap_or(0) + count);
                 }
                 Either::Right(row) => {
-                    if columns.is_empty() {
-                        columns = row
+                    if drained.columns.is_empty() {
+                        drained.columns = row
                             .columns()
                             .iter()
                             .map(|c| Column::new(c.name(), c.type_info().name()))
                             .collect();
+                        sink.columns(&drained.columns, cancel).await?;
                     }
-                    if limit.is_some_and(|max| rows.len() >= max) {
-                        truncated = true;
+                    if limit.is_some_and(|max| sink.len() >= max) {
+                        drained.truncated = true;
                         break;
                     }
-                    rows.push(
-                        (0..columns.len())
-                            .map(|i| (codec.decode)(&row, i))
-                            .collect(),
-                    );
+                    let values = (0..drained.columns.len())
+                        .map(|i| (codec.decode)(&row, i))
+                        .collect();
+                    sink.row(values, cancel).await?;
                 }
             }
         }
     }
 
-    Ok(ResultSet {
-        columns,
-        rows,
-        rows_affected,
-        elapsed: start.elapsed(),
-        truncated,
-    })
+    Ok(drained)
 }
 
 /// Binds a value as the type it already is. Right for SQLite and MySQL, which

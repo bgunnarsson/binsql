@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::adapter::{self, Adapter};
@@ -11,6 +11,7 @@ use crate::error::{Error, Reason, Result};
 use crate::schema::ObjectRef;
 use crate::secrets::Resolver;
 use crate::sql::{self, Bound};
+use crate::stream::{StreamSummary, Streamed};
 use crate::value::{Column, ResultSet};
 
 /// Where trying a data source stopped.
@@ -251,6 +252,24 @@ impl Session {
         self.adapter_for(catalog)
             .await?
             .run(statement, limit, cancel)
+            .await
+    }
+
+    /// [`Session::run_bound`], with each row sent on `sink` as it arrives
+    /// rather than collected. The channel is bounded, so a slow receiver holds
+    /// the statement back; one that goes away cancels it.
+    pub async fn stream_bound(
+        &self,
+        catalog: Option<&str>,
+        statement: &Bound,
+        limit: Option<usize>,
+        sink: mpsc::Sender<Streamed>,
+        cancel: &CancellationToken,
+    ) -> Result<StreamSummary> {
+        self.guard_read_only(&statement.sql)?;
+        self.adapter_for(catalog)
+            .await?
+            .stream(statement, limit, sink, cancel)
             .await
     }
 
