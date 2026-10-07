@@ -1,7 +1,7 @@
 ---
 title: Adapter column queries are ordered, decode failures are errors, and SQL Server nullability is read correctly
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
@@ -106,7 +106,7 @@ None found.
   (the same multi-line `stdout_has` ordering idiom as line 188). If the CSV writer
   ends lines differently, match its line ending rather than changing the writer.
   Verify: `cargo test -p binsql --test command_mode inspect` (both inspect tests).
-- [ ] Settle the ticket: write the answer into
+- [x] Settle the ticket: write the answer into
   `docs/maps/command-mode/24-column-order-nullability.md` and set its status.
   Verify: `cargo test --workspace` and `cargo clippy --workspace --all-targets`.
 
