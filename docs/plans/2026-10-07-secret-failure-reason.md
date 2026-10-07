@@ -74,6 +74,6 @@ never name a zsh variable `status`.
   Verify: `cargo test -p binsql` — a unit test that a JWT in `detail` is
   masked, and one of a secret failure's record.
 
-- [ ] **3. HELP and the README.** The Structured errors section lists
+- [x] **3. HELP and the README.** The Structured errors section lists
   `reason`, `hint` and `detail`, and the reasons.
   Verify: `cargo test -p binsql`.

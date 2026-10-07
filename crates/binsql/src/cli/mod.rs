@@ -537,7 +537,8 @@ OUTPUT
 ERRORS
         --error-format NAME
                           text (default) or json: one JSON line on stderr
-                          with a category and a phase, the message redacted
+                          with a category and a phase, the message redacted;
+                          a Key Vault or Azure AD failure adds a reason
 
     BINSQL_ERROR_FORMAT says the same through the environment.
 

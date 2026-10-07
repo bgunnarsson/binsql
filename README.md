@@ -382,6 +382,9 @@ the same either way.
 | `category` | `usage`, `source`, `config`, `secret`, `connect`, `refused`, `database`, `cancelled`, `io` or `other` |
 | `phase` | `args`, `input`, `config`, `connect`, `prepare`, `execute` or `output` |
 | `message` | what went wrong, in one sentence |
+| `reason` | why, for a Key Vault or Azure AD failure: `az-missing`, `az-unauthenticated`, `vault-forbidden`, `secret-not-found`, `vault-not-found` or `azure-ad-token` |
+| `hint` | the next step to try, when binsql knows one |
+| `detail` | what the Azure CLI said, redacted like `message` and cut at 1000 characters |
 | `statement` | the 1-based statement that failed or was refused, when there is one |
 | `completed` | how many statements before it were kept, under `exec --no-tx` |
 
@@ -396,6 +399,17 @@ agreed format yet to report it in.
 `schema` is the record's revision. Adding a field or a category keeps it at
 `1`; renaming or removing one, or changing what one means, raises it. Read a
 category you do not know as `other`.
+
+A `keyvault://` secret that would not resolve keeps its message to the
+reference, and puts the rest in fields of its own:
+
+```json
+{"type":"error","schema":1,"exit":1,"category":"secret","phase":"connect","message":"connecting to prod: reading keyvault://kv-prd/dsn","reason":"az-unauthenticated","hint":"no usable Azure credential — run `az login`","detail":"Please run 'az login' to setup account."}
+```
+
+A `fedauth=` connection whose Azure AD token could not be had is category
+`connect` with reason `azure-ad-token`. A reason you do not know means the
+same as none.
 
 The message is redacted: a stored connection string, the password in
 `scheme://user:pass@`, the value of `password=`, `pwd=` and `accesstoken=`, and
