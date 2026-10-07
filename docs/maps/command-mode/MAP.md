@@ -165,10 +165,6 @@ changes to `query`, `exec` and `inspect`.
 - [92 — Check PostgreSQL `query --plan`](92-check-postgresql-query-plan.md)
 - [93 — Check MySQL and SQL Server `query --plan`](93-check-mysql-and-sql-server-query-plan.md)
 
-## Not yet specified
-
-- **README Status**: rewriting the section once the data-source commands (30–34) land.
-
 ## Out of scope
 
 - TUI work. The map is about the command line; the grid, tree and history in
