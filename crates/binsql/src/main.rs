@@ -26,6 +26,7 @@ OPTIONS
     -d, --driver <name>   sqlite | postgres | mssql | mysql (default: inferred)
     -h, --help            show this
     -V, --version         show the version
+        --capabilities    print what this binsql can do as JSON, and stop
         --debug-keys      print what this terminal sends, and stop
 
 Data sources are stored in ~/.config/binsql/connections.json and can be added

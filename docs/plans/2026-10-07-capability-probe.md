@@ -62,6 +62,6 @@ the README.
   for its verb, an integration test with a broken config, and `--version`
   unchanged.
 
-- [ ] **2. HELP and the README.** The flag in `main.rs`'s OPTIONS and in the
+- [x] **2. HELP and the README.** The flag in `main.rs`'s OPTIONS and in the
   README's command-mode section, with the manifest's fields.
   Verify: `cargo test -p binsql`.

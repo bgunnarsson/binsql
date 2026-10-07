@@ -460,6 +460,30 @@ anything shaped like a JWT become `****`. The SQL is left out — the text form
 names the statement, the record only counts it. A message from the server is
 passed on as it came, though, and can quote a value from the data.
 
+### Capabilities
+
+`binsql --capabilities` prints one compact JSON line saying what this binary
+can do, so an agent can check an installed binsql before it relies on a flag,
+without parsing `--help`. It reads no config, resolves no secret and connects
+to nothing, and it stops there, as `--version` does.
+
+```json
+{"type":"capabilities","schema":1,"version":"3.0.0","backends":["sqlite","postgres","mssql","mysql"],"commands":{"inspect":{"options":["--conn","-c",…],"switches":["--pretty",…,"--columns"]},…},"formats":["table","json",…],"error_formats":["text","json"],"error_schema":1,"exit_codes":{"0":"success","1":"failure","2":"usage"}}
+```
+
+| Field | |
+| --- | --- |
+| `version` | the binary's version, as `--version` prints it |
+| `backends` | the databases it was built to reach |
+| `commands` | `query`, `exec`, `inspect` and `source`, each with the `options` that take a value and the `switches` that do not, spelled as typed, a short alias as its own entry; `source` also lists its `operations` |
+| `formats` | what `-o` takes, by canonical name; the aliases still work |
+| `error_formats` | what `--error-format` takes |
+| `error_schema` | the revision of the [error record](#structured-errors) |
+| `exit_codes` | what each exit code means |
+
+`schema` is the manifest's revision, kept the same way as the error record's:
+adding a field keeps it, renaming or removing one raises it.
+
 ### Data sources
 
 `binsql source list` prints every saved data source, user and project alike, and
