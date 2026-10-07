@@ -93,6 +93,7 @@ changes to `query`, `exec` and `inspect`.
 - [72](72-query-stream-writes-jsonl-csv-tsv-as-rows-arrive.md): `query --stream` writes jsonl, csv or tsv as rows arrive, refuses other formats, `--plan` and writes; only exit 0 means complete.
 - [80](80-core-reads-object-definitions-with-sqlite-native-t.md): the core reads an object's own definition text; SQLite returns what `sqlite_master` stores, the other backends `unsupported` until 81–83.
 - [84](84-inspect-definitions-prints-one-definition-row-per.md): `inspect --definitions` prints `catalog, schema, object, kind, form, definition` for each selected object, ordered and selected as `--columns`; rows without text are counted on stderr, and `--columns` with it exits 2.
+- [81](81-postgresql-views-return-their-query.md): PostgreSQL views and materialized views give `query` from `pg_get_viewdef(oid, true)`; tables stay `unsupported`.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
