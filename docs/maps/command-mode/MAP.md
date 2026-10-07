@@ -64,6 +64,7 @@ changes to `query`, `exec` and `inspect`.
 - [22](22-explain-analyze-guard.md): Resolved: EXPLAIN, DESCRIBE and DESC that run their statement (ANALYZE/ANALYSE, bare or in PostgreSQL's option list, quoted or not) classify as that statement; a plain or ANALYZE-off EXPLAIN stays a read.
 - [23](23-plan-shape.md): `binsql query --plan` returns the backend's estimated plan for one plannable read (SELECT, WITH, VALUES, TABLE), built by binsql and returned as the backend's own result set through `-o`; writes, `--arg` and `--stream` are refused with exit 2, and nothing new runs the statement.
 - [24](24-column-order-nullability.md): Built: every adapter's column list comes back in declared order (SQLite now orders by cid), a column row whose name fails to decode is an error instead of being dropped, and SQL Server reads is_nullable's BIT so NOT NULL columns say nullable false.
+- [25](25-inspect-columns.md): Built: `inspect --columns` lists every table and view's columns in one result, one row per column with catalog, schema, object and kind (plan docs/plans/2026-10-07-inspect-columns.md).
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.

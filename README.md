@@ -327,7 +327,8 @@ MySQL, which have no schema level. A table or view that comes back with no
 columns still gets a row, everything past its identity null, and a note on
 stderr. Read it as JSON or JSONL: CSV and TSV print a null and an empty string
 the same way. SQL Server's `type` is the bare type name, without its length or
-precision, and generated or hidden columns are not listed.
+precision, and on SQLite generated columns and the hidden columns of a virtual
+table are not listed.
 
 Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".

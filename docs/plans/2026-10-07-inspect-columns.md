@@ -1,7 +1,7 @@
 ---
 title: inspect --columns lists every selected object's columns with its identity, in one call
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
