@@ -1,7 +1,7 @@
 ---
 title: Data-source validation, save and delete run in binsql-core, and the TUI calls them
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
@@ -142,7 +142,7 @@ None found.
   importing `keychain::Keychain`; keep the doc comment on save and the
   comment on reading `source_id` before removal.
   Verify: `cargo test -p binsql app`
-- [ ] **Whole workspace.**
+- [x] **Whole workspace.**
   Verify: `cargo test --workspace` and `cargo build --release`
 
 ## Files
