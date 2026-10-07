@@ -88,6 +88,29 @@ impl Error {
     pub fn config(err: impl Into<anyhow::Error>) -> Self {
         Error::Config(err.into())
     }
+
+    /// The database's own code for a failure, when the driver gives it as a
+    /// typed field: the SQLSTATE on PostgreSQL and MySQL, the extended result
+    /// code on SQLite and the error number on SQL Server. Never read from the
+    /// message.
+    pub fn native_code(&self) -> Option<String> {
+        let source = match self {
+            Error::Query(source) | Error::Connect { source, .. } => source,
+            _ => return None,
+        };
+        source.chain().find_map(|cause| {
+            if let Some(error) = cause.downcast_ref::<sqlx::Error>() {
+                return error
+                    .as_database_error()
+                    .and_then(|error| error.code())
+                    .map(|code| code.into_owned());
+            }
+            cause
+                .downcast_ref::<tiberius::error::Error>()
+                .and_then(|error| error.code())
+                .map(|code| code.to_string())
+        })
+    }
 }
 
 /// Why a secret or a token could not be had, finer than the variant. A
@@ -135,5 +158,45 @@ fn plural(count: &usize, noun: &str) -> String {
         format!("1 {noun}")
     } else {
         format!("{count} {noun}s")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_database_error_carries_the_drivers_code() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO t VALUES (1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let failure = sqlx::query("INSERT INTO t VALUES (1)")
+            .execute(&pool)
+            .await
+            .unwrap_err();
+        let expected = failure
+            .as_database_error()
+            .unwrap()
+            .code()
+            .unwrap()
+            .into_owned();
+
+        assert_eq!(Error::query(failure).native_code(), Some(expected));
+    }
+
+    #[test]
+    fn an_error_without_a_driver_code_has_none() {
+        assert_eq!(Error::query(anyhow::anyhow!("no rows")).native_code(), None);
+        assert_eq!(
+            Error::connect("db", anyhow::anyhow!("refused")).native_code(),
+            None
+        );
+        assert_eq!(Error::Cancelled.native_code(), None);
     }
 }

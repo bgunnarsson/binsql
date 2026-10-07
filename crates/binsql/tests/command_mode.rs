@@ -1621,7 +1621,29 @@ fn error_format_json_keeps_the_sql_out_of_a_refusal() {
     assert_eq!(record["category"], "refused");
     assert_eq!(record["phase"], "prepare");
     assert_eq!(record["statement"], 1);
+    assert!(record.get("code").is_none(), "{record}");
     assert!(!run.stderr.contains("delete from artist"), "{}", run.stderr);
+}
+
+#[test]
+fn error_format_json_carries_the_databases_code() {
+    let fixture = Fixture::new("error-json-code");
+    fixture.seed();
+    fixture
+        .direct(&["exec", "CREATE UNIQUE INDEX artist_name ON artist (name)"])
+        .succeeds();
+    let run = fixture
+        .direct(&[
+            "exec",
+            "INSERT INTO artist (name) VALUES ('Autechre')",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "database");
+    // SQLITE_CONSTRAINT_UNIQUE, SQLite's extended result code.
+    assert_eq!(record["code"], "2067");
 }
 
 #[test]

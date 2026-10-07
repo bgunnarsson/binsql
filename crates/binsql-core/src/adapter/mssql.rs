@@ -31,8 +31,9 @@ const SHOWPLAN_HINT: &str =
 /// is left as it was.
 fn showplan_hint(error: Error) -> Error {
     match error {
-        Error::Query(_) if error.to_string().to_ascii_uppercase().contains("SHOWPLAN") => {
-            Error::query(anyhow::anyhow!("{error}\n  {SHOWPLAN_HINT}"))
+        Error::Query(source) if source.to_string().to_ascii_uppercase().contains("SHOWPLAN") => {
+            let text = format!("{source}\n  {SHOWPLAN_HINT}");
+            Error::Query(source.context(text))
         }
         error => error,
     }
@@ -857,6 +858,15 @@ async fn azure_cli_token() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_showplan_hint_keeps_the_servers_error() {
+        let hinted = showplan_hint(Error::query(std::io::Error::other("SHOWPLAN denied")));
+        let Error::Query(source) = hinted else {
+            panic!("expected a query error");
+        };
+        assert!(source.chain().any(|cause| cause.is::<std::io::Error>()));
+    }
 
     #[test]
     fn a_showplan_refusal_says_how_to_get_the_permission() {

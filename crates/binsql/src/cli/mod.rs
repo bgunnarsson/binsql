@@ -41,7 +41,8 @@ pub struct Failure {
     pub context: Vec<String>,
     /// Why it failed, in a word from the contract's list.
     pub reason: Option<&'static str>,
-    /// The message taken apart, when a core error gives it in parts.
+    /// The message taken apart, and the database's code, when a core error
+    /// gives them.
     parts: Option<Box<Parts>>,
     /// The connection string as given, masked wherever the message quotes it.
     dsn: Option<Box<(Backend, String)>>,
@@ -57,6 +58,8 @@ struct Parts {
     summary: Option<String>,
     /// The next step to try.
     hint: Option<String>,
+    /// The database's own code for the failure, as the driver typed it.
+    code: Option<String>,
     /// What the tool that failed said, as it said it.
     detail: Option<String>,
 }
@@ -129,6 +132,9 @@ pub fn caused(message: impl Into<String>, error: &binsql_core::Error) -> Failure
             ..
         } => failure.reason = Some(reason.as_str()),
         _ => {}
+    }
+    if let Some(code) = error.native_code() {
+        failure.parts.get_or_insert_default().code = Some(code);
     }
     failure
 }
@@ -373,6 +379,9 @@ fn error_record(failure: &Failure, exit: i32) -> String {
     ];
     if let Some(reason) = failure.reason {
         fields.push(("reason", reason.into()));
+    }
+    if let Some(code) = parts.and_then(|parts| parts.code.as_ref()) {
+        fields.push(("code", code.as_str().into()));
     }
     if let Some(hint) = parts.and_then(|parts| parts.hint.as_ref()) {
         fields.push(("hint", hint.as_str().into()));
