@@ -71,6 +71,7 @@ changes to `query`, `exec` and `inspect`.
 - [30](30-binsql-source-verb-with-list-and-show.md): Built: `binsql source list` and `source show NAME` list saved data sources with their DSN masked; plan docs/plans/2026-10-07-source-list-show.md.
 - [31](31-source-default-and-workspace-set-default.md): Built: `binsql source default [NAME] [--scope user|project]` and `Workspace::set_default`; plan docs/plans/2026-10-07-source-default.md.
 - [32](32-source-test-fresh-and-clear-cache.md): Built: `binsql source test [NAME] [--fresh]` prints `name, ok, stage, elapsed_ms, error` and exits 1 at the failing stage (secret, token, connect); `binsql source clear-cache` deletes the secret cache and its key.
+- [33](33-source-add-and-source-edit.md): binsql source add and source edit save a data source from the command line, filing a connection string in the credential store by default.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.

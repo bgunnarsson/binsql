@@ -1,7 +1,7 @@
 ---
 title: binsql source add and source edit save a data source from the command line, its secret in the keychain by default
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
