@@ -153,8 +153,9 @@ impl Adapter for SqliteAdapter {
     }
 
     /// There is no server to call off: SQLite runs in this process, so dropping
-    /// the stream is the whole of a cancel. A statement already inside the
-    /// engine finishes its current step first, which for SQLite is short.
+    /// the stream is the whole of a cancel. The worker thread notices only when
+    /// it next hands over a row, so a statement that returns none until it ends
+    /// runs on, holding its lock, until the process exits.
     async fn run(
         &self,
         statement: &Bound,

@@ -2248,22 +2248,65 @@ fn a_timed_out_write_does_not_claim_a_rollback() {
 /// A write whose statement runs until the process exits: SQLite's worker
 /// notices a cancel only when it next has a row to hand over, and this
 /// statement yields none, so it keeps the write lock until then.
-fn lock_holder() -> String {
-    format!("INSERT INTO artist (name) SELECT 'x' FROM ({ENDLESS})")
+struct Holder(Option<Child>);
+
+impl Holder {
+    /// Starts the write with `timeout` and returns once it holds the lock,
+    /// which is when a write that changes nothing can no longer get in.
+    fn start(fixture: &Fixture, timeout: &str) -> Holder {
+        let holder = Holder(Some(fixture.start(&[
+            "query",
+            &format!("INSERT INTO artist (name) SELECT 'x' FROM ({ENDLESS})"),
+            "--allow-write",
+            "--timeout-ms",
+            timeout,
+        ])));
+        let started = std::time::Instant::now();
+        while fixture
+            .direct(&[
+                "query",
+                "DELETE FROM artist WHERE id < 0",
+                "--allow-write",
+                "--timeout-ms",
+                "200",
+            ])
+            .code
+            == 0
+        {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "the holder never took the lock"
+            );
+        }
+        holder
+    }
+
+    fn exited(&mut self) -> bool {
+        let child = self.0.as_mut().expect("a running holder");
+        child.try_wait().expect("look at the holder").is_some()
+    }
+
+    fn finish(mut self) -> Run {
+        let child = self.0.take().expect("a running holder");
+        Run::new(child.wait_with_output().expect("wait for the holder"))
+    }
+}
+
+/// A test that fails part-way must not leave the holder spinning.
+impl Drop for Holder {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 #[test]
 fn a_write_waits_for_a_lock_released_inside_the_busy_timeout() {
     let fixture = Fixture::new("timeout-lock-released");
     fixture.seed();
-    let holder = fixture.start(&[
-        "query",
-        &lock_holder(),
-        "--allow-write",
-        "--timeout-ms",
-        "1000",
-    ]);
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    let mut holder = Holder::start(&fixture, "1500");
 
     fixture
         .direct(&[
@@ -2272,23 +2315,18 @@ fn a_write_waits_for_a_lock_released_inside_the_busy_timeout() {
             "--allow-write",
         ])
         .succeeds();
-    let holder = Run::new(holder.wait_with_output().expect("wait for the holder"));
-    holder.failed().stderr_has("timed out after 1000 ms");
+    assert!(holder.exited(), "the write got in before the holder let go");
+    holder
+        .finish()
+        .failed()
+        .stderr_has("timed out after 1500 ms");
 }
 
 #[test]
 fn a_lock_held_past_the_busy_timeout_is_a_database_error() {
     let fixture = Fixture::new("timeout-lock-held");
     fixture.seed();
-    // Its own deadline only ends it should the test fail before killing it.
-    let mut holder = fixture.start(&[
-        "query",
-        &lock_holder(),
-        "--allow-write",
-        "--timeout-ms",
-        "20000",
-    ]);
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    let holder = Holder::start(&fixture, "0");
     let write = "INSERT INTO artist (name) VALUES ('y')";
 
     // A deadline shorter than the busy timeout ends the wait itself.
@@ -2312,6 +2350,7 @@ fn a_lock_held_past_the_busy_timeout_is_a_database_error() {
     assert_eq!(error_record(&run)["category"], "timeout");
 
     // A longer one, or none, meets the driver's five-second busy timeout first.
+    let started = std::time::Instant::now();
     let waiters = [
         fixture.start(&["query", write, "--allow-write", "--error-format", "json"]),
         fixture.start(&[
@@ -2326,14 +2365,19 @@ fn a_lock_held_past_the_busy_timeout_is_a_database_error() {
     ];
     for waiter in waiters {
         let run = Run::new(waiter.wait_with_output().expect("wait for the writer")).failed();
+        let waited = started.elapsed();
+        assert!(
+            waited > std::time::Duration::from_secs(4)
+                && waited < std::time::Duration::from_secs(9),
+            "{waited:?}"
+        );
         let record = error_record(&run);
         assert_eq!(record["category"], "database");
         assert_eq!(record["code"], "5");
     }
 
     // The lock goes with the process that held it.
-    holder.kill().expect("stop the holder");
-    holder.wait().expect("wait for the holder");
+    drop(holder);
     fixture
         .direct(&["query", write, "--allow-write"])
         .succeeds();

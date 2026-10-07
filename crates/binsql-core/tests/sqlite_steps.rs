@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 const ENDLESS: &str =
     "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) SELECT n FROM r";
 
-async fn open(name: &str) -> (Session, Session) {
+async fn open(name: &str) -> (std::path::PathBuf, Session, Session) {
     let path = std::env::temp_dir().join(format!("binsql-test-{name}-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&path);
     std::fs::write(&path, b"").expect("create database file");
@@ -34,7 +34,7 @@ async fn open(name: &str) -> (Session, Session) {
         .await
         .expect("create table");
     let second = Session::open("second", source()).await.expect("open");
-    (first, second)
+    (path, first, second)
 }
 
 /// Runs `sql` on `session` and cancels it a tenth of a second in.
@@ -68,16 +68,17 @@ async fn write(session: &Session) -> Result<(), Error> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cancelled_statement_that_yields_rows_lets_go_of_its_lock() {
-    let (first, second) = open("steps-rows").await;
+    let (path, first, second) = open("steps-rows").await;
     cancel_soon(&first, ENDLESS).await;
     write(&second)
         .await
         .expect("the worker stopped and released its lock");
+    let _ = std::fs::remove_file(&path);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cancelled_statement_that_yields_no_rows_keeps_running() {
-    let (first, second) = open("steps-no-rows").await;
+    let (path, first, second) = open("steps-no-rows").await;
     cancel_soon(
         &first,
         &format!("INSERT INTO t SELECT count(*) FROM ({ENDLESS})"),
@@ -87,4 +88,6 @@ async fn a_cancelled_statement_that_yields_no_rows_keeps_running() {
         .await
         .expect_err("the worker is still running and holds the lock");
     assert!(matches!(error, Error::Cancelled), "{error:?}");
+    // The worker still has the file open; unlinking it is all that can be done.
+    let _ = std::fs::remove_file(&path);
 }
