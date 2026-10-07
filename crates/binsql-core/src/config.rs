@@ -351,140 +351,160 @@ fn set_owner_only(_path: &Path, _mode: u32) -> Result<()> {
     Ok(())
 }
 
-/// Hides credentials so a DSN can be shown in the UI or a log. The driver says
-/// which separators a keyword-form value can hold: PostgreSQL's terms are split
-/// on whitespace, so a `;` is part of a password there, and SQL Server's and
-/// MySQL's on `;`, so a space is.
+/// Hides credentials so a DSN can be shown in the UI or a log. Each form is
+/// split the way the driver that reads it splits it, so whatever the driver
+/// takes as the password is what gets hidden: PostgreSQL's keyword form splits
+/// on whitespace and nothing else, SQL Server's on `;` outside a quoted value.
 pub fn mask_dsn(backend: Backend, dsn: &str) -> String {
-    let masked = mask_keyword_password(backend, dsn);
-
-    // URL form: scheme://user:password@host
-    if let Some(scheme_end) = masked.find("://") {
-        let rest = &masked[scheme_end + 3..];
-        if let Some(at) = rest.rfind('@') {
-            let credentials = &rest[..at];
-            if let Some(colon) = credentials.find(':') {
-                return format!(
-                    "{}{}:****{}",
-                    &masked[..scheme_end + 3],
-                    &credentials[..colon],
-                    &rest[at..]
-                );
-            }
-        }
-        return masked;
+    if let Some(scheme_end) = dsn.find("://") {
+        return mask_url(dsn, scheme_end + 3);
     }
-
-    // go-sql-driver form: user:password@tcp(...)
-    if backend == Backend::MySql
-        && let Some(at) = masked.rfind('@')
-    {
-        let credentials = &masked[..at];
-        if let Some(colon) = credentials.find(':') {
-            return format!("{}:****{}", &credentials[..colon], &masked[at..]);
-        }
+    match backend {
+        Backend::Postgres => mask_libpq(dsn),
+        Backend::MySql if dsn.contains('@') => mask_userinfo(dsn),
+        _ => mask_ado(dsn),
     }
-
-    masked
 }
 
-/// Replaces the value of any `password=` / `pwd=` term, in either the
-/// semicolon-separated or space-separated keyword form, or a URL's query.
-fn mask_keyword_password(backend: Backend, dsn: &str) -> String {
-    let mut out = String::with_capacity(dsn.len());
-    let mut rest = dsn;
+/// `scheme://user:password@host/db?password=…`: the password after the user,
+/// and any query parameter whose decoded name is a password.
+fn mask_url(dsn: &str, authority: usize) -> String {
+    let (head, rest) = dsn.split_at(authority);
+    let rest = mask_userinfo(rest);
+    let Some(question) = rest.find('?') else {
+        return format!("{head}{rest}");
+    };
+    let query = rest[question + 1..]
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((key, _)) if is_password_key(&decode_percent(key)) => format!("{key}=****"),
+            _ => pair.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{head}{}?{query}", &rest[..question])
+}
 
-    while let Some((key_start, value_start)) = find_password_key(rest) {
-        out.push_str(&rest[..value_start]);
-        out.push_str("****");
-        let in_query = key_start > 0 && matches!(rest.as_bytes()[key_start - 1], b'?' | b'&');
-        let value_end = value_start + value_len(backend, &rest[value_start..], in_query);
-        rest = &rest[value_end..];
+/// `user:password@rest`, split at the last `@` as the drivers split it, which
+/// hides more than the password when a later part holds an `@` too.
+fn mask_userinfo(dsn: &str) -> String {
+    match dsn.rfind('@') {
+        Some(at) => match dsn[..at].split_once(':') {
+            Some((user, _)) => format!("{user}:****{}", &dsn[at..]),
+            None => dsn.to_string(),
+        },
+        None => dsn.to_string(),
     }
+}
 
-    out.push_str(rest);
+/// libpq's keyword form, as `connect_options` reads it: terms split on any
+/// whitespace, so a `;` or a quote is part of the value it is in.
+fn mask_libpq(dsn: &str) -> String {
+    let mut out = String::with_capacity(dsn.len());
+    let mut term = String::new();
+    for c in dsn.chars().chain(std::iter::once(' ')) {
+        if !c.is_whitespace() {
+            term.push(c);
+            continue;
+        }
+        match term.split_once('=') {
+            Some((key, _)) if key.eq_ignore_ascii_case("password") => {
+                out.push_str(key);
+                out.push_str("=****");
+            }
+            _ => out.push_str(&term),
+        }
+        term.clear();
+        out.push(c);
+    }
+    out.pop();
     out
 }
 
-/// How long a password value is, with any whitespace before it. In a URL's
-/// query only `&` or `#` ends it. Otherwise a quoted value runs to its closing
-/// mark — PostgreSQL's `'…'` with `\` escaping the next character, SQL
-/// Server's and MySQL's `{…}`, `'…'` or `"…"` with a doubled mark standing for
-/// one — and an unquoted one to the driver's separator.
-fn value_len(backend: Backend, value: &str, in_query: bool) -> usize {
-    if in_query {
-        return value.find(['&', '#']).unwrap_or(value.len());
-    }
-    let lead = value.len() - value.trim_start().len();
-    let body = &value[lead..];
-    let postgres = backend == Backend::Postgres;
-
-    let close = match body.as_bytes().first() {
-        Some(b'\'') => Some('\''),
-        Some(b'{') if !postgres => Some('}'),
-        Some(b'"') if !postgres => Some('"'),
-        _ => None,
-    };
-    let Some(close) = close else {
-        let end = if postgres {
-            body.find(char::is_whitespace)
-        } else {
-            body.find(';')
+/// The ADO form: terms split on `;`, a value in `{…}`, `'…'` or `"…"` running
+/// to its closing mark, where a doubled mark stands for one.
+fn mask_ado(dsn: &str) -> String {
+    let mut out = String::with_capacity(dsn.len());
+    let mut rest = dsn;
+    while !rest.is_empty() {
+        let Some(equals) = rest.find('=').filter(|&at| !rest[..at].contains(';')) else {
+            let end = rest.find(';').map_or(rest.len(), |at| at + 1);
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            continue;
         };
-        return lead + end.unwrap_or(body.len());
-    };
+        let value = &rest[equals + 1..];
+        let length = ado_value_len(value);
+        out.push_str(&rest[..=equals]);
+        if is_password_key(&rest[..equals]) {
+            out.push_str("****");
+        } else {
+            out.push_str(&value[..length]);
+        }
+        rest = &value[length..];
+        if let Some(stripped) = rest.strip_prefix(';') {
+            out.push(';');
+            rest = stripped;
+        }
+    }
+    out
+}
 
+/// How far an ADO value runs: past any quoted span to the next `;`.
+fn ado_value_len(value: &str) -> usize {
+    let body = value.trim_start();
+    let lead = value.len() - body.len();
+    let close = match body.chars().next() {
+        Some('{') => '}',
+        Some(quote @ ('\'' | '"')) => quote,
+        _ => return value.find(';').unwrap_or(value.len()),
+    };
     let mut chars = body.char_indices().skip(1).peekable();
     while let Some((at, c)) = chars.next() {
-        if postgres && c == '\\' {
-            chars.next();
-        } else if c == close {
-            if !postgres && chars.peek().is_some_and(|&(_, next)| next == close) {
-                chars.next();
-            } else {
-                return lead + at + 1;
-            }
+        if c != close {
+            continue;
         }
+        if chars.peek().is_some_and(|&(_, next)| next == close) {
+            chars.next();
+            continue;
+        }
+        let after = lead + at + 1;
+        return after + value[after..].find(';').unwrap_or(value.len() - after);
     }
     value.len()
 }
 
-/// Finds the next `password=` / `pwd=` term, returning where the key and its
-/// value begin.
-fn find_password_key(haystack: &str) -> Option<(usize, usize)> {
-    let lower = haystack.to_ascii_lowercase();
-    let mut search_from = 0;
+fn is_password_key(key: &str) -> bool {
+    let key = key.trim();
+    key.eq_ignore_ascii_case("password") || key.eq_ignore_ascii_case("pwd")
+}
 
-    while search_from < lower.len() {
-        let candidates = ["password", "pwd"];
-        let next = candidates
-            .iter()
-            .filter_map(|key| {
-                lower[search_from..]
-                    .find(key)
-                    .map(|at| (search_from + at, *key))
-            })
-            .min_by_key(|(at, _)| *at)?;
-        let (key_start, key) = next;
-
-        // Only a term boundary counts, so `old_password` is not mistaken for a
-        // separate key and `passwordless=1` is not truncated.
-        let preceded_by_boundary = key_start == 0
-            || matches!(lower.as_bytes()[key_start - 1], b';' | b'&' | b'?')
-            || lower.as_bytes()[key_start - 1].is_ascii_whitespace();
-        let after_key = key_start + key.len();
-        let value_start = lower[after_key..]
-            .find('=')
-            .filter(|offset| lower[after_key..after_key + offset].trim().is_empty())
-            .map(|offset| after_key + offset + 1);
-
-        if preceded_by_boundary && let Some(value_start) = value_start {
-            return Some((key_start, value_start));
+/// Percent-decoding enough to read a query parameter's name.
+fn decode_percent(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = bytes
+            .get(at + 1..at + 3)
+            .and_then(|pair| std::str::from_utf8(pair).ok())
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok());
+        match (bytes[at], hex) {
+            (b'%', Some(byte)) => {
+                decoded.push(byte);
+                at += 3;
+            }
+            (b'+', _) => {
+                decoded.push(b' ');
+                at += 1;
+            }
+            (byte, _) => {
+                decoded.push(byte);
+                at += 1;
+            }
         }
-        search_from = after_key;
     }
-
-    None
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 #[cfg(test)]
@@ -540,8 +560,23 @@ mod tests {
             ),
             (
                 Postgres,
-                "password='a\\' b' dbname=d",
-                "password=**** dbname=d",
+                "host=h password='abc'def dbname=d",
+                "host=h password=**** dbname=d",
+            ),
+            (
+                Postgres,
+                "host=h\u{a0}password=secret dbname=d",
+                "host=h\u{a0}password=**** dbname=d",
+            ),
+            (
+                Postgres,
+                "postgres://u@h/db?%70assword=secret&x=1",
+                "postgres://u@h/db?%70assword=****&x=1",
+            ),
+            (
+                MySql,
+                "u:se;password=cret@tcp(h:3306)/db",
+                "u:****@tcp(h:3306)/db",
             ),
             (
                 Postgres,
