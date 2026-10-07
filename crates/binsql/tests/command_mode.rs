@@ -2257,3 +2257,88 @@ fn a_timeout_the_query_beats_changes_nothing() {
         assert_eq!(plain.stderr, run.stderr);
     }
 }
+
+#[test]
+fn a_batch_without_a_transaction_says_how_far_it_got() {
+    let fixture = Fixture::new("timeout-no-tx");
+    fixture.seed();
+    let run = fixture
+        .direct(&[
+            "exec",
+            &format!("INSERT INTO artist (name) VALUES ('Autechre'); {ENDLESS}"),
+            "--no-tx",
+            "--timeout-ms",
+            "200",
+        ])
+        .failed();
+    assert_eq!(run.stdout, "");
+    assert!(
+        run.stderr.starts_with(
+            "error: timed out after 200 ms\n  statement 2 of 2 was running; whether it took \
+             effect is unknown"
+        ),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("1 earlier statement already ran and was not rolled back"),
+        "{}",
+        run.stderr
+    );
+    fixture
+        .direct(&["query", "SELECT count(*) FROM artist", "-o", "raw"])
+        .succeeds()
+        .stdout_has("4");
+}
+
+#[test]
+fn a_timed_out_transaction_claims_no_rollback() {
+    let fixture = Fixture::new("timeout-tx");
+    fixture.seed();
+    let batch = format!(
+        "INSERT INTO artist (name) VALUES ('Autechre'); \
+         INSERT INTO artist (name) SELECT 'x' FROM ({ENDLESS})"
+    );
+    for extra in [&[][..], &["--dry-run"][..]] {
+        let mut args = vec!["exec", batch.as_str(), "--timeout-ms", "200"];
+        args.extend_from_slice(extra);
+        let run = fixture.direct(&args).failed();
+        assert!(
+            run.stderr.starts_with("error: timed out after 200 ms\n"),
+            "{}",
+            run.stderr
+        );
+        assert!(!run.stderr.contains("rolled back"), "{}", run.stderr);
+        assert!(!run.stderr.contains("nothing was kept"), "{}", run.stderr);
+
+        args.extend_from_slice(&["--error-format", "json"]);
+        let record = error_record(&fixture.direct(&args).failed());
+        assert_eq!(record["category"], "timeout");
+        assert_eq!(record["transaction"], "unknown");
+    }
+    fixture
+        .direct(&["query", "SELECT count(*) FROM artist", "-o", "raw"])
+        .succeeds()
+        .stdout_has("3");
+}
+
+#[test]
+fn a_timeout_the_batch_beats_changes_nothing() {
+    let exec = |extra: &[&str]| {
+        let fixture = Fixture::new("timeout-exec-roomy");
+        fixture.seed();
+        let mut args = vec![
+            "exec",
+            "UPDATE artist SET founded = 0 WHERE id = 1; UPDATE artist SET founded = 1 WHERE id = 2",
+        ];
+        args.extend_from_slice(extra);
+        fixture.direct(&args).succeeds()
+    };
+    let plain = exec(&[]);
+    for extra in [&["--timeout-ms", "0"], &["--timeout-ms", "60000"]] {
+        let run = exec(extra);
+        assert_eq!(plain.stdout, run.stdout);
+        assert_eq!(plain.stderr, run.stderr);
+    }
+}

@@ -55,7 +55,7 @@ the README.
 
 ## Tasks
 
-- [ ] **1. The deadline.** `cli/mod.rs`: `Stop::overdue`, a cancel inside a
+- [x] **1. The deadline.** `cli/mod.rs`: `Stop::overdue`, a cancel inside a
   transaction error read as the cancel. `cli/exec.rs`: both paths through
   `Stop`, the timeout messages.
   Verify: `cargo test --workspace` — the integration tests above.

@@ -1004,6 +1004,17 @@ impl Stop {
         &self.cancel
     }
 
+    /// The timeout, when the deadline has passed and no ⌃C came first, so
+    /// that nothing more is started. The token is cancelled with it.
+    pub fn overdue(&self, known: &str) -> Option<Failure> {
+        let (ms, deadline) = self.deadline?;
+        if Instant::now() < deadline || self.cancel.is_cancelled() {
+            return None;
+        }
+        self.cancel.cancel();
+        Some(timed_out(ms, known))
+    }
+
     /// Runs `work` to its end. Past the deadline the token is cancelled and
     /// `work` has `grace` more to stop; whatever it says then, the deadline
     /// fired, and the failure says `known` about what the work left behind.
@@ -1028,13 +1039,10 @@ impl Stop {
             return work.await.map_err(core);
         }
         self.cancel.cancel();
-        let timed_out = failed(format!("timed out after {ms} ms"))
-            .category(Category::Timeout)
-            .phase(Phase::Execute)
-            .context(known);
+        let timed_out = timed_out(ms, known);
         match tokio::time::timeout_at(deadline + grace, work).await {
             Ok(Ok(done)) => Ok(done),
-            Ok(Err(binsql_core::Error::Cancelled)) => Err(timed_out),
+            Ok(Err(error)) if is_cancel(&error) => Err(timed_out),
             Ok(Err(error)) => {
                 let detail = error.to_string();
                 let mut timed_out = timed_out.context(detail.clone());
@@ -1048,6 +1056,22 @@ impl Stop {
                 grace.as_millis()
             ))),
         }
+    }
+}
+
+fn timed_out(ms: u64, known: &str) -> Failure {
+    failed(format!("timed out after {ms} ms"))
+        .category(Category::Timeout)
+        .phase(Phase::Execute)
+        .context(known)
+}
+
+/// A cancel, bare or as the way a transaction ended.
+fn is_cancel(error: &binsql_core::Error) -> bool {
+    match error {
+        binsql_core::Error::Cancelled => true,
+        binsql_core::Error::Transaction { error, .. } => is_cancel(error),
+        _ => false,
     }
 }
 
@@ -1212,6 +1236,27 @@ mod tests {
         assert_eq!(budget(&["--timeout-ms", "2147483648"]), Err(true));
         assert_eq!(budget(&["--timeout-ms", "abc"]), Err(true));
         assert_eq!(budget(&["--timeout-ms", "-1"]), Err(true));
+    }
+
+    #[test]
+    fn nothing_is_started_past_the_deadline() {
+        let stop = |deadline| Stop {
+            cancel: CancellationToken::new(),
+            deadline,
+        };
+        assert!(stop(None).overdue("known").is_none());
+        let ahead = stop(Some((60_000, Instant::now() + Duration::from_secs(60))));
+        assert!(ahead.overdue("known").is_none());
+
+        let past = stop(Some((0, Instant::now())));
+        let failure = past.overdue("known").expect("overdue");
+        assert_eq!(failure.category, Category::Timeout);
+        assert!(past.cancel.is_cancelled());
+
+        // A ⌃C got there first, so the work answers it as it always has.
+        let interrupted = stop(Some((0, Instant::now())));
+        interrupted.cancel.cancel();
+        assert!(interrupted.overdue("known").is_none());
     }
 
     #[test]

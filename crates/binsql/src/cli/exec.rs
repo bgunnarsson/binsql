@@ -9,11 +9,11 @@ use binsql_core::{Backend, Statement, sql};
 
 use super::render::{self, Outcome};
 use super::{
-    Category, Phase, Result, Transaction, bind_values, cancel_on_interrupt, connect, core, note,
-    output, parse, print, read_sql, usage,
+    Category, GRACE, Phase, Result, Stop, Transaction, bind_values, connect, note, output, parse,
+    print, read_sql, statement_budget, usage,
 };
 
-pub(super) const VALUES: &[&str] = &["file", "f", "arg"];
+pub(super) const VALUES: &[&str] = &["file", "f", "arg", "timeout-ms"];
 pub(super) const SWITCHES: &[&str] = &["dry-run", "tx", "no-tx", "force"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {
@@ -32,6 +32,7 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         ));
     }
 
+    let timeout = statement_budget(&args)?;
     let params = bind_values(&args)?;
     let script = read_sql(&args)?;
     let session = connect(&args).await?;
@@ -54,57 +55,85 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         warn_about_implicit_commits(&statements, backend, &options);
     }
 
-    let cancel = cancel_on_interrupt();
+    // The clock starts once connected, and covers the whole batch.
+    let stop = Stop::start(timeout);
     let results = if transactional {
-        session
-            .run_transaction(None, &bound, None, !dry_run, &cancel)
-            .await
-            .map_err(|error| {
-                // Only an error from inside the transaction says how it
-                // ended; any other came before the batch began. One with no
-                // statement came after every statement ran.
-                let failure = core(error);
-                let ran = &statements[..failure.statement.unwrap_or(statements.len())];
-                match failure.transaction {
-                    Some(Transaction::RolledBack) if commits_on_its_own(ran, backend) => failure
-                        .transaction(Transaction::Unknown)
-                        .context("whether the transaction was committed or rolled back is unknown"),
-                    Some(Transaction::RolledBack) => {
-                        failure.context("the transaction was rolled back; nothing was kept")
-                    }
-                    Some(Transaction::Unknown) => failure
-                        .context("whether the transaction was committed or rolled back is unknown"),
-                    _ => failure
-                        .transaction(Transaction::None)
-                        .context("no statement was run"),
+        // Past the deadline nothing confirms how the transaction ended, so a
+        // timeout never claims a rollback.
+        let known = if dry_run {
+            "the dry run did not finish; it sends no COMMIT, but whether its rollback completed \
+             is unknown"
+        } else {
+            "the transaction did not report a commit; binsql sends no COMMIT after the deadline, \
+             but one already in flight may still land — check before retrying"
+        };
+        stop.run(
+            GRACE,
+            known,
+            session.run_transaction(None, &bound, None, !dry_run, stop.token()),
+        )
+        .await
+        .map_err(|failure| {
+            // Only an error from inside the transaction says how it ended;
+            // any other came before the batch began. One with no statement
+            // came after every statement ran.
+            if failure.category == Category::Timeout {
+                return failure.transaction(Transaction::Unknown);
+            }
+            let ran = &statements[..failure.statement.unwrap_or(statements.len())];
+            match failure.transaction {
+                Some(Transaction::RolledBack) if commits_on_its_own(ran, backend) => failure
+                    .transaction(Transaction::Unknown)
+                    .context("whether the transaction was committed or rolled back is unknown"),
+                Some(Transaction::RolledBack) => {
+                    failure.context("the transaction was rolled back; nothing was kept")
                 }
-            })?
+                Some(Transaction::Unknown) => failure
+                    .context("whether the transaction was committed or rolled back is unknown"),
+                _ => failure
+                    .transaction(Transaction::None)
+                    .context("no statement was run"),
+            }
+        })?
     } else {
         let mut results = Vec::with_capacity(bound.len());
+        let total = statements.len();
         for (index, (statement, bound)) in statements.iter().zip(&bound).enumerate() {
-            let result = session
-                .run_bound(None, bound, None, &cancel)
-                .await
-                .map_err(|error| {
-                    // Without a transaction there is nothing to undo, so the
-                    // message has to say how far the batch got.
-                    let failure =
-                        core(error)
-                            .statement(index + 1)
-                            .completed(index)
-                            .context(format!(
-                                "statement: {}",
-                                sql::summarize(&statement.sql, backend, 100)
-                            ));
-                    match index {
-                        0 => failure,
-                        1 => failure
-                            .context("1 earlier statement already ran and was not rolled back"),
-                        count => failure.context(format!(
-                            "{count} earlier statements already ran and were not rolled back"
-                        )),
-                    }
-                })?;
+            let position = index + 1;
+            let ran = match stop
+                .overdue(&format!("statement {position} of {total} was not started"))
+            {
+                Some(failure) => Err(failure),
+                None => {
+                    stop.run(
+                        GRACE,
+                        &format!(
+                            "statement {position} of {total} was running; whether it took effect \
+                             is unknown"
+                        ),
+                        session.run_bound(None, bound, None, stop.token()),
+                    )
+                    .await
+                }
+            };
+            let result = ran.map_err(|failure| {
+                // Without a transaction there is nothing to undo, so the
+                // message has to say how far the batch got.
+                let failure = failure
+                    .statement(position)
+                    .completed(index)
+                    .context(format!(
+                        "statement: {}",
+                        sql::summarize(&statement.sql, backend, 100)
+                    ));
+                match index {
+                    0 => failure,
+                    1 => failure.context("1 earlier statement already ran and was not rolled back"),
+                    count => failure.context(format!(
+                        "{count} earlier statements already ran and were not rolled back"
+                    )),
+                }
+            })?;
             results.push(result);
         }
         results
