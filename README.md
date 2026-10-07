@@ -466,7 +466,7 @@ two together exit `2`.
 | Backend | Table | View |
 | --- | --- | --- |
 | SQLite | `create` | `create` |
-| PostgreSQL | `unsupported` | `unsupported` |
+| PostgreSQL | `unsupported` | `query` |
 | MySQL | `unsupported` | `unsupported` |
 | SQL Server | `unsupported` | `unsupported` |
 
@@ -475,6 +475,10 @@ no dependency order, no grants and no ownership. SQLite's table text has its
 inline constraints but not the indexes or triggers created beside it, and is
 kept as it was written — after an `ALTER TABLE … RENAME` it may read as SQLite
 rewrote it, with SQLite's own spelling of the opening `CREATE TABLE`.
+PostgreSQL keeps no `CREATE` text for a table, so its tables stay
+`unsupported`; a view's `query` is the server rebuilding the view from its
+parsed form (`pg_get_viewdef`), so names come out qualified and spacing and
+comments are the server's, not as typed.
 
 Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".
@@ -891,8 +895,8 @@ v2 yet:
   [Azure Key Vault references](#azure-key-vault-references)).
 - Exporting a result set, editing values in the grid, query history, and
   filtering the tree.
-- **Definitions** on PostgreSQL, MySQL and SQL Server: `inspect --definitions`
-  marks their tables and views `unsupported` for now.
+- **Definitions** on MySQL and SQL Server: `inspect --definitions` marks their
+  tables and views `unsupported` for now.
 
 ## Licence
 

@@ -48,5 +48,5 @@ table or foreign table gives `Unsupported`, as it does now.
   maps the row. Unit tests of the mapping; an ignored live test in
   `tests/definitions_servers.rs`.
   Verify: `cargo test --workspace -q`, `cargo clippy --workspace --all-targets -q`.
-- [ ] **2. README.** PostgreSQL row and Status bullet.
+- [x] **2. README.** PostgreSQL row and Status bullet.
   Verify: read the table and the Status section.
