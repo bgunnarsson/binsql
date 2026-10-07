@@ -94,6 +94,7 @@ changes to `query`, `exec` and `inspect`.
 - [80](80-core-reads-object-definitions-with-sqlite-native-t.md): the core reads an object's own definition text; SQLite returns what `sqlite_master` stores, the other backends `unsupported` until 81–83.
 - [84](84-inspect-definitions-prints-one-definition-row-per.md): `inspect --definitions` prints `catalog, schema, object, kind, form, definition` for each selected object, ordered and selected as `--columns`; rows without text are counted on stderr, and `--columns` with it exits 2.
 - [81](81-postgresql-views-return-their-query.md): PostgreSQL views and materialized views give `query` from `pg_get_viewdef(oid, true)`; tables stay `unsupported`.
+- [82](82-mysql-returns-show-create-text.md): MySQL tables and views give `create` from `SHOW CREATE TABLE` / `SHOW CREATE VIEW`.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.

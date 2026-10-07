@@ -1,7 +1,7 @@
 ---
 title: "MySQL returns SHOW CREATE text"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
