@@ -92,7 +92,7 @@ None found.
 
 ## Tasks
 
-- [ ] **Masking.** In `config.rs`, teach `mask_keyword_password` the quoted
+- [x] **Masking.** In `config.rs`, teach `mask_keyword_password` the quoted
   value forms and add unit tests beside `masks_keyword_password` (`:459`):
   SQL Server `Server=x;User Id=u;Password=secret` →
   `Server=x;User Id=u;Password=****`; `Pwd={se;cret};Database=d` →

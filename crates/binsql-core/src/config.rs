@@ -386,25 +386,51 @@ pub fn mask_dsn(dsn: &str) -> String {
 }
 
 /// Replaces the value of any `password=` / `pwd=` term, in either the
-/// semicolon-separated or space-separated keyword form.
+/// semicolon-separated or space-separated keyword form, or a URL's query.
 fn mask_keyword_password(dsn: &str) -> String {
     let mut out = String::with_capacity(dsn.len());
     let mut rest = dsn;
 
-    while let Some(position) = find_password_key(rest) {
-        let (key_start, value_start) = position;
+    while let Some((key_start, value_start)) = find_password_key(rest) {
         out.push_str(&rest[..value_start]);
         out.push_str("****");
-        let value_end = rest[value_start..]
-            .find([';', ' '])
-            .map(|offset| value_start + offset)
-            .unwrap_or(rest.len());
+        let in_query = key_start > 0 && matches!(rest.as_bytes()[key_start - 1], b'?' | b'&');
+        let value_end = value_start + value_len(&rest[value_start..], in_query);
         rest = &rest[value_end..];
-        let _ = key_start;
     }
 
     out.push_str(rest);
     out
+}
+
+/// How long a password value is. A value in `{…}`, `'…'` or `"…"` runs to its
+/// closing mark, where a doubled mark is a literal one, because a quoted value
+/// may hold the `;` or space that would otherwise end it. In a URL's query an
+/// `&` ends it too.
+fn value_len(value: &str, in_query: bool) -> usize {
+    let close = match value.as_bytes().first() {
+        Some(b'{') => Some('}'),
+        Some(b'\'') => Some('\''),
+        Some(b'"') => Some('"'),
+        _ => None,
+    };
+    if let Some(close) = close {
+        let mut at = 1;
+        while let Some(offset) = value[at..].find(close) {
+            at += offset + 1;
+            if !value[at..].starts_with(close) {
+                return at;
+            }
+            at += 1;
+        }
+        return value.len();
+    }
+    let ends: &[char] = if in_query {
+        &[';', ' ', '&']
+    } else {
+        &[';', ' ']
+    };
+    value.find(ends).unwrap_or(value.len())
 }
 
 /// Finds the next `password=` / `pwd=` term, returning where the key and its
@@ -462,6 +488,38 @@ mod tests {
             mask_dsn("server=tcp:h,1433;user id=sa;password=hunter2;database=app"),
             "server=tcp:h,1433;user id=sa;password=****;database=app"
         );
+    }
+
+    #[test]
+    fn masks_every_drivers_literal_form() {
+        for (dsn, masked) in [
+            (
+                "Server=x;User Id=u;Password=secret",
+                "Server=x;User Id=u;Password=****",
+            ),
+            ("Pwd={se;cret};Database=d", "Pwd=****;Database=d"),
+            ("Pwd={a}}b;c};Database=d", "Pwd=****;Database=d"),
+            ("Password='a b';x=1", "Password=****;x=1"),
+            ("Password=\"a b\";x=1", "Password=****;x=1"),
+            (
+                "host=h user=u password=secret dbname=d",
+                "host=h user=u password=**** dbname=d",
+            ),
+            (
+                "postgres://h/db?user=u&password=secret&sslmode=require",
+                "postgres://h/db?user=u&password=****&sslmode=require",
+            ),
+            ("mysql://u:secret@h:3306/db", "mysql://u:****@h:3306/db"),
+            ("u:secret@tcp(h:3306)/db", "u:****@tcp(h:3306)/db"),
+            ("/data/app.db", "/data/app.db"),
+            ("keychain://team/prod", "keychain://team/prod"),
+            (
+                "keyvault://vault.vault.azure.net/secrets/prod",
+                "keyvault://vault.vault.azure.net/secrets/prod",
+            ),
+        ] {
+            assert_eq!(mask_dsn(dsn), masked, "{dsn}");
+        }
     }
 
     #[test]
