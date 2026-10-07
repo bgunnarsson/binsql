@@ -2,7 +2,7 @@
 title: "Core builds an estimated plan for one read"
 kind: task
 mode: afk
-status: open
+status: resolved
 blocked_by: []
 claimed_by:
 ---
@@ -27,3 +27,17 @@ Build what 23 settled for this step (see `23-plan-shape.md`, "Settled shape"):
 - 23's answer is the contract; 17's answer has each backend's estimated form and sources.
 
 ## Answer
+
+The core plans one read without running it: Session::plan, sql::plannable and sql::plan_sql, on every backend (plan docs/plans/2026-10-07-core-estimated-plan.md).
+
+Built:
+- `sql::plannable(sql, backend)` is true for a `Kind::Read` whose first word is SELECT, WITH, VALUES or TABLE. `sql::plan_sql` gives `EXPLAIN QUERY PLAN` (SQLite), `EXPLAIN (FORMAT JSON)` (PostgreSQL), `EXPLAIN FORMAT=JSON` (MySQL), and the statement unchanged for SQL Server.
+- `Session::plan(catalog, sql, limit, cancel)` refuses anything but exactly one plannable statement with `Error::NotPlannable` (a refusal; nothing is sent), then applies the read-only guard. A read-only source can still plan.
+- `Adapter::plan` defaults to running the prefixed statement (SQLite). PostgreSQL and MySQL override it to send the prefixed statement prepared, so the server refuses a second statement that the lexer missed (nested PostgreSQL comments, `E''` strings, MySQL `--x`). Review found those let `plan` run a write through `raw_sql`.
+- SQL Server sends `SET SHOWPLAN_XML ON`, the statement and `OFF` as separate batches under one lock, with OFF sent after an error. A `showplan` flag on the adapter makes the next statement replace the connection when a plan stopped before OFF (cancelled, dropped, or OFF refused). A result other than 1×1 is "SQL Server returned no plan". An error naming SHOWPLAN gains the GRANT hint line.
+
+Assumed, not asked:
+- Refusal is a new `Error::NotPlannable` (exit 1 through the CLI's core-error path). Ticket 91 checks `sql::plannable` itself first to exit 2.
+- PostgreSQL and MySQL plans go prepared. The MySQL docs do not list EXPLAIN among preparable statements; MySQL parses EXPLAIN SELECT as a SELECT, so it should prepare, but if it does not, plans fail with a server error rather than run anything. Live check 93 settles it.
+
+Not checked live: PostgreSQL, MySQL, SQL Server (tickets 92, 93).

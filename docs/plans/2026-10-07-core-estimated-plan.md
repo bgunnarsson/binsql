@@ -1,7 +1,7 @@
 ---
 title: The core builds an estimated plan for one plannable read, on every backend
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
