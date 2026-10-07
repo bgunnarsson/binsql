@@ -26,6 +26,8 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{Config, DataSource, Visibility};
 use crate::error::{Error, Result};
+use crate::secrets::keychain::{self, SecretStore};
+use crate::source::Saved;
 
 /// The file a connection lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +221,45 @@ impl Workspace {
         Ok(())
     }
 
+    /// Saves what a form or the command line described: files its secret,
+    /// writes the config, and on a rename drops the old name.
+    ///
+    /// The credential store is written before the config, so a config can never
+    /// end up naming a secret that was never stored.
+    pub fn save(&mut self, saved: Saved, store: &impl SecretStore) -> Result<()> {
+        let Saved {
+            id,
+            source,
+            secret,
+            previous,
+            scope,
+        } = saved;
+        let renamed_from = previous.filter(|previous| *previous != id);
+        // Before the secret, so a refused name files nothing under it.
+        self.check_new_id(&id)?;
+
+        match &secret {
+            Some(secret) => store.set(&id, secret)?,
+            // Nothing new to file, so a rename carries the existing entry
+            // across rather than leaving the new name pointing at nothing.
+            None if keychain::is_reference(&source.dsn) => {
+                if let Some(from) = &renamed_from {
+                    store.rename(from, &id)?;
+                }
+            }
+            None => {}
+        }
+
+        self.set(&id, source, scope)?;
+        if let Some(from) = &renamed_from {
+            // Never through `delete`: the old name's secret has either been
+            // carried across or superseded by the one just filed, so deleting
+            // it would take the live one.
+            self.remove(from)?;
+        }
+        Ok(())
+    }
+
     /// Removes a connection from wherever it is, and writes what changed.
     pub fn remove(&mut self, id: &str) -> Result<bool> {
         let mut removed = false;
@@ -279,6 +320,8 @@ pub fn find_project(from: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
     use crate::backend::Backend;
 
@@ -433,6 +476,159 @@ mod tests {
             .set("new", source("/tmp/n.db"), Scope::Project)
             .expect_err("there is no project file");
         assert!(error.to_string().contains(PROJECT_FILE), "{error}");
+    }
+
+    /// A credential store that writes nothing and remembers what it was
+    /// asked, so the save and delete sequences run without the real one.
+    #[derive(Default)]
+    struct Recorder {
+        calls: RefCell<Vec<String>>,
+        fail: bool,
+        /// The user config, so a delete can note whether the file still
+        /// named the secret when it was asked to remove it.
+        config: Option<PathBuf>,
+    }
+
+    impl Recorder {
+        fn failing() -> Recorder {
+            Recorder {
+                fail: true,
+                ..Recorder::default()
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
+
+        fn record(&self, call: String) -> Result<()> {
+            self.calls.borrow_mut().push(call);
+            if self.fail {
+                return Err(Error::config(anyhow::anyhow!("the store said no")));
+            }
+            Ok(())
+        }
+    }
+
+    impl SecretStore for Recorder {
+        fn set(&self, account: &str, secret: &str) -> Result<()> {
+            self.record(format!("set {account} {secret}"))
+        }
+
+        fn rename(&self, from: &str, to: &str) -> Result<()> {
+            self.record(format!("rename {from} {to}"))
+        }
+
+        fn delete(&self, account: &str) -> Result<()> {
+            let listed = self.config.as_ref().is_some_and(|path| {
+                std::fs::read_to_string(path)
+                    .unwrap_or_default()
+                    .contains(&keychain::reference(account))
+            });
+            self.record(format!("delete {account} listed={listed}"))
+        }
+    }
+
+    fn saved(id: &str, dsn: &str, secret: Option<&str>, previous: Option<&str>) -> Saved {
+        Saved {
+            id: id.into(),
+            source: source(dsn),
+            secret: secret.map(str::to_string),
+            previous: previous.map(str::to_string),
+            scope: Scope::User,
+        }
+    }
+
+    #[test]
+    fn save_files_a_new_secret_and_lists_the_source() {
+        let mut workspace = workspace("save-new", USER, None);
+        let store = Recorder::default();
+        workspace
+            .save(
+                saved("acme/prod", "keychain://acme/prod", Some("pg://x"), None),
+                &store,
+            )
+            .unwrap();
+        assert_eq!(store.calls(), ["set acme/prod pg://x"]);
+        let written = std::fs::read_to_string(workspace.user_path()).unwrap();
+        assert!(written.contains("keychain://acme/prod"), "{written}");
+    }
+
+    #[test]
+    fn save_writes_nothing_when_the_secret_cannot_be_filed() {
+        let mut workspace = workspace("save-failing", USER, None);
+        let store = Recorder::failing();
+        workspace
+            .save(
+                saved("acme/prod", "keychain://acme/prod", Some("pg://x"), None),
+                &store,
+            )
+            .expect_err("the store refused");
+        assert!(workspace.get("acme/prod").is_none());
+        assert!(!workspace.user_path().exists());
+    }
+
+    #[test]
+    fn save_refuses_a_reserved_name_before_the_store() {
+        let mut workspace = workspace("save-reserved", USER, None);
+        let store = Recorder::default();
+        workspace
+            .save(
+                saved("query", "keychain://query", Some("pg://x"), None),
+                &store,
+            )
+            .expect_err("query is a command");
+        assert!(store.calls().is_empty());
+    }
+
+    #[test]
+    fn save_carries_a_stored_secret_across_a_rename() {
+        let mut workspace = workspace("save-rename", USER, None);
+        let store = Recorder::default();
+        workspace
+            .save(
+                saved(
+                    "eimskip/live",
+                    "keychain://eimskip/live",
+                    None,
+                    Some("eimskip/prod"),
+                ),
+                &store,
+            )
+            .unwrap();
+        assert_eq!(store.calls(), ["rename eimskip/prod eimskip/live"]);
+        assert!(workspace.get("eimskip/live").is_some());
+        assert!(workspace.get("eimskip/prod").is_none());
+    }
+
+    #[test]
+    fn save_files_only_the_new_secret_on_a_retyped_rename() {
+        let mut workspace = workspace("save-retyped", USER, None);
+        let store = Recorder::default();
+        workspace
+            .save(
+                saved(
+                    "eimskip/live",
+                    "keychain://eimskip/live",
+                    Some("pg://y"),
+                    Some("eimskip/prod"),
+                ),
+                &store,
+            )
+            .unwrap();
+        assert_eq!(store.calls(), ["set eimskip/live pg://y"]);
+        assert!(workspace.get("eimskip/prod").is_none());
+    }
+
+    #[test]
+    fn save_leaves_the_store_alone_for_a_plain_string() {
+        let mut workspace = workspace("save-plain", USER, None);
+        let store = Recorder::default();
+        workspace
+            .save(saved("scratch", "/tmp/t.db", None, Some("scratch")), &store)
+            .unwrap();
+        assert!(store.calls().is_empty());
+        assert_eq!(workspace.get("scratch").unwrap().dsn, "/tmp/t.db");
     }
 
     #[test]

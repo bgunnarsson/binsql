@@ -119,7 +119,7 @@ None found.
   `pub trait SecretStore { fn set(&self, account: &str, secret: &str) -> Result<()>; fn rename(&self, from: &str, to: &str) -> Result<()>; fn delete(&self, account: &str) -> Result<()>; }`
   and `pub struct Keychain;` implementing it via the free functions.
   Verify: `cargo test -p binsql-core keychain`
-- [ ] **`Workspace::save`.** Add it after `set` in `workspace.rs`. In the test
+- [x] **`Workspace::save`.** Add it after `set` in `workspace.rs`. In the test
   module add a `Recorder` store: a `RefCell<Vec<String>>` call log, an
   optional failure for `set`, and the user config path so `delete` can record
   whether the file still names the account when it is called. Tests, named
