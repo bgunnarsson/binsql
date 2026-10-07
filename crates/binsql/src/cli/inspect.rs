@@ -4,7 +4,8 @@
 //! table's columns. Both answers are built as result sets, so every output
 //! format the other verbs have works here for nothing. With `--columns` it
 //! lists every object's columns at once, each row carrying the object it
-//! belongs to.
+//! belongs to, or one object's when it is named — exactly, since a name
+//! under `--columns` is an identity rather than a guess.
 
 use std::time::Instant;
 
@@ -20,11 +21,6 @@ pub async fn run(args: Vec<String>) -> Result<()> {
 
     let target = match args.positional() {
         [] => None,
-        [_] if every_column => {
-            return Err(usage(
-                "inspect --columns lists every object; naming one is not supported yet",
-            ));
-        }
         [name] => Some(name.clone()),
         _ => return Err(usage("inspect describes one table at a time")),
     };
@@ -40,7 +36,8 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     let schema = args.value(&["schema"]).map(str::to_string);
 
     if every_column {
-        let (result, empty) = columns_of(&session, &catalog, schema.as_deref()).await?;
+        let (result, empty) =
+            columns_of(&session, &catalog, schema.as_deref(), target.as_deref()).await?;
         print(&render::rows(&result, &options))?;
         for object in empty {
             note(&options, &format!("{object} has no columns"));
@@ -179,22 +176,30 @@ async fn columns_of(
     session: &Session,
     catalog: &str,
     schema: Option<&str>,
+    name: Option<&str>,
 ) -> Result<(ResultSet, Vec<String>)> {
     let start = Instant::now();
-    let mut objects = Vec::new();
+    let mut found = Vec::new();
     for schema in &scope(session, catalog, schema).await? {
         let named = (!schema.is_empty()).then_some(schema.as_str());
-        let found = session
-            .objects(catalog, named)
-            .await
-            .map_err(|error| failed(error.to_string()))?;
-        for object in found {
-            let columns = session
-                .columns(&object)
+        found.extend(
+            session
+                .objects(catalog, named)
                 .await
-                .map_err(|error| failed(format!("columns of {}: {error}", object.display())))?;
-            objects.push((object, columns));
-        }
+                .map_err(|error| failed(error.to_string()))?,
+        );
+    }
+    if let Some(name) = name {
+        found = select(found, catalog, name)?;
+    }
+
+    let mut objects = Vec::new();
+    for object in found {
+        let columns = session
+            .columns(&object)
+            .await
+            .map_err(|error| failed(format!("columns of {}: {error}", object.display())))?;
+        objects.push((object, columns));
     }
 
     let empty = objects
@@ -219,6 +224,44 @@ async fn columns_of(
         truncated: false,
     };
     Ok((result, empty))
+}
+
+/// The objects named exactly `name`, case and dots included. Finding none is
+/// a refusal from the database's side, with any names that differ only in
+/// case offered; finding it in more than one schema is the caller's to settle
+/// with `--schema`, rather than ours to settle by picking one.
+fn select(objects: Vec<ObjectRef>, catalog: &str, name: &str) -> Result<Vec<ObjectRef>> {
+    let (matches, others): (Vec<_>, Vec<_>) =
+        objects.into_iter().partition(|object| object.name == name);
+
+    if matches.is_empty() {
+        let near: Vec<_> = others
+            .iter()
+            .filter(|object| object.name.eq_ignore_ascii_case(name))
+            .map(ObjectRef::display)
+            .collect();
+        let mut message = format!("no table or view named {name} in {catalog}");
+        if !near.is_empty() {
+            message.push_str(&format!(
+                "; names that differ only in case: {}",
+                near.join(", ")
+            ));
+        }
+        return Err(failed(message));
+    }
+
+    let mut schemas: Vec<_> = matches
+        .iter()
+        .map(|object| object.schema.clone().unwrap_or_default())
+        .collect();
+    schemas.dedup();
+    if schemas.len() > 1 {
+        return Err(usage(format!(
+            "{name} is in more than one schema ({}); pass --schema",
+            schemas.join(", ")
+        )));
+    }
+    Ok(matches)
 }
 
 /// One row per column, the object's identity in front of what `describe`
@@ -348,6 +391,75 @@ mod tests {
         );
         assert!(rows.iter().all(|row| text(&row[0]) == Some("shop")));
         assert_eq!(rows[0][1], Value::Null);
+    }
+
+    fn names(objects: &[ObjectRef]) -> Vec<String> {
+        objects.iter().map(ObjectRef::display).collect()
+    }
+
+    #[test]
+    fn a_name_is_matched_exactly() {
+        let selected = select(
+            vec![
+                object(None, "Artist", ObjectKind::Table),
+                object(None, "artist", ObjectKind::Table),
+            ],
+            "main",
+            "artist",
+        )
+        .unwrap();
+        assert_eq!(names(&selected), ["artist"]);
+    }
+
+    #[test]
+    fn a_missing_name_offers_the_names_that_differ_only_in_case() {
+        let failure = select(
+            vec![object(Some("sales"), "Artist", ObjectKind::Table)],
+            "shop",
+            "artist",
+        )
+        .unwrap_err();
+        assert!(!failure.usage);
+        assert_eq!(
+            failure.message,
+            "no table or view named artist in shop; names that differ only in case: sales.Artist"
+        );
+
+        let failure = select(
+            vec![object(None, "album", ObjectKind::Table)],
+            "main",
+            "artist",
+        )
+        .unwrap_err();
+        assert!(!failure.usage);
+        assert_eq!(failure.message, "no table or view named artist in main");
+    }
+
+    #[test]
+    fn a_name_in_two_schemas_is_refused() {
+        let failure = select(
+            vec![
+                object(Some("a"), "orders", ObjectKind::Table),
+                object(Some("b"), "orders", ObjectKind::View),
+            ],
+            "shop",
+            "orders",
+        )
+        .unwrap_err();
+        assert!(failure.usage);
+        assert_eq!(
+            failure.message,
+            "orders is in more than one schema (a, b); pass --schema"
+        );
+    }
+
+    #[test]
+    fn a_name_with_a_dot_is_not_split() {
+        let objects = vec![
+            object(None, "a.b", ObjectKind::Table),
+            object(Some("a"), "b", ObjectKind::Table),
+        ];
+        assert_eq!(names(&select(objects, "main", "a.b").unwrap()), ["a.b"]);
     }
 
     #[test]

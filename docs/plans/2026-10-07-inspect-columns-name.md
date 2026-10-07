@@ -75,7 +75,7 @@ what changes least:
 
 ## Tasks
 
-- [ ] **1. Match one object exactly under `--columns`.**
+- [x] **1. Match one object exactly under `--columns`.**
   In `crates/binsql/src/cli/inspect.rs`:
   - Delete the `[_] if every_column` refusal arm (:23-27). `target` then
     carries the name in both modes.

@@ -626,15 +626,54 @@ fn inspect_columns_lists_every_object_with_its_identity() {
 }
 
 #[test]
-fn inspect_columns_refuses_a_name_until_it_can_match_one_exactly() {
+fn inspect_columns_names_one_object_exactly() {
     let fixture = Fixture::new("inspect-columns-name");
     fixture.seed();
+    fixture
+        .direct(&["exec", "CREATE TABLE album (id INTEGER)"])
+        .succeeds();
 
     let run = fixture
-        .direct(&["inspect", "--columns", "artist"])
-        .refused()
-        .stderr_has("naming one is not supported yet");
+        .direct(&["inspect", "--columns", "artist", "-o", "csv"])
+        .succeeds();
+    assert_eq!(
+        run.stdout,
+        "catalog,schema,object,kind,column,type,nullable,default,primary_key\n\
+         main,,artist,table,id,INTEGER,true,,true\n\
+         main,,artist,table,name,TEXT,false,,false\n\
+         main,,artist,table,founded,INTEGER,true,,false\n"
+    );
+
+    let run = fixture
+        .direct(&["inspect", "--columns", "ARTIST"])
+        .failed()
+        .stderr_has("no table or view named ARTIST in main")
+        .stderr_has("names that differ only in case: artist");
     assert_eq!(run.stdout, "");
+
+    fixture
+        .direct(&["inspect", "--columns", "nonesuch"])
+        .failed()
+        .stderr_has("no table or view named nonesuch");
+}
+
+#[test]
+fn inspect_columns_names_an_object_with_a_dot() {
+    let fixture = Fixture::new("inspect-columns-dot");
+    fixture
+        .direct(&["exec", "CREATE TABLE \"a.b\" (id INTEGER)"])
+        .succeeds();
+
+    let run = fixture
+        .direct(&["inspect", "--columns", "a.b", "-o", "csv"])
+        .succeeds();
+    assert_eq!(
+        run.stdout,
+        "catalog,schema,object,kind,column,type,nullable,default,primary_key\n\
+         main,,a.b,table,id,INTEGER,true,,false\n"
+    );
+
+    fixture.direct(&["inspect", "a.b"]).failed();
 }
 
 #[test]
@@ -652,6 +691,16 @@ fn inspect_without_columns_prints_what_it_did_before() {
             .succeeds()
             .stdout,
         "{\"kind\":\"table\",\"name\":\"artist\",\"schema\":\"\"}\n"
+    );
+    assert_eq!(
+        fixture
+            .direct(&["inspect", "ARTIST", "-o", "csv"])
+            .succeeds()
+            .stdout,
+        fixture
+            .direct(&["inspect", "artist", "-o", "csv"])
+            .succeeds()
+            .stdout
     );
     assert_eq!(
         fixture
