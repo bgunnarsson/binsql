@@ -39,8 +39,11 @@ pub struct Failure {
     /// Lines text mode prints indented under the message. JSON leaves them
     /// out: they quote the SQL, which `statement` stands in for.
     pub context: Vec<String>,
+    /// The message without the SQL a core refusal quotes, which JSON prints
+    /// in its place.
+    bare: Option<String>,
     /// The connection string as given, masked wherever the message quotes it.
-    dsn: Option<(Backend, String)>,
+    dsn: Option<Box<(Backend, String)>>,
 }
 
 pub fn usage(message: impl Into<String>) -> Failure {
@@ -68,7 +71,19 @@ pub fn caused(message: impl Into<String>, error: &binsql_core::Error) -> Failure
 
 /// A core error as a failure, in its own words.
 pub fn core(error: binsql_core::Error) -> Failure {
-    caused(error.to_string(), &error)
+    use binsql_core::Error;
+    let bare = match &error {
+        Error::ReadOnly { data_source, .. } => Some(format!(
+            "{data_source} is registered read-only; refusing to run the statement"
+        )),
+        Error::NotPlannable { .. } => {
+            Some("only one SELECT, WITH, VALUES or TABLE statement can be planned".to_string())
+        }
+        _ => None,
+    };
+    let mut failure = caused(error.to_string(), &error);
+    failure.bare = bare;
+    failure
 }
 
 impl Failure {
@@ -81,6 +96,7 @@ impl Failure {
             statement: None,
             completed: None,
             context: Vec::new(),
+            bare: None,
             dsn: None,
         }
     }
@@ -111,7 +127,7 @@ impl Failure {
     }
 
     fn dsn(mut self, backend: Backend, dsn: String) -> Failure {
-        self.dsn = Some((backend, dsn));
+        self.dsn = Some(Box::new((backend, dsn)));
         self
     }
 }
@@ -264,7 +280,10 @@ fn report(failure: &Failure, json: bool) -> i32 {
         return exit;
     }
 
-    let mut message = failure.message.clone();
+    let mut message = failure
+        .bare
+        .clone()
+        .unwrap_or_else(|| failure.message.clone());
     for line in &failure.context {
         message.push_str("\n  ");
         message.push_str(line);
@@ -283,10 +302,17 @@ fn report(failure: &Failure, json: bool) -> i32 {
 const ERROR_SCHEMA: u64 = 1;
 
 fn error_record(failure: &Failure, exit: i32) -> String {
-    let mut message = redact(&failure.message);
-    if let Some((backend, dsn)) = &failure.dsn {
+    // The stored string is matched verbatim, so it goes before the patterns
+    // rewrite any part of it.
+    let mut message = failure
+        .bare
+        .clone()
+        .unwrap_or_else(|| failure.message.clone());
+    if let Some(stored) = &failure.dsn {
+        let (backend, dsn) = stored.as_ref();
         message = binsql_core::session::masked(message, *backend, dsn);
     }
+    let message = redact(&message);
     let mut fields: Vec<(&str, serde_json::Value)> = vec![
         ("type", "error".into()),
         ("schema", ERROR_SCHEMA.into()),
@@ -351,11 +377,13 @@ fn redact(message: &str) -> String {
         let mut from = 0;
         while let Some(found) = message[from..].to_ascii_lowercase().find(key) {
             let mut start = from + found + key.len();
-            // A quoted value runs to its closing quote, spaces and all.
-            let quote = message[start..]
-                .chars()
-                .next()
-                .filter(|c| matches!(c, '\'' | '"'));
+            // A quoted or braced value runs to its closing quote or brace,
+            // spaces and all.
+            let quote = message[start..].chars().next().and_then(|c| match c {
+                '\'' | '"' => Some(c),
+                '{' => Some('}'),
+                _ => None,
+            });
             if quote.is_some() {
                 start += 1;
             }
@@ -852,6 +880,10 @@ mod tests {
             redact("host=db password='s3 cret' x"),
             "host=db password='****' x"
         );
+        assert_eq!(
+            redact("Server=db;Password={a;b c};x"),
+            "Server=db;Password={****};x"
+        );
         assert_eq!(redact("AccessToken=abc&x=1"), "AccessToken=****&x=1");
         assert_eq!(
             redact("bearer eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl rejected"),
@@ -890,5 +922,31 @@ mod tests {
         let failure =
             failed(format!("connecting to x: login failed for {dsn}")).dsn(Backend::MsSql, dsn);
         assert!(!error_record(&failure, 1).contains("hunter2"));
+    }
+
+    #[test]
+    fn a_record_leaves_out_the_sql_a_core_refusal_quotes() {
+        let failure = core(binsql_core::Error::ReadOnly {
+            data_source: "ro".to_string(),
+            statement: "UPDATE users SET email = 'a@b.c'".to_string(),
+        });
+        assert!(failure.message.contains("UPDATE users"));
+        let record = error_record(&failure, 1);
+        assert!(
+            !record.contains("UPDATE") && record.contains("refused"),
+            "{record}"
+        );
+    }
+
+    #[test]
+    fn a_record_masks_a_stored_password_the_patterns_would_split() {
+        let dsn = r#"Server=db;Password="hun""ter2""#.to_string();
+        let failure =
+            failed(format!("connecting to x: login failed for {dsn}")).dsn(Backend::MsSql, dsn);
+        let record = error_record(&failure, 1);
+        assert!(
+            !record.contains("hun") && !record.contains("ter2"),
+            "{record}"
+        );
     }
 }

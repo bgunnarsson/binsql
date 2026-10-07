@@ -151,7 +151,9 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         ("default", [name]) => {
             let mut workspace = load()?;
             let id = find(&workspace, name)?;
-            workspace.set_default(&id, scope).map_err(core)?;
+            workspace
+                .set_default(&id, scope)
+                .map_err(|error| core(error).phase(Phase::Config))?;
             let source = workspace.get(&id).expect("resolved");
             vec![row(&workspace, &id, source)]
         }
@@ -488,9 +490,11 @@ fn commit(
     workspace
         .check_new_id(&id)
         .map_err(|error| usage(error.to_string()))?;
-    workspace
-        .save(saved, store)
-        .map_err(|error| failed(format!("saving {id}: {error}")).category(Category::Config))?;
+    workspace.save(saved, store).map_err(|error| {
+        failed(format!("saving {id}: {error}"))
+            .category(Category::Config)
+            .phase(Phase::Config)
+    })?;
     Ok(id)
 }
 
@@ -515,7 +519,11 @@ fn remove(
     let row = row(workspace, &id, workspace.get(&id).expect("resolved"));
     let removed = workspace
         .delete(&id, store)
-        .map_err(|error| failed(format!("removing {id}: {error}")).category(Category::Config))?
+        .map_err(|error| {
+            failed(format!("removing {id}: {error}"))
+                .category(Category::Config)
+                .phase(Phase::Config)
+        })?
         .expect("resolved");
     let leftover = removed
         .secret_error
