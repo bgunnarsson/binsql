@@ -13,7 +13,7 @@ use super::{Adapter, returns_rows};
 use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
-use crate::sql::Bound;
+use crate::sql::{self, Bound};
 use crate::value::{Column, ResultSet, Value};
 
 type Connection = tiberius::Client<Compat<TcpStream>>;
@@ -21,6 +21,21 @@ type Connection = tiberius::Client<Compat<TcpStream>>;
 /// Guarded, because a batch that failed before its `BEGIN` took effect would
 /// otherwise turn one error into two.
 const ROLLBACK: &str = "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION";
+
+const SHOWPLAN_HINT: &str =
+    "estimated plans on SQL Server need the SHOWPLAN permission (GRANT SHOWPLAN TO <user>)";
+
+/// Adds what to do about it to an error that names SHOWPLAN, which is how SQL
+/// Server refuses a plan to someone without the permission. Every other error
+/// is left as it was.
+fn showplan_hint(error: Error) -> Error {
+    match error {
+        Error::Query(_) if error.to_string().to_ascii_uppercase().contains("SHOWPLAN") => {
+            Error::query(anyhow::anyhow!("{error}\n  {SHOWPLAN_HINT}"))
+        }
+        error => error,
+    }
+}
 
 pub struct MsSqlAdapter {
     /// tiberius drives one TDS connection and every call needs `&mut`, so the
@@ -425,6 +440,61 @@ impl Adapter for MsSqlAdapter {
             .await
     }
 
+    /// SQL Server plans for the session rather than for a prefixed statement,
+    /// so plans are turned on, the statement sent and plans turned off again —
+    /// under one lock, and off even when the statement failed, or the next
+    /// statement on this connection would come back as its plan.
+    async fn plan(
+        &self,
+        statement: &Bound,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        if !statement.params.is_empty() {
+            return Err(Error::query(anyhow::anyhow!(
+                "SQL Server plans take no bound values"
+            )));
+        }
+
+        let mut client = self.client.lock().await;
+        // Each goes through `collect` with no values, so each is a batch of its
+        // own: a `SET SHOWPLAN_XML` has to be alone in its batch.
+        match collect(&mut client, "SET SHOWPLAN_XML ON", &[], None, cancel).await {
+            Ok(Some(_)) => {}
+            // A new connection starts with plans off.
+            Ok(None) => return self.cancelled(&mut client).await,
+            Err(error) => return Err(showplan_hint(error)),
+        }
+
+        let sql = sql::plan_sql(&statement.sql, Backend::MsSql);
+        let planned = match collect(&mut client, &sql, &[], limit, cancel).await {
+            Ok(Some(result)) => Ok(result),
+            Ok(None) => return self.cancelled(&mut client).await,
+            Err(error) => Err(showplan_hint(error)),
+        };
+
+        let off = collect(
+            &mut client,
+            "SET SHOWPLAN_XML OFF",
+            &[],
+            None,
+            &CancellationToken::new(),
+        )
+        .await;
+        if let Err(off) = off {
+            *client = open(&self.config, &self.label).await?;
+            if planned.is_ok() {
+                return Err(off);
+            }
+        }
+
+        let result = planned?;
+        if result.columns.len() != 1 || result.rows.len() != 1 {
+            return Err(Error::query(anyhow::anyhow!("SQL Server returned no plan")));
+        }
+        Ok(result)
+    }
+
     /// SQL Server spells its transaction control as statements rather than as
     /// an API call, so the batch is bracketed by hand — under one lock, so
     /// nothing else can slip a statement between the `BEGIN` and the `COMMIT`.
@@ -761,6 +831,27 @@ async fn azure_cli_token() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_showplan_refusal_says_how_to_get_the_permission() {
+        let message = showplan_hint(Error::query(anyhow::anyhow!(
+            "SHOWPLAN permission denied in database 'x'."
+        )))
+        .to_string();
+        assert!(message.starts_with("SHOWPLAN permission denied in database 'x'.\n  "));
+        assert!(message.ends_with(SHOWPLAN_HINT));
+
+        let lower = showplan_hint(Error::query(anyhow::anyhow!("showplan denied"))).to_string();
+        assert!(lower.ends_with(SHOWPLAN_HINT));
+    }
+
+    #[test]
+    fn other_errors_get_no_showplan_hint() {
+        let message =
+            showplan_hint(Error::query(anyhow::anyhow!("Invalid object name 't'."))).to_string();
+        assert_eq!(message, "Invalid object name 't'.");
+        assert_eq!(showplan_hint(Error::Cancelled).to_string(), "cancelled");
+    }
 
     #[test]
     fn is_nullable_reads_bit_and_int() {

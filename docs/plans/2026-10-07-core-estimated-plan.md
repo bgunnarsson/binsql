@@ -134,7 +134,7 @@ below were made by the architect, picking what changes least:
   asserts a plan of the select succeeds.
   Verify: `cargo test -p binsql-core --test sqlite_roundtrip`,
   `cargo test --workspace`, `cargo clippy --workspace --all-targets`. Commit.
-- [ ] **SQL Server override.** In `adapter/mssql.rs`, add
+- [x] **SQL Server override.** In `adapter/mssql.rs`, add
   `const SHOWPLAN_HINT: &str = "estimated plans on SQL Server need the SHOWPLAN permission (GRANT SHOWPLAN TO <user>)";`
   and a pure `fn showplan_hint(error: Error) -> Error`. For an `Error::Query`
   whose `to_string().to_ascii_uppercase()` contains `SHOWPLAN`, it returns
