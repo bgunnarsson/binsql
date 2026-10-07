@@ -93,7 +93,7 @@ below were made by the architect, picking what changes least:
 
 ## Tasks
 
-- [ ] **`sql::plannable` and `sql::plan_sql`.** In `crates/binsql-core/src/sql.rs`,
+- [x] **`sql::plannable` and `sql::plan_sql`.** In `crates/binsql-core/src/sql.rs`,
   below `classify` (:175):
   `pub fn plannable(sql, backend) -> bool` is
   `classify(sql, backend) == Kind::Read` and `words(sql, backend, 1)` has a first

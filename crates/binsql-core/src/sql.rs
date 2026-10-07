@@ -222,6 +222,28 @@ pub fn classify(sql: &str, backend: Backend) -> Kind {
     }
 }
 
+/// Whether `sql` is a statement an estimated plan can be asked for: a read that
+/// starts with `SELECT`, `WITH`, `VALUES` or `TABLE`. `SHOW`, `PRAGMA` and an
+/// `EXPLAIN` of their own read too, but there is nothing to plan in them.
+pub fn plannable(sql: &str, backend: Backend) -> bool {
+    classify(sql, backend) == Kind::Read
+        && words(sql, backend, 1)
+            .first()
+            .is_some_and(|first| matches!(first.as_str(), "SELECT" | "WITH" | "VALUES" | "TABLE"))
+}
+
+/// The statement that asks `backend` for the estimated plan of `sql` without
+/// running it. SQL Server turns plans on for the session instead of prefixing
+/// the statement, so its statement comes back as it was.
+pub fn plan_sql(sql: &str, backend: Backend) -> String {
+    match backend {
+        Backend::Sqlite => format!("EXPLAIN QUERY PLAN {sql}"),
+        Backend::Postgres => format!("EXPLAIN (FORMAT JSON) {sql}"),
+        Backend::MySql => format!("EXPLAIN FORMAT=JSON {sql}"),
+        Backend::MsSql => sql.to_string(),
+    }
+}
+
 /// What an `EXPLAIN` (or MySQL's `DESCRIBE`) does: a read when it only plans,
 /// and whatever it wraps when `ANALYZE` makes it run the statement.
 ///
@@ -1051,5 +1073,46 @@ mod tests {
         let bound = bound("select data ? 'key' from t", &[], Backend::Postgres).unwrap();
         assert_eq!(bound[0].sql, "select data ? 'key' from t");
         assert!(bound[0].params.is_empty());
+    }
+
+    #[test]
+    fn only_a_select_with_values_or_table_read_is_plannable() {
+        for sql in [
+            "SELECT 1",
+            "/* c */ SELECT 1",
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "VALUES (1)",
+            "TABLE t",
+        ] {
+            assert!(plannable(sql, Backend::Postgres), "{sql}");
+        }
+        for sql in [
+            "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d",
+            "EXPLAIN SELECT 1",
+            "SHOW TABLES",
+            "PRAGMA table_info(t)",
+            "INSERT INTO t VALUES (1)",
+            "",
+        ] {
+            assert!(!plannable(sql, Backend::Postgres), "{sql}");
+        }
+    }
+
+    #[test]
+    fn each_backend_asks_for_its_own_plan() {
+        let sql = "SELECT * FROM t";
+        assert_eq!(
+            plan_sql(sql, Backend::Sqlite),
+            "EXPLAIN QUERY PLAN SELECT * FROM t"
+        );
+        assert_eq!(
+            plan_sql(sql, Backend::Postgres),
+            "EXPLAIN (FORMAT JSON) SELECT * FROM t"
+        );
+        assert_eq!(
+            plan_sql(sql, Backend::MySql),
+            "EXPLAIN FORMAT=JSON SELECT * FROM t"
+        );
+        assert_eq!(plan_sql(sql, Backend::MsSql), sql);
     }
 }
