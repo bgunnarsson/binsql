@@ -8,12 +8,12 @@ use binsql_core::sql;
 
 use super::render;
 use super::{
-    Category, Phase, Result, bind_values, cancel_on_interrupt, connect, core, output, parse, print,
-    read_sql, usage,
+    Category, Phase, Result, bind_values, cancel_on_interrupt, connect, core, failed, output,
+    parse, print, read_sql, usage,
 };
 
 const VALUES: &[&str] = &["file", "f", "limit", "arg"];
-const SWITCHES: &[&str] = &["allow-write", "plan"];
+const SWITCHES: &[&str] = &["allow-write", "plan", "require-rows"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     let args = parse(args, VALUES, SWITCHES)?;
@@ -26,6 +26,13 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         },
         None => None,
     };
+
+    let require_rows = args.is_set(&["require-rows"]);
+    if require_rows && args.is_set(&["plan"]) {
+        return Err(usage(
+            "--require-rows checks what a query returns, and a plan always has rows; drop one",
+        ));
+    }
 
     let params = bind_values(&args)?;
     let script = read_sql(&args)?;
@@ -95,5 +102,13 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         .await
         .map_err(core)?;
 
-    print(&render::rows(&result, &options))
+    print(&render::rows(&result, &options))?;
+    // Checked after printing, so the result reads the same whichever way the
+    // assertion goes.
+    if require_rows && result.rows.is_empty() {
+        return Err(failed("the query returned no rows (--require-rows)")
+            .category(Category::Assertion)
+            .phase(Phase::Output));
+    }
+    Ok(())
 }

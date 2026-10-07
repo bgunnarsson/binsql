@@ -35,8 +35,8 @@ the README.
 
 ## Acceptance criteria
 
-- An empty result with `--require-rows` prints the result (headers, footer) on
-  stdout as usual, then `error: the query returned no rows (--require-rows)` on
+- An empty result with `--require-rows` prints on stdout exactly what it
+  prints without the flag, then `error: the query returned no rows (--require-rows)` on
   stderr, exit 1; in JSON, category `assertion`, phase `output`.
 - One or more rows with the flag is exit 0 with unchanged output.
 - Without the flag an empty result is exit 0, as before.
@@ -46,7 +46,7 @@ the README.
 
 ## Tasks
 
-- [ ] **1. The flag.** `cli/query.rs`: `require-rows` joins `SWITCHES`; it
+- [x] **1. The flag.** `cli/query.rs`: `require-rows` joins `SWITCHES`; it
   is refused with `--plan`; after printing, an empty `rows` is a failure.
   `cli/mod.rs`: `Category::Assertion`.
   Verify: `cargo test -p binsql` — integration tests for empty and nonempty,

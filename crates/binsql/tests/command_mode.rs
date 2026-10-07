@@ -1849,3 +1849,104 @@ fn text_errors_are_unchanged() {
          statement: delete from artist\n\nrun `binsql --help` for usage\n"
     );
 }
+
+#[test]
+fn require_rows_fails_an_empty_result_after_printing_it() {
+    let fixture = Fixture::new("require-rows-empty");
+    fixture.seed();
+    let empty = "SELECT name FROM artist WHERE name = 'Nobody'";
+
+    // Without the flag an empty result is still a success.
+    let plain = fixture.direct(&["query", empty, "-o", "csv"]).succeeds();
+    let required = fixture
+        .direct(&["query", empty, "-o", "csv", "--require-rows"])
+        .failed()
+        .stderr_has("error: the query returned no rows (--require-rows)");
+    assert_eq!(plain.stdout, required.stdout);
+}
+
+#[test]
+fn require_rows_passes_a_result_with_rows() {
+    let fixture = Fixture::new("require-rows-some");
+    fixture.seed();
+    let plain = fixture
+        .direct(&["query", "SELECT name FROM artist", "-o", "csv"])
+        .succeeds();
+    let required = fixture
+        .direct(&[
+            "query",
+            "SELECT name FROM artist",
+            "-o",
+            "csv",
+            "--require-rows",
+        ])
+        .succeeds();
+    assert_eq!(plain.stdout, required.stdout);
+    assert!(required.stderr.is_empty(), "{}", required.stderr);
+
+    // One row fetched is enough under --limit.
+    fixture
+        .direct(&[
+            "query",
+            "SELECT name FROM artist",
+            "--limit",
+            "1",
+            "--require-rows",
+        ])
+        .succeeds();
+}
+
+#[test]
+fn require_rows_asserts_with_nothing_printed() {
+    let fixture = Fixture::new("require-rows-quiet");
+    fixture.seed();
+    let run = fixture
+        .direct(&[
+            "query",
+            "SELECT 1 FROM artist WHERE name = 'Nobody'",
+            "-o",
+            "none",
+            "--require-rows",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "assertion");
+    assert_eq!(record["phase"], "output");
+
+    fixture
+        .direct(&[
+            "query",
+            "SELECT 1 FROM artist WHERE name = 'Autechre'",
+            "-o",
+            "none",
+            "--require-rows",
+        ])
+        .succeeds();
+}
+
+#[test]
+fn require_rows_keeps_other_failures_their_own() {
+    let fixture = Fixture::new("require-rows-other");
+    fixture.seed();
+    let run = fixture
+        .direct(&[
+            "query",
+            "SELECT * FROM nowhere",
+            "--require-rows",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    assert_eq!(error_record(&run)["category"], "database");
+
+    fixture
+        .direct(&["query", "DELETE FROM artist", "--require-rows"])
+        .refused()
+        .stderr_has("refusing");
+    fixture
+        .direct(&["query", "SELECT 1", "--plan", "--require-rows"])
+        .refused()
+        .stderr_has("--require-rows");
+}
