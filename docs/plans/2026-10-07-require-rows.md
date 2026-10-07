@@ -1,7 +1,7 @@
 ---
 title: "query --require-rows fails a query that returns no rows"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context

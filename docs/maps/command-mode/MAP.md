@@ -77,6 +77,7 @@ changes to `query`, `exec` and `inspect`.
 - [41](41-key-vault-and-azure-ad-failures-carry-a-reason.md): A Key Vault failure is an `Error::Secret` and the Azure AD token failure a `Connect` with a reason; in JSON they carry `reason` (`az-missing`, `az-unauthenticated`, `vault-forbidden`, `secret-not-found`, `vault-not-found`, `azure-ad-token`), and a secret failure `hint` and a redacted, 1000-character `detail`.
 - [42](42-database-errors-carry-the-native-code-when-the-dri.md): A database failure's JSON record carries `code`, the driver's own typed error code as a string — the SQLSTATE on PostgreSQL and MySQL, the extended result code on SQLite, the error number on SQL Server — read by `Error::native_code()` from the error chain, never from the message.
 - [43](43-exec-reports-the-actual-transaction-outcome.md): A failed transactional `exec` batch says how it ended — `transaction` is `rolled_back` when the rollback was confirmed, `unknown` when the rollback or commit failed or the batch may have committed part of itself, and `none` when nothing was sent — and the text says the same instead of always claiming a rollback.
+- [15](15-require-rows.md): `query --require-rows` prints the result as usual, then exits 1 with category `assertion`, phase `output`, when it had no rows; `--plan` with it is a usage error.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.

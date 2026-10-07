@@ -2,7 +2,7 @@
 title: Let query fail an opt-in row assertion
 kind: task
 mode: afk
-status: open
+status: resolved
 blocked_by: [3]
 claimed_by:
 ---
@@ -26,3 +26,18 @@ README Command mode and command_mode integration tests. SQL predicates express
 the condition; binsql only tests whether the successful result has rows.
 
 ## Answer
+
+`query --require-rows` prints the result as usual, then exits 1 with category `assertion`, phase `output`, when it had no rows; `--plan` with it is a usage error.
+
+Built in docs/plans/2026-10-07-require-rows.md (cli/query.rs, cli/mod.rs,
+tests/command_mode.rs, README, HELP). The security review found nothing. The
+correctness review found that SQL Server drops the rows an `OUTPUT` or `EXEC`
+write returns, so `--require-rows` fails such a write; that is an older adapter
+gap, now noted in the README rather than fixed here.
+
+Assumed, not asked:
+- A new category, `assertion`, phase `output`: the query succeeded and printed.
+- The message is "the query returned no rows (--require-rows)".
+- `--require-rows` with `--plan` is a usage error, since a plan always has rows.
+- A write that returns no result set fails the check, as an empty `SELECT` does.
+- Under `--limit`, one fetched row is enough.
