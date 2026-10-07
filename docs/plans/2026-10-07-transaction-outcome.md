@@ -1,7 +1,7 @@
 ---
 title: "exec reports the actual transaction outcome"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
