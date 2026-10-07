@@ -12,7 +12,7 @@ use std::time::Instant;
 use binsql_core::{Column, ObjectKind, ObjectRef, ResultSet, Session, Value};
 
 use super::render;
-use super::{Result, connect, failed, note, output, parse, print, usage};
+use super::{Category, Result, caused, connect, core, failed, note, output, parse, print, usage};
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     let args = parse(args, &[], &["columns"])?;
@@ -60,10 +60,7 @@ async fn scope(session: &Session, catalog: &str, schema: Option<&str>) -> Result
     if let Some(schema) = schema {
         return Ok(vec![schema.to_string()]);
     }
-    let found = session
-        .schemas(catalog)
-        .await
-        .map_err(|error| failed(error.to_string()))?;
+    let found = session.schemas(catalog).await.map_err(core)?;
     Ok(if found.is_empty() {
         vec![String::new()]
     } else {
@@ -79,10 +76,7 @@ async fn list(session: &Session, catalog: &str, schema: Option<&str>) -> Result<
     let mut rows = Vec::new();
     for schema in &schemas {
         let named = (!schema.is_empty()).then_some(schema.as_str());
-        let objects = session
-            .objects(catalog, named)
-            .await
-            .map_err(|error| failed(error.to_string()))?;
+        let objects = session.objects(catalog, named).await.map_err(core)?;
 
         for object in objects {
             rows.push(vec![
@@ -121,10 +115,7 @@ async fn describe(
     };
 
     let object = find(session, catalog, schema.as_deref(), &name).await?;
-    let columns = session
-        .columns(&object)
-        .await
-        .map_err(|error| failed(error.to_string()))?;
+    let columns = session.columns(&object).await.map_err(core)?;
 
     let rows = columns.iter().map(describe_row).collect();
 
@@ -150,10 +141,7 @@ async fn find(
 
     for schema in &schemas {
         let named = (!schema.is_empty()).then_some(schema.as_str());
-        let objects = session
-            .objects(catalog, named)
-            .await
-            .map_err(|error| failed(error.to_string()))?;
+        let objects = session.objects(catalog, named).await.map_err(core)?;
 
         if let Some(object) = objects
             .into_iter()
@@ -163,9 +151,7 @@ async fn find(
         }
     }
 
-    Err(failed(format!(
-        "no table or view named {name} in {catalog}"
-    )))
+    Err(failed(format!("no table or view named {name} in {catalog}")).category(Category::Database))
 }
 
 /// Every object's columns in the schemas in scope, as one result, with the
@@ -182,12 +168,7 @@ async fn columns_of(
     let mut found = Vec::new();
     for schema in &scope(session, catalog, schema).await? {
         let named = (!schema.is_empty()).then_some(schema.as_str());
-        found.extend(
-            session
-                .objects(catalog, named)
-                .await
-                .map_err(|error| failed(error.to_string()))?,
-        );
+        found.extend(session.objects(catalog, named).await.map_err(core)?);
     }
     if let Some(name) = name {
         found = select(found, catalog, name)?;
@@ -198,7 +179,7 @@ async fn columns_of(
         let columns = session
             .columns(&object)
             .await
-            .map_err(|error| failed(format!("columns of {}: {error}", object.display())))?;
+            .map_err(|error| caused(format!("columns of {}: {error}", object.display()), &error))?;
         objects.push((object, columns));
     }
 
@@ -248,7 +229,7 @@ fn select(objects: Vec<ObjectRef>, catalog: &str, name: &str) -> Result<Vec<Obje
                 near.join(", ")
             ));
         }
-        return Err(failed(message));
+        return Err(failed(message).category(Category::Database));
     }
 
     let mut schemas: Vec<_> = matches

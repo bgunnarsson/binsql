@@ -45,7 +45,7 @@ pub struct ProbeFailure {
 /// `message` with every copy of `dsn` replaced by its masked form, and then
 /// whatever masking hid — the password, when there is one — wherever else the
 /// message quotes it, as in a host the URL's userinfo is still attached to.
-fn masked(mut message: String, backend: Backend, dsn: &str) -> String {
+pub fn masked(mut message: String, backend: Backend, dsn: &str) -> String {
     let mask = mask_dsn(backend, dsn);
     for raw in [dsn, dsn.trim()] {
         if !raw.is_empty() {

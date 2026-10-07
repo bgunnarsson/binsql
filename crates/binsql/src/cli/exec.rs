@@ -9,8 +9,8 @@ use binsql_core::{Backend, Statement, sql};
 
 use super::render::{self, Outcome};
 use super::{
-    Result, bind_values, cancel_on_interrupt, connect, failed, note, output, parse, print,
-    read_sql, usage,
+    Category, Phase, Result, bind_values, cancel_on_interrupt, connect, core, note, output, parse,
+    print, read_sql, usage,
 };
 
 const VALUES: &[&str] = &["file", "f", "arg"];
@@ -39,13 +39,13 @@ pub async fn run(args: Vec<String>) -> Result<()> {
 
     let statements = sql::split(&script, backend);
     if statements.is_empty() {
-        return Err(usage("no SQL statement found"));
+        return Err(usage("no SQL statement found").phase(Phase::Prepare));
     }
     if !args.is_set(&["force"]) {
         refuse_the_obviously_destructive(&statements, backend)?;
     }
     let bound = sql::bind(&statements, &params, backend)
-        .map_err(|error| usage(format!("{error} — one --arg per ?")))?;
+        .map_err(|error| usage(format!("{error} — one --arg per ?")).phase(Phase::Prepare))?;
 
     // A batch is one unit of work by default; a lone statement is not worth
     // wrapping. Either way `--tx` and `--dry-run` say so outright.
@@ -60,9 +60,7 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             .run_transaction(None, &bound, None, !dry_run, &cancel)
             .await
             .map_err(|error| {
-                failed(format!(
-                    "{error}\n  the transaction was rolled back; nothing was kept"
-                ))
+                core(error).context("the transaction was rolled back; nothing was kept")
             })?
     } else {
         let mut results = Vec::with_capacity(bound.len());
@@ -73,17 +71,22 @@ pub async fn run(args: Vec<String>) -> Result<()> {
                 .map_err(|error| {
                     // Without a transaction there is nothing to undo, so the
                     // message has to say how far the batch got.
-                    let stranded = match index {
-                        0 => String::new(),
-                        1 => "\n  1 earlier statement already ran and was not rolled back".into(),
-                        count => format!(
-                            "\n  {count} earlier statements already ran and were not rolled back"
-                        ),
-                    };
-                    failed(format!(
-                        "{error}\n  statement: {}{stranded}",
-                        sql::summarize(&statement.sql, backend, 100)
-                    ))
+                    let failure =
+                        core(error)
+                            .statement(index + 1)
+                            .completed(index)
+                            .context(format!(
+                                "statement: {}",
+                                sql::summarize(&statement.sql, backend, 100)
+                            ));
+                    match index {
+                        0 => failure,
+                        1 => failure
+                            .context("1 earlier statement already ran and was not rolled back"),
+                        count => failure.context(format!(
+                            "{count} earlier statements already ran and were not rolled back"
+                        )),
+                    }
                 })?;
             results.push(result);
         }
@@ -122,8 +125,14 @@ fn refuse_the_obviously_destructive(statements: &[Statement], backend: Backend) 
 
         if let Some(reason) = reason {
             return Err(usage(format!(
-                "refusing statement {}: {reason} — pass --force if that is what you meant\n  statement: {}",
+                "refusing statement {}: {reason} — pass --force if that is what you meant",
                 index + 1,
+            ))
+            .category(Category::Refused)
+            .phase(Phase::Prepare)
+            .statement(index + 1)
+            .context(format!(
+                "statement: {}",
                 sql::summarize(&statement.sql, backend, 100)
             )));
         }

@@ -15,12 +15,15 @@ use binsql_core::source::Draft;
 use binsql_core::workspace::PROJECT_FILE;
 use binsql_core::{
     Backend, Column, DataSource, RESERVED_NAMES, Reference, Resolver, ResultSet, Scope, Session,
-    Value, Workspace,
+    Stage, Value, Workspace,
 };
 
 use super::args::Args;
 use super::render::Options;
-use super::{Result, default_source, failed, note, output, print, read_stdin, render, usage};
+use super::{
+    Category, Phase, Result, config_failure, core, default_source, failed, no_source, note, output,
+    print, read_stdin, render, usage,
+};
 
 const VALUES: &[&str] = &[
     "format",
@@ -32,6 +35,7 @@ const VALUES: &[&str] = &[
     "d",
     "description",
     "rename",
+    "error-format",
 ];
 const SWITCHES: &[&str] = &[
     "pretty",
@@ -147,9 +151,7 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         ("default", [name]) => {
             let mut workspace = load()?;
             let id = find(&workspace, name)?;
-            workspace
-                .set_default(&id, scope)
-                .map_err(|error| failed(error.to_string()))?;
+            workspace.set_default(&id, scope).map_err(core)?;
             let source = workspace.get(&id).expect("resolved");
             vec![row(&workspace, &id, source)]
         }
@@ -157,10 +159,9 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         ("test", [] | [_]) => return test(names.first(), fresh, &options).await,
         ("test", _) => return Err(usage("source test takes at most one name")),
         ("clear-cache", []) => {
-            Resolver::from_env()
-                .cache()
-                .clear()
-                .map_err(|error| failed(format!("clearing the secret cache: {error}")))?;
+            Resolver::from_env().cache().clear().map_err(|error| {
+                failed(format!("clearing the secret cache: {error}")).category(Category::Io)
+            })?;
             return Ok(());
         }
         ("clear-cache", _) => return Err(usage("source clear-cache takes no name")),
@@ -212,7 +213,7 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         note(&options, &message);
     }
     match leftover {
-        Some(message) => Err(failed(message)),
+        Some(message) => Err(failed(message).category(Category::Secret)),
         None => Ok(()),
     }
 }
@@ -253,11 +254,17 @@ async fn test(name: Option<&String>, fresh: bool, options: &Options) -> Result<(
     print(&render::rows(&test_table(vec![row]), options))?;
 
     outcome.map_err(|failure| {
+        let category = match failure.stage {
+            Stage::Secret => Category::Secret,
+            Stage::Token | Stage::Connect => Category::Connect,
+        };
         failed(format!(
             "{id} failed at the {} stage: {}",
             failure.stage.as_str(),
             failure.message
         ))
+        .category(category)
+        .phase(Phase::Connect)
     })
 }
 
@@ -483,7 +490,7 @@ fn commit(
         .map_err(|error| usage(error.to_string()))?;
     workspace
         .save(saved, store)
-        .map_err(|error| failed(format!("saving {id}: {error}")))?;
+        .map_err(|error| failed(format!("saving {id}: {error}")).category(Category::Config))?;
     Ok(id)
 }
 
@@ -508,7 +515,7 @@ fn remove(
     let row = row(workspace, &id, workspace.get(&id).expect("resolved"));
     let removed = workspace
         .delete(&id, store)
-        .map_err(|error| failed(format!("removing {id}: {error}")))?
+        .map_err(|error| failed(format!("removing {id}: {error}")).category(Category::Config))?
         .expect("resolved");
     let leftover = removed
         .secret_error
@@ -517,14 +524,14 @@ fn remove(
 }
 
 fn load() -> Result<Workspace> {
-    Workspace::load().map_err(|error| failed(format!("loading connections: {error}")))
+    Workspace::load().map_err(|error| config_failure(format!("loading connections: {error}")))
 }
 
 /// The qualified name `name` means, found the way `--conn` finds it.
 fn find(workspace: &Workspace, name: &str) -> Result<String> {
     workspace
         .resolve(name)
-        .ok_or_else(|| usage(format!("no saved data source named {name}")))
+        .ok_or_else(|| no_source(usage(format!("no saved data source named {name}"))))
 }
 
 /// One data source as a row, and the note that goes with it when a command

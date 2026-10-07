@@ -67,7 +67,7 @@ variable `status`.
 
 ## Tasks
 
-- [ ] **1. Failure carries a category, a phase and context.**
+- [x] **1. Failure carries a category, a phase and context.**
   In `cli/mod.rs`: `Category` (`usage source config secret connect refused
   database cancelled io other`) and `Phase` (`args input config connect prepare
   execute output`), each with `as_str`; `Failure` gains the fields above and
@@ -80,7 +80,7 @@ variable `status`.
   `statement` and `completed`).
   Verify: `cargo test -p binsql` — every existing test passes unchanged.
 
-- [ ] **2. The format, the record and the redaction.**
+- [x] **2. The format, the record and the redaction.**
   `cli::main` pre-scans for `--error-format`, falls back to
   `BINSQL_ERROR_FORMAT`, keeps the choice in a `OnceLock` for `note()`, and
   writes the record. `error-format` joins `SHARED_VALUES` and `source`'s
@@ -89,7 +89,7 @@ variable `status`.
   pattern, the notice record.
   Verify: `cargo test -p binsql`.
 
-- [ ] **3. Integration tests** in `tests/command_mode.rs`, per the ticket;
+- [x] **3. Integration tests** in `tests/command_mode.rs`, per the ticket;
   `BINSQL_ERROR_FORMAT` is removed from the test environment.
   Verify: `cargo test -p binsql --test command_mode`.
 

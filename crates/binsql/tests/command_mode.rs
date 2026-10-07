@@ -70,7 +70,6 @@ impl Fixture {
     fn binsql_with_env(&self, args: &[&str], project: &str, variables: &[(&str, &str)]) -> Run {
         let output = Command::new(env!("CARGO_BIN_EXE_binsql"))
             .args(args)
-            .envs(variables.iter().copied())
             .env("BINSQL_CONFIG", self.config())
             .env("BINSQL_PROJECT", project)
             // The tests must not read whatever the developer running them has
@@ -78,6 +77,8 @@ impl Fixture {
             .env_remove("BINSQL_CONN")
             .env_remove("BINSQL_DSN")
             .env_remove("BINSQL_DRIVER")
+            .env_remove("BINSQL_ERROR_FORMAT")
+            .envs(variables.iter().copied())
             .output()
             .expect("run binsql");
         Run::new(output)
@@ -1569,4 +1570,150 @@ fn source_remove_takes_it_out_of_whichever_file_held_it() {
     let (config, _) = files(&fixture, &project);
     assert!(!config.contains("ann:hunter2"), "{config}");
     assert!(config.contains("/tmp/q.db"), "{config}");
+}
+
+/// The one error record a JSON failure is, checked to be the whole of stderr
+/// and to leave stdout empty.
+fn error_record(run: &Run) -> serde_json::Value {
+    assert!(run.stdout.is_empty(), "stdout: {}", run.stdout);
+    let lines: Vec<&str> = run.stderr.lines().collect();
+    assert_eq!(lines.len(), 1, "one line on stderr:\n{}", run.stderr);
+    let record: serde_json::Value = serde_json::from_str(lines[0]).expect("valid json");
+    assert_eq!(record["type"], "error");
+    assert_eq!(record["schema"], 1);
+    assert_eq!(record["exit"], run.code);
+    record
+}
+
+#[test]
+fn error_format_json_makes_a_usage_error_one_record() {
+    let fixture = Fixture::new("error-json-usage");
+    let run = fixture
+        .binsql(&["query", "SELECT 1", "--bogus", "--error-format", "json"])
+        .refused();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "usage");
+    assert_eq!(record["phase"], "args");
+    assert_eq!(record["message"], "unknown option --bogus");
+}
+
+#[test]
+fn error_format_json_says_the_database_refused() {
+    let fixture = Fixture::new("error-json-database");
+    fixture.seed();
+    let run = fixture
+        .direct(&["query", "SELECT * FROM nowhere", "--error-format=json"])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "database");
+    assert_eq!(record["phase"], "execute");
+    assert!(record["message"].as_str().unwrap().contains("nowhere"));
+}
+
+#[test]
+fn error_format_json_keeps_the_sql_out_of_a_refusal() {
+    let fixture = Fixture::new("error-json-refused");
+    fixture.seed();
+    let run = fixture
+        .direct(&["query", "delete from artist", "--error-format", "json"])
+        .refused();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "refused");
+    assert_eq!(record["phase"], "prepare");
+    assert_eq!(record["statement"], 1);
+    assert!(!run.stderr.contains("delete from artist"), "{}", run.stderr);
+}
+
+#[test]
+fn error_format_json_counts_what_ran_before_a_failure_with_no_transaction() {
+    let fixture = Fixture::new("error-json-no-tx");
+    fixture.seed();
+    let run = fixture
+        .direct(&[
+            "exec",
+            "UPDATE artist SET founded = 1 WHERE id = 1; SELECT * FROM nowhere",
+            "--no-tx",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "database");
+    assert_eq!(record["statement"], 2);
+    assert_eq!(record["completed"], 1);
+}
+
+#[test]
+fn error_format_json_masks_the_password_in_a_connect_failure() {
+    let fixture = Fixture::new("error-json-connect");
+    let run = fixture
+        .binsql(&[
+            "query",
+            "SELECT 1",
+            "--dsn",
+            "postgres://u:hunter2@127.0.0.1:1/x?sslmode=bogus",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "connect");
+    assert_eq!(record["phase"], "connect");
+    assert!(!run.stderr.contains("hunter2"), "{}", run.stderr);
+}
+
+#[test]
+fn error_format_json_can_come_from_the_environment() {
+    let fixture = Fixture::new("error-json-env");
+    fixture.write_config();
+    let run = fixture
+        .binsql_with_env(
+            &["query", "SELECT 1", "--conn", "nothing"],
+            "",
+            &[("BINSQL_ERROR_FORMAT", "json")],
+        )
+        .refused();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "source");
+    assert_eq!(record["phase"], "config");
+
+    // The flag wins over the variable, and an empty variable is unset.
+    for (flag, value) in [(&["--error-format", "text"][..], "json"), (&[][..], "")] {
+        let mut args = vec!["query", "SELECT 1", "--conn", "nothing"];
+        args.extend_from_slice(flag);
+        let run = fixture
+            .binsql_with_env(&args, "", &[("BINSQL_ERROR_FORMAT", value)])
+            .refused();
+        assert!(
+            run.stderr
+                .starts_with("error: no saved data source named nothing")
+        );
+    }
+}
+
+#[test]
+fn a_bad_error_format_is_a_text_usage_error() {
+    let fixture = Fixture::new("error-json-bad");
+    let run = fixture
+        .binsql(&["query", "SELECT 1", "--error-format", "yaml"])
+        .refused();
+    assert!(run.stdout.is_empty());
+    assert!(
+        run.stderr
+            .starts_with("error: unknown error format yaml — one of: text, json\n"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn text_errors_are_unchanged() {
+    let fixture = Fixture::new("error-text");
+    fixture.seed();
+    let run = fixture.direct(&["query", "delete from artist"]).refused();
+    assert_eq!(
+        run.stderr,
+        "error: refusing to run a write statement with `query`: use `binsql exec`, or --allow-write\n  \
+         statement: delete from artist\n\nrun `binsql --help` for usage\n"
+    );
 }

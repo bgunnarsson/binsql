@@ -8,8 +8,8 @@ use binsql_core::sql;
 
 use super::render;
 use super::{
-    Result, bind_values, cancel_on_interrupt, connect, failed, output, parse, print, read_sql,
-    usage,
+    Category, Phase, Result, bind_values, cancel_on_interrupt, connect, core, output, parse, print,
+    read_sql, usage,
 };
 
 const VALUES: &[&str] = &["file", "f", "limit", "arg"];
@@ -42,7 +42,8 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             count => usage(format!(
                 "query runs one statement; this is {count} — use `binsql exec` for a script"
             )),
-        });
+        }
+        .phase(Phase::Prepare));
     };
 
     let cancel = cancel_on_interrupt();
@@ -56,37 +57,43 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             let summary = sql::summarize(&statement.sql, backend, 80);
             return Err(usage(if statement.kind.mutates() {
                 format!(
-                    "--plan plans reads only; drop --plan to run a {} statement\n  statement: {summary}",
+                    "--plan plans reads only; drop --plan to run a {} statement",
                     statement.kind.label()
                 )
             } else {
-                format!(
-                    "--plan plans one SELECT, WITH, VALUES or TABLE statement\n  statement: {summary}"
-                )
-            }));
+                "--plan plans one SELECT, WITH, VALUES or TABLE statement".to_string()
+            })
+            .phase(Phase::Prepare)
+            .context(format!("statement: {summary}")));
         }
         let result = session
             .plan(None, &statement.sql, limit, &cancel)
             .await
-            .map_err(|error| failed(error.to_string()))?;
+            .map_err(core)?;
         return print(&render::rows(&result, &options));
     }
 
     if statement.kind.mutates() && !args.is_set(&["allow-write"]) {
         return Err(usage(format!(
-            "refusing to run a {} statement with `query`: use `binsql exec`, or --allow-write\n  statement: {}",
+            "refusing to run a {} statement with `query`: use `binsql exec`, or --allow-write",
             statement.kind.label(),
+        ))
+        .category(Category::Refused)
+        .phase(Phase::Prepare)
+        .statement(1)
+        .context(format!(
+            "statement: {}",
             sql::summarize(&statement.sql, backend, 80)
         )));
     }
 
     let bound = sql::bind(std::slice::from_ref(statement), &params, backend)
-        .map_err(|error| usage(format!("{error} — one --arg per ?")))?;
+        .map_err(|error| usage(format!("{error} — one --arg per ?")).phase(Phase::Prepare))?;
 
     let result = session
         .run_bound(None, &bound[0], limit, &cancel)
         .await
-        .map_err(|error| failed(error.to_string()))?;
+        .map_err(core)?;
 
     print(&render::rows(&result, &options))
 }

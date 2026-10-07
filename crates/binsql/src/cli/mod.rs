@@ -13,6 +13,7 @@ mod render;
 mod source;
 
 use std::io::{IsTerminal, Read, Write};
+use std::sync::OnceLock;
 
 use binsql_core::{Backend, DataSource, Session, Value, Workspace};
 use tokio_util::sync::CancellationToken;
@@ -22,23 +23,155 @@ use render::{Format, Options};
 
 /// Everything that can go wrong, split by whose fault it is: a usage mistake
 /// exits 2 and points at the help, anything else exits 1.
+///
+/// The category and phase are set where the failure is raised, for
+/// `--error-format json`; they never change the exit code.
 #[derive(Debug)]
 pub struct Failure {
     pub message: String,
     pub usage: bool,
+    pub category: Category,
+    pub phase: Phase,
+    /// The 1-based position of the statement that failed.
+    pub statement: Option<usize>,
+    /// How many statements had already run, with no transaction to undo them.
+    pub completed: Option<usize>,
+    /// Lines text mode prints indented under the message. JSON leaves them
+    /// out: they quote the SQL, which `statement` stands in for.
+    pub context: Vec<String>,
+    /// The connection string as given, masked wherever the message quotes it.
+    dsn: Option<(Backend, String)>,
 }
 
 pub fn usage(message: impl Into<String>) -> Failure {
-    Failure {
-        message: message.into(),
-        usage: true,
-    }
+    Failure::new(message.into(), true, Category::Usage, Phase::Args)
 }
 
 pub fn failed(message: impl Into<String>) -> Failure {
-    Failure {
-        message: message.into(),
-        usage: false,
+    Failure::new(message.into(), false, Category::Other, Phase::Execute)
+}
+
+/// A core error as a failure, with `message` in place of its own text.
+pub fn caused(message: impl Into<String>, error: &binsql_core::Error) -> Failure {
+    use binsql_core::Error;
+    let (category, phase) = match error {
+        Error::UnknownBackend(_) | Error::Placeholders { .. } => (Category::Usage, Phase::Prepare),
+        Error::Connect { .. } => (Category::Connect, Phase::Connect),
+        Error::Query(_) => (Category::Database, Phase::Execute),
+        Error::ReadOnly { .. } | Error::NotPlannable { .. } => (Category::Refused, Phase::Prepare),
+        Error::Cancelled => (Category::Cancelled, Phase::Execute),
+        Error::Config(_) => (Category::Config, Phase::Execute),
+        Error::Io(_) => (Category::Io, Phase::Execute),
+    };
+    failed(message).category(category).phase(phase)
+}
+
+/// A core error as a failure, in its own words.
+pub fn core(error: binsql_core::Error) -> Failure {
+    caused(error.to_string(), &error)
+}
+
+impl Failure {
+    fn new(message: String, usage: bool, category: Category, phase: Phase) -> Failure {
+        Failure {
+            message,
+            usage,
+            category,
+            phase,
+            statement: None,
+            completed: None,
+            context: Vec::new(),
+            dsn: None,
+        }
+    }
+
+    pub fn category(mut self, category: Category) -> Failure {
+        self.category = category;
+        self
+    }
+
+    pub fn phase(mut self, phase: Phase) -> Failure {
+        self.phase = phase;
+        self
+    }
+
+    pub fn statement(mut self, position: usize) -> Failure {
+        self.statement = Some(position);
+        self
+    }
+
+    pub fn completed(mut self, count: usize) -> Failure {
+        self.completed = Some(count);
+        self
+    }
+
+    pub fn context(mut self, line: impl Into<String>) -> Failure {
+        self.context.push(line.into());
+        self
+    }
+
+    fn dsn(mut self, backend: Backend, dsn: String) -> Failure {
+        self.dsn = Some((backend, dsn));
+        self
+    }
+}
+
+/// What kind of thing went wrong. Version 1 of the error record; a consumer
+/// treats a value it does not know as `other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    Usage,
+    Source,
+    Config,
+    Secret,
+    Connect,
+    Refused,
+    Database,
+    Cancelled,
+    Io,
+    Other,
+}
+
+impl Category {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Category::Usage => "usage",
+            Category::Source => "source",
+            Category::Config => "config",
+            Category::Secret => "secret",
+            Category::Connect => "connect",
+            Category::Refused => "refused",
+            Category::Database => "database",
+            Category::Cancelled => "cancelled",
+            Category::Io => "io",
+            Category::Other => "other",
+        }
+    }
+}
+
+/// How far the command got: up to `prepare` nothing has reached the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    Args,
+    Input,
+    Config,
+    Connect,
+    Prepare,
+    Execute,
+    Output,
+}
+
+impl Phase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Args => "args",
+            Phase::Input => "input",
+            Phase::Config => "config",
+            Phase::Connect => "connect",
+            Phase::Prepare => "prepare",
+            Phase::Execute => "execute",
+            Phase::Output => "output",
+        }
     }
 }
 
@@ -58,10 +191,21 @@ pub fn is_command(args: &[String]) -> bool {
     }
 }
 
+/// Whether failures and notes print as JSON records, settled once per run.
+static JSON_ERRORS: OnceLock<bool> = OnceLock::new();
+
 /// Runs a command and returns the process exit code.
 pub async fn main(args: Vec<String>) -> i32 {
     let verb = args.first().cloned().unwrap_or_default();
-    let rest = args.into_iter().skip(1).collect();
+    let rest: Vec<String> = args.into_iter().skip(1).collect();
+
+    // Read before the verb parses its flags, so that a mistake in them comes
+    // out in the format asked for too.
+    let json = match error_format(&rest) {
+        Ok(json) => json,
+        Err(failure) => return report(&failure, false),
+    };
+    JSON_ERRORS.get_or_init(|| json);
 
     let outcome = match verb.as_str() {
         "query" => query::run(rest).await,
@@ -76,17 +220,175 @@ pub async fn main(args: Vec<String>) -> i32 {
 
     match outcome {
         Ok(()) => 0,
-        Err(failure) => {
-            eprintln!("error: {}", failure.message);
-            if failure.usage {
-                // A pointer, not the whole help: the message above already says
-                // what was wrong, and forty lines under it hide it.
-                eprintln!("\nrun `binsql --help` for usage");
-                return 2;
-            }
-            1
+        Err(failure) => report(&failure, json),
+    }
+}
+
+/// Whether `--error-format` (the last one before `--`), or else
+/// `BINSQL_ERROR_FORMAT`, asks for JSON.
+fn error_format(args: &[String]) -> Result<bool> {
+    let mut chosen = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
+        if arg == "--error-format" {
+            let value = args
+                .next()
+                .ok_or_else(|| usage("--error-format needs a value"))?;
+            chosen = Some(value.clone());
+        } else if let Some(value) = arg.strip_prefix("--error-format=") {
+            chosen = Some(value.to_string());
         }
     }
+    let chosen = chosen.or_else(|| {
+        std::env::var("BINSQL_ERROR_FORMAT")
+            .ok()
+            .filter(|value| !value.is_empty())
+    });
+    match chosen.as_deref() {
+        None | Some("text") => Ok(false),
+        Some("json") => Ok(true),
+        Some(other) => Err(usage(format!(
+            "unknown error format {other} — one of: text, json"
+        ))),
+    }
+}
+
+/// Prints the failure and returns the exit code it means.
+fn report(failure: &Failure, json: bool) -> i32 {
+    let exit = if failure.usage { 2 } else { 1 };
+    if json {
+        eprintln!("{}", error_record(failure, exit));
+        return exit;
+    }
+
+    let mut message = failure.message.clone();
+    for line in &failure.context {
+        message.push_str("\n  ");
+        message.push_str(line);
+    }
+    eprintln!("error: {message}");
+    if failure.usage {
+        // A pointer, not the whole help: the message above already says
+        // what was wrong, and forty lines under it hide it.
+        eprintln!("\nrun `binsql --help` for usage");
+    }
+    exit
+}
+
+/// The version of the error and notice records. Adding a field or a value
+/// keeps it; renaming, removing or changing the meaning of one raises it.
+const ERROR_SCHEMA: u64 = 1;
+
+fn error_record(failure: &Failure, exit: i32) -> String {
+    let mut message = redact(&failure.message);
+    if let Some((backend, dsn)) = &failure.dsn {
+        message = binsql_core::session::masked(message, *backend, dsn);
+    }
+    let mut fields: Vec<(&str, serde_json::Value)> = vec![
+        ("type", "error".into()),
+        ("schema", ERROR_SCHEMA.into()),
+        ("exit", exit.into()),
+        ("category", failure.category.as_str().into()),
+        ("phase", failure.phase.as_str().into()),
+        ("message", message.into()),
+    ];
+    if let Some(position) = failure.statement {
+        fields.push(("statement", position.into()));
+    }
+    if let Some(count) = failure.completed {
+        fields.push(("completed", count.into()));
+    }
+    record(&fields)
+}
+
+fn notice_record(message: &str) -> String {
+    record(&[
+        ("type", "notice".into()),
+        ("schema", ERROR_SCHEMA.into()),
+        ("message", redact(message).into()),
+    ])
+}
+
+/// One compact JSON object, its fields in the order given.
+fn record(fields: &[(&str, serde_json::Value)]) -> String {
+    let fields: Vec<String> = fields
+        .iter()
+        .map(|(name, value)| format!("{}:{value}", serde_json::Value::from(*name)))
+        .collect();
+    format!("{{{}}}", fields.join(","))
+}
+
+const MASK: &str = "****";
+
+/// `message` with the secrets a connection string or a token can leak masked:
+/// the password in a URL's `user:pass@`, the value of `password=`, `pwd=` and
+/// `accesstoken=`, and JWT-shaped tokens. What a server says about the data is
+/// left as it is.
+fn redact(message: &str) -> String {
+    let mut message = message.to_string();
+
+    // `scheme://user:pass@host`: the password runs from the first `:` after
+    // the scheme to the last `@` before the path.
+    let mut from = 0;
+    while let Some(found) = message[from..].find("://") {
+        let start = from + found + 3;
+        let end = message[start..]
+            .find(|c: char| c == '/' || c.is_whitespace() || c == '"' || c == '\'')
+            .map_or(message.len(), |end| start + end);
+        let authority = &message[start..end];
+        if let Some(at) = authority.rfind('@')
+            && let Some(colon) = authority[..at].find(':')
+        {
+            message.replace_range(start + colon + 1..start + at, MASK);
+        }
+        from = start;
+    }
+
+    for key in ["password=", "pwd=", "accesstoken="] {
+        let mut from = 0;
+        while let Some(found) = message[from..].to_ascii_lowercase().find(key) {
+            let mut start = from + found + key.len();
+            // A quoted value runs to its closing quote, spaces and all.
+            let quote = message[start..]
+                .chars()
+                .next()
+                .filter(|c| matches!(c, '\'' | '"'));
+            if quote.is_some() {
+                start += 1;
+            }
+            let end = message[start..]
+                .find(|c: char| match quote {
+                    Some(quote) => c == quote,
+                    None => matches!(c, ';' | '&' | '"' | '\'') || c.is_whitespace(),
+                })
+                .map_or(message.len(), |end| start + end);
+            if end > start {
+                message.replace_range(start..end, MASK);
+                from = start + MASK.len();
+            } else {
+                from = start;
+            }
+        }
+    }
+
+    let mut from = 0;
+    while let Some(found) = message[from..].find("eyJ") {
+        let start = from + found;
+        let end = message[start..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+            .map_or(message.len(), |end| start + end);
+        if message[start..end].matches('.').count() >= 2 {
+            message.replace_range(start..end, MASK);
+            from = start + MASK.len();
+        } else {
+            from = end;
+        }
+    }
+
+    message
 }
 
 pub const HELP: &str = "\
@@ -204,7 +506,17 @@ EXAMPLES
 /// The flags every command shares. Kept in one list so `--conn` means the same
 /// thing everywhere and a new verb cannot quietly spell it differently.
 const SHARED_VALUES: &[&str] = &[
-    "conn", "c", "dsn", "D", "driver", "d", "format", "o", "catalog", "schema",
+    "conn",
+    "c",
+    "dsn",
+    "D",
+    "driver",
+    "d",
+    "format",
+    "o",
+    "catalog",
+    "schema",
+    "error-format",
 ];
 const SHARED_SWITCHES: &[&str] = &["pretty", "no-header", "no-footer"];
 
@@ -235,8 +547,8 @@ pub fn output(args: &Args) -> Result<Options> {
 pub async fn connect(args: &Args) -> Result<Session> {
     // A Workspace, so command mode sees the same project `.binsql.json` the
     // TUI does when it is run from inside a repository.
-    let config =
-        Workspace::load().map_err(|error| failed(format!("loading connections: {error}")))?;
+    let config = Workspace::load()
+        .map_err(|error| config_failure(format!("loading connections: {error}")))?;
 
     let named = args
         .value(&["conn", "c"])
@@ -259,11 +571,11 @@ pub async fn connect(args: &Args) -> Result<Session> {
         (Some(named), _) => {
             let id = config
                 .resolve(&named)
-                .ok_or_else(|| usage(format!("no saved data source named {named}")))?;
+                .ok_or_else(|| no_source(usage(format!("no saved data source named {named}"))))?;
             let source = config
                 .get(&id)
                 .cloned()
-                .ok_or_else(|| usage(format!("no saved data source named {named}")))?;
+                .ok_or_else(|| no_source(usage(format!("no saved data source named {named}"))))?;
             (id, source)
         }
         (None, Some(dsn)) => {
@@ -284,31 +596,53 @@ pub async fn connect(args: &Args) -> Result<Session> {
         (None, None) => default_source(&config)?,
     };
 
-    Session::open(name.clone(), source)
-        .await
-        .map_err(|error| failed(format!("connecting to {name}: {error}")))
+    let (backend, dsn) = (source.backend, source.dsn.clone());
+    Session::open(name.clone(), source).await.map_err(|error| {
+        // A config error out of opening is a secret that would not resolve.
+        let category = match error {
+            binsql_core::Error::Config(_) => Category::Secret,
+            _ => Category::Connect,
+        };
+        caused(format!("connecting to {name}: {error}"), &error)
+            .category(category)
+            .phase(Phase::Connect)
+            .dsn(backend, dsn)
+    })
 }
 
 /// The data source the config names as its default, and its qualified name.
 pub fn default_source(config: &Workspace) -> Result<(String, DataSource)> {
     let named = config.default.clone().ok_or_else(|| {
-        usage("no data source given, and none is the default — pass --conn or --dsn")
+        no_source(usage(
+            "no data source given, and none is the default — pass --conn or --dsn",
+        ))
     })?;
     // Through `resolve`, so a `default` of `prod` finds `eimskip/prod`
     // exactly as `--conn prod` does — and says which two it found when
     // that name has stopped meaning one thing.
     let id = config.resolve(&named).ok_or_else(|| {
-        failed(
-            config
-                .unresolved_default()
-                .unwrap_or_else(|| format!("the default data source {named} is not in the config")),
-        )
+        no_source(failed(config.unresolved_default().unwrap_or_else(|| {
+            format!("the default data source {named} is not in the config")
+        })))
     })?;
-    let source = config
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| failed(format!("the default data source {id} is not in the config")))?;
+    let source = config.get(&id).cloned().ok_or_else(|| {
+        no_source(failed(format!(
+            "the default data source {id} is not in the config"
+        )))
+    })?;
     Ok((id, source))
+}
+
+/// The config could not be read or written.
+pub fn config_failure(message: impl Into<String>) -> Failure {
+    failed(message)
+        .category(Category::Config)
+        .phase(Phase::Config)
+}
+
+/// No saved data source answers to the name given.
+pub fn no_source(failure: Failure) -> Failure {
+    failure.category(Category::Source).phase(Phase::Config)
 }
 
 /// A token that a ⌃C from the terminal cancels, so a long query stops the way
@@ -335,14 +669,15 @@ pub fn read_sql(args: &Args) -> Result<String> {
             return read_stdin();
         }
         return std::fs::read_to_string(path)
-            .map_err(|error| failed(format!("reading {path}: {error}")));
+            .map_err(|error| input_failure(format!("reading {path}: {error}")));
     }
 
     let positional = args.positional();
     if positional.len() > 1 {
         return Err(usage(
             "more than one statement was given as an argument — quote the whole script as one",
-        ));
+        )
+        .phase(Phase::Input));
     }
     if let Some(sql) = positional.first() {
         if sql == "-" {
@@ -352,9 +687,10 @@ pub fn read_sql(args: &Args) -> Result<String> {
     }
 
     if std::io::stdin().is_terminal() {
-        return Err(usage(
-            "no SQL given — pass it as an argument, with --file, or on stdin",
-        ));
+        return Err(
+            usage("no SQL given — pass it as an argument, with --file, or on stdin")
+                .phase(Phase::Input),
+        );
     }
     read_stdin()
 }
@@ -403,8 +739,12 @@ fn read_stdin() -> Result<String> {
     let mut buffer = String::new();
     std::io::stdin()
         .read_to_string(&mut buffer)
-        .map_err(|error| failed(format!("reading stdin: {error}")))?;
+        .map_err(|error| input_failure(format!("reading stdin: {error}")))?;
     Ok(buffer)
+}
+
+fn input_failure(message: String) -> Failure {
+    failed(message).category(Category::Io).phase(Phase::Input)
 }
 
 /// Writes the output, treating a closed pipe as the end of the job rather than
@@ -417,7 +757,9 @@ pub fn print(text: &str) -> Result<()> {
     match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
-        Err(error) => Err(failed(format!("writing output: {error}"))),
+        Err(error) => Err(failed(format!("writing output: {error}"))
+            .category(Category::Io)
+            .phase(Phase::Output)),
     }
 }
 
@@ -425,6 +767,10 @@ pub fn print(text: &str) -> Result<()> {
 /// it. Structured output goes to stdout alone.
 pub fn note(options: &Options, message: &str) {
     if options.format == Format::None {
+        return;
+    }
+    if JSON_ERRORS.get() == Some(&true) {
+        eprintln!("{}", notice_record(message));
         return;
     }
     eprintln!("{message}");
@@ -452,5 +798,90 @@ mod tests {
         ] {
             assert!(!is_command(&args(list)), "{list:?}");
         }
+    }
+
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_last_error_format_before_the_separator_counts() {
+        let json = |list: &[&str]| error_format(&strings(list)).ok();
+        assert_eq!(json(&["x", "--error-format", "json"]), Some(true));
+        assert_eq!(json(&["--error-format=json", "x"]), Some(true));
+        assert_eq!(
+            json(&["--error-format=json", "--error-format", "text"]),
+            Some(false)
+        );
+        assert_eq!(
+            json(&["--error-format", "text", "--", "--error-format=json"]),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn a_bad_error_format_is_a_usage_error() {
+        let failure = error_format(&strings(&["--error-format", "yaml"])).unwrap_err();
+        assert!(failure.usage);
+        assert_eq!(
+            failure.message,
+            "unknown error format yaml — one of: text, json"
+        );
+        let failure = error_format(&strings(&["--error-format"])).unwrap_err();
+        assert_eq!(failure.message, "--error-format needs a value");
+    }
+
+    #[test]
+    fn redaction_masks_each_kind_of_secret() {
+        assert_eq!(
+            redact("connecting to postgres://u:hunter2@db:5432/x failed"),
+            "connecting to postgres://u:****@db:5432/x failed"
+        );
+        assert_eq!(
+            redact("Server=db;User Id=u;Password=hunter2;Pwd=x y"),
+            "Server=db;User Id=u;Password=****;Pwd=**** y"
+        );
+        assert_eq!(
+            redact("host=db password='s3 cret' x"),
+            "host=db password='****' x"
+        );
+        assert_eq!(redact("AccessToken=abc&x=1"), "AccessToken=****&x=1");
+        assert_eq!(
+            redact("bearer eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl rejected"),
+            "bearer **** rejected"
+        );
+        assert_eq!(
+            redact("eyJust words. not a token"),
+            "eyJust words. not a token"
+        );
+        assert_eq!(
+            redact("relation \"artist\" does not exist"),
+            "relation \"artist\" does not exist"
+        );
+    }
+
+    #[test]
+    fn a_record_keeps_its_field_order_and_leaves_the_context_out() {
+        let failure = failed("boom")
+            .category(Category::Database)
+            .statement(2)
+            .completed(1)
+            .context("statement: delete from t");
+        assert_eq!(
+            error_record(&failure, 1),
+            r#"{"type":"error","schema":1,"exit":1,"category":"database","phase":"execute","message":"boom","statement":2,"completed":1}"#
+        );
+        assert_eq!(
+            notice_record("note: x=\"1\""),
+            r#"{"type":"notice","schema":1,"message":"note: x=\"1\""}"#
+        );
+    }
+
+    #[test]
+    fn a_record_masks_the_stored_connection_string() {
+        let dsn = "Server=db;Password=hunter2".to_string();
+        let failure =
+            failed(format!("connecting to x: login failed for {dsn}")).dsn(Backend::MsSql, dsn);
+        assert!(!error_record(&failure, 1).contains("hunter2"));
     }
 }
