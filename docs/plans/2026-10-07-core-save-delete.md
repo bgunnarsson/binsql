@@ -97,7 +97,7 @@ None found.
 
 ## Tasks
 
-- [ ] **Validation in core.** Add `crates/binsql-core/src/source.rs` with
+- [x] **Validation in core.** Add `crates/binsql-core/src/source.rs` with
   `Saved` (moved from `overlay.rs:270`, docs kept) and `Draft<'a>` (borrowed
   `&str` fields for folder, name, dsn; `backend: Option<Backend>`,
   `keychain`, `read_only`, `open_on_start: bool`; `previous: Option<String>`;

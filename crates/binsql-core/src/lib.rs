@@ -14,6 +14,7 @@ pub mod schema;
 pub mod schema_cache;
 pub mod secrets;
 pub mod session;
+pub mod source;
 pub mod sql;
 pub mod value;
 pub mod workspace;
