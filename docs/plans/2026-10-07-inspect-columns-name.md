@@ -1,7 +1,7 @@
 ---
 title: inspect --columns NAME lists one object's columns, matched exactly
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
