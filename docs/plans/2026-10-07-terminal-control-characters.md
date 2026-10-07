@@ -1,7 +1,7 @@
 ---
 title: "Terminal formats escape control characters in database text"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context

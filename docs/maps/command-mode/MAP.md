@@ -96,6 +96,7 @@ changes to `query`, `exec` and `inspect`.
 - [81](81-postgresql-views-return-their-query.md): PostgreSQL views and materialized views give `query` from `pg_get_viewdef(oid, true)`; tables stay `unsupported`.
 - [82](82-mysql-returns-show-create-text.md): MySQL tables and views give `create` from `SHOW CREATE TABLE` / `SHOW CREATE VIEW`.
 - [83](83-sql-server-views-return-their-module-text.md): SQL Server views give `create` from `sys.sql_modules`; tables stay `unsupported`.
+- [94](94-terminal-formats-escape-control-characters.md): `table`, `vertical`, `markdown`, `raw` and text stderr spell out control characters; the faithful formats keep them.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
