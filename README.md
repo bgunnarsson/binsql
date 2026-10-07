@@ -454,7 +454,7 @@ that text is:
 | `form` | `definition` |
 | --- | --- |
 | `create` | a complete `CREATE` statement |
-| `query` | a view's `SELECT` alone, with no `CREATE` around it |
+| `query` | a view's query alone, with no `CREATE` around it |
 | `unsupported` | null: binsql does not read definitions for this backend and kind |
 | `withheld` | null: the server has the object but gave no text |
 

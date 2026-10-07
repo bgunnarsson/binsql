@@ -51,24 +51,24 @@ async fn postgres_views_give_their_query_and_tables_none() {
     let session = open("BINSQL_TEST_POSTGRES", Backend::Postgres).await;
     run(
         &session,
-        "DROP MATERIALIZED VIEW IF EXISTS binsql_definition_m",
+        "DROP MATERIALIZED VIEW IF EXISTS public.binsql_definition_m",
     )
     .await;
-    run(&session, "DROP VIEW IF EXISTS binsql_definition_v").await;
-    run(&session, "DROP TABLE IF EXISTS binsql_definition").await;
+    run(&session, "DROP VIEW IF EXISTS public.binsql_definition_v").await;
+    run(&session, "DROP TABLE IF EXISTS public.binsql_definition").await;
     run(
         &session,
-        "CREATE TABLE binsql_definition (id int PRIMARY KEY)",
-    )
-    .await;
-    run(
-        &session,
-        "CREATE VIEW binsql_definition_v AS SELECT id FROM binsql_definition",
+        "CREATE TABLE public.binsql_definition (id int PRIMARY KEY)",
     )
     .await;
     run(
         &session,
-        "CREATE MATERIALIZED VIEW binsql_definition_m AS SELECT id FROM binsql_definition",
+        "CREATE VIEW public.binsql_definition_v AS SELECT id FROM public.binsql_definition",
+    )
+    .await;
+    run(
+        &session,
+        "CREATE MATERIALIZED VIEW public.binsql_definition_m AS SELECT id FROM public.binsql_definition",
     )
     .await;
 
@@ -95,7 +95,11 @@ async fn postgres_views_give_their_query_and_tables_none() {
     );
     assert!(session.definition(&missing).await.is_err());
 
-    run(&session, "DROP MATERIALIZED VIEW binsql_definition_m").await;
-    run(&session, "DROP VIEW binsql_definition_v").await;
-    run(&session, "DROP TABLE binsql_definition").await;
+    run(
+        &session,
+        "DROP MATERIALIZED VIEW public.binsql_definition_m",
+    )
+    .await;
+    run(&session, "DROP VIEW public.binsql_definition_v").await;
+    run(&session, "DROP TABLE public.binsql_definition").await;
 }
