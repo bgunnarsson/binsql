@@ -2,7 +2,7 @@
 title: Move data-source validation, save and delete from the app into the core
 kind: task
 mode: afk
-status: open
+status: resolved
 blocked_by: [18]
 claimed_by:
 ---
@@ -43,3 +43,7 @@ existing keychain tests do.
 - The default setter and the connection test wait on 08's command shape.
 
 ## Answer
+
+Built: binsql_core::source::Draft::build validates a data source with the form's rules and messages; Workspace::save and Workspace::delete run the save and delete sequences through a SecretStore trait (Keychain is the real one); the TUI calls them and keeps only its UI work.
+
+Plan docs/plans/2026-10-07-core-save-delete.md (done). Core tests use a recording SecretStore, so none touch the real credential store. Review: no findings introduced by the change. Pre-existing, unfixed: a rename moves the secret (keychain::rename deletes the old entry) before the config is written, so a failed config write leaves the config naming a secret that is gone; this ordering predates the change (7889786 App::save_data_source) and is for the user to decide. The TUI paths were not checked by hand.

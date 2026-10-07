@@ -59,6 +59,7 @@ changes to `query`, `exec` and `inspect`.
 - [16](16-ddl-output.md): Inspect gets one opt-in switch, `--definitions`, which returns each selected table's and view's own definition text as the server stores or prints it, for an agent to read, not to restore from. Where a backend has no native text for an object, binsql says so in the row and does not build a CREATE statement from the columns. No external dump tool is called.
 
 - [18](18-verb-reservation.md): Built: a new top-level data source named `query`, `exec` or `inspect` is refused by `Workspace::set` (and before any secret is filed in the TUI), and `binsql -- <name>` opens any saved name.
+- [20](20-core-save-delete.md): Built: binsql_core::source::Draft::build validates a data source with the form's rules and messages; Workspace::save and Workspace::delete run the save and delete sequences through a SecretStore trait (Keychain is the real one); the TUI calls them and keeps only its UI work.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
