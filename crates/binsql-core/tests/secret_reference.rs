@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use binsql_core::secrets::{Cache, DEFAULT_TTL, Reference, Resolver};
-use binsql_core::{Backend, DataSource, Session};
+use binsql_core::{Backend, DataSource, Session, Stage};
 
 fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("binsql-secret-{name}-{}", std::process::id()));
@@ -81,6 +81,43 @@ async fn a_zero_ttl_resolves_without_writing_to_disk() {
         "a zero TTL must keep secrets off the disk"
     );
     assert_eq!(resolver.cache().count(), 0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_probe_names_the_stage_that_stopped_it() {
+    let dir = scratch("probe");
+    let resolver = Resolver::new(Cache::new(&dir, DEFAULT_TTL), None);
+
+    let failure = Session::probe(&source("keyvault://kv-demo"), &resolver, false)
+        .await
+        .expect_err("a vault URL without a secret cannot resolve");
+    assert_eq!(failure.stage, Stage::Secret);
+
+    let missing = dir.join("no-such-dir").join("app.db");
+    let failure = Session::probe(&source(&missing.display().to_string()), &resolver, false)
+        .await
+        .expect_err("a database in a missing directory cannot open");
+    assert_eq!(failure.stage, Stage::Connect);
+
+    let database = dir.join("app.db");
+    std::fs::write(&database, b"").expect("create database");
+    Session::probe(&source(&database.display().to_string()), &resolver, false)
+        .await
+        .expect("a database that exists opens");
+
+    let postgres = DataSource {
+        backend: Backend::Postgres,
+        ..source("postgres://app:hunter2@127.0.0.1:1/app?sslmode=bogus")
+    };
+    // The driver refuses the string before dialling, quoting it whole; a
+    // refused port would instead be retried for thirty seconds.
+    let failure = Session::probe(&postgres, &resolver, false)
+        .await
+        .expect_err("an unknown sslmode is refused");
+    assert_eq!(failure.stage, Stage::Connect);
+    assert!(!failure.message.contains("hunter2"), "{}", failure.message);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

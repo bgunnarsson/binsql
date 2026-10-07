@@ -200,7 +200,7 @@ form returns before the TUI.
   files, `clear` removes both, and a second `clear` is `Ok`.
 
   Verify with `cargo test -p binsql-core secrets` and clippy.
-- [ ] **Probe.** Add `Stage`, `ProbeFailure` and `Session::probe` in
+- [x] **Probe.** Add `Stage`, `ProbeFailure` and `Session::probe` in
   `session.rs`, and the exports in `lib.rs`. Add tests in
   `crates/binsql-core/tests/secret_reference.rs`, reusing its `source()`
   helper (`:17-25`) and resolver setup. Only sqlite DataSources go through

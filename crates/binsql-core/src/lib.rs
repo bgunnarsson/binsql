@@ -26,7 +26,7 @@ pub use error::{Error, Result};
 pub use schema::{Catalog, ObjectKind, ObjectRef};
 pub use schema_cache::{Level, SchemaCache, SourceId};
 pub use secrets::{Reference, Resolver};
-pub use session::Session;
+pub use session::{ProbeFailure, Session, Stage};
 pub use sql::{Bound, Kind, Statement};
 pub use value::{Column, ResultSet, Value};
 pub use workspace::{RESERVED_NAMES, Removed, Scope, Workspace};

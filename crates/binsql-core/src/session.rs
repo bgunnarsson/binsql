@@ -6,12 +6,41 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adapter::{self, Adapter};
 use crate::backend::{Backend, Dialect};
-use crate::config::DataSource;
+use crate::config::{DataSource, mask_dsn};
 use crate::error::{Error, Result};
 use crate::schema::ObjectRef;
 use crate::secrets::Resolver;
 use crate::sql::{self, Bound};
 use crate::value::{Column, ResultSet};
+
+/// Where trying a data source stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// Reading the connection string out of the vault or credential store.
+    Secret,
+    /// Getting an Azure AD token for the server.
+    Token,
+    /// Reaching the server and logging in.
+    Connect,
+}
+
+impl Stage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stage::Secret => "secret",
+            Stage::Token => "token",
+            Stage::Connect => "connect",
+        }
+    }
+}
+
+/// Why trying a data source failed, with the connection string masked out of
+/// the message.
+#[derive(Debug)]
+pub struct ProbeFailure {
+    pub stage: Stage,
+    pub message: String,
+}
 
 /// One open data source.
 ///
@@ -49,6 +78,43 @@ impl Session {
             primary,
             per_catalog: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Resolves the source's connection string and connects, then lets the
+    /// connection go, saying which stage stopped it when one did. `fresh`
+    /// skips the cached secret.
+    pub async fn probe(
+        source: &DataSource,
+        resolver: &Resolver,
+        fresh: bool,
+    ) -> std::result::Result<(), ProbeFailure> {
+        let resolved = if fresh {
+            resolver.resolve_fresh(&source.dsn).await
+        } else {
+            resolver.resolve(&source.dsn).await
+        };
+        let dsn = resolved.map_err(|err| ProbeFailure {
+            stage: Stage::Secret,
+            message: err.to_string(),
+        })?;
+        match adapter::connect(source.backend, &dsn).await {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                let stage = match &err {
+                    Error::Connect { name, .. } if name == "azure ad" => Stage::Token,
+                    _ => Stage::Connect,
+                };
+                // A driver may quote the connection string back, password and
+                // all, so it is swapped for its masked form.
+                let mut message = err.to_string();
+                for raw in [dsn.as_str(), dsn.trim()] {
+                    if !raw.is_empty() {
+                        message = message.replace(raw, &mask_dsn(source.backend, &dsn));
+                    }
+                }
+                Err(ProbeFailure { stage, message })
+            }
+        }
     }
 
     pub fn backend(&self) -> Backend {
