@@ -477,8 +477,8 @@ kept as it was written — after an `ALTER TABLE … RENAME` it may read as SQLi
 rewrote it, with SQLite's own spelling of the opening `CREATE TABLE`.
 PostgreSQL keeps no `CREATE` text for a table, so its tables stay
 `unsupported`; a view's `query` is the server rebuilding the view from its
-parsed form (`pg_get_viewdef`), so names come out qualified and spacing and
-comments are the server's, not as typed.
+parsed form (`pg_get_viewdef`), so its layout is the server's and comments
+written in the view are gone.
 
 Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".
