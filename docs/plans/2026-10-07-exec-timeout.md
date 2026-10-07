@@ -60,6 +60,6 @@ the README.
   `Stop`, the timeout messages.
   Verify: `cargo test --workspace` — the integration tests above.
 
-- [ ] **2. HELP and the README.** The flag under EXEC and in the README, with
+- [x] **2. HELP and the README.** The flag under EXEC and in the README, with
   what each kind of batch says when it runs out.
   Verify: `cargo test -p binsql`.

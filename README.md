@@ -329,6 +329,7 @@ binsql query --plan "SELECT * FROM orders WHERE customer_id = 31" -o raw | jq .
 | `--dry-run` | run the batch in a transaction and roll it back — it really executes, and nothing is kept |
 | `--tx` / `--no-tx` | force one transaction around the batch, or none |
 | `--force` | permit `UPDATE`/`DELETE` with no `WHERE`, and `DROP`/`TRUNCATE` |
+| `--timeout-ms N` | stop the batch `N` ms after the connection opens; `0`, or no flag, is no limit |
 
 A batch of two or more is one transaction by default; a lone statement is not
 worth wrapping, and `--tx` is how to say it should be anyway. Without `--force`,
@@ -339,6 +340,14 @@ it runs — binsql says so rather than letting a dry run imply otherwise.
 When a transactional batch fails, binsql says how the transaction ended: rolled
 back, so nothing was kept; unknown, when the rollback or the commit itself
 failed; or never begun, when the batch was turned away before it ran.
+
+`--timeout-ms` covers the whole batch, as it covers `query`'s one statement:
+category `timeout`, exit `1`, and a cancel not acted on within 2 s left
+behind. No statement starts after the deadline. Without a transaction, binsql
+says which statement was running, or which would have started next, and how
+many before it ran and were kept. A transaction cut off is `unknown`: binsql
+sends no `COMMIT` after the deadline, but one already in flight may still
+land, and a `--dry-run` cannot say whether its rollback completed.
 
 Both take `--arg VALUE` to fill a `?` placeholder, once per placeholder and in
 order, so a script hands over values rather than building SQL out of them:
@@ -424,7 +433,7 @@ the same either way.
 | `detail` | what the Azure CLI said, or the database's answer to a timeout's cancel, redacted like `message` and cut at 1000 characters |
 | `statement` | the 1-based statement that failed or was refused, when there is one |
 | `completed` | how many statements before it were kept, under `exec --no-tx` |
-| `transaction` | how a transactional `exec` ended: `rolled_back`, `unknown` or `none`; `unknown` too for a write `query --allow-write` ran past `--timeout-ms` |
+| `transaction` | how a transactional `exec` ended: `rolled_back`, `unknown` or `none`; `unknown` too for a transactional `exec`, or a write `query --allow-write` ran, past `--timeout-ms` |
 
 `category` says what kind of thing failed — a missing saved data source is
 `source`, a vault or keychain that would not hand over a secret is `secret`, a

@@ -687,6 +687,9 @@ EXEC
         --dry-run         run the batch inside a transaction, then roll it back
         --tx / --no-tx    force one transaction around the batch, or none
         --force           permit UPDATE/DELETE with no WHERE, and DROP/TRUNCATE
+        --timeout-ms N    stop the batch N ms after connecting and exit 1 as a
+                          timeout; no statement starts after it, and what the
+                          batch left behind is reported as unknown
 
 INSPECT
         --catalog NAME    the database to read (default: the connected one)
