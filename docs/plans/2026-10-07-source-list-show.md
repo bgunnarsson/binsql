@@ -1,7 +1,7 @@
 ---
 title: binsql source list and source show print the saved data sources without a secret
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context

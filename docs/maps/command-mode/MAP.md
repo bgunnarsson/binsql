@@ -68,6 +68,7 @@ changes to `query`, `exec` and `inspect`.
 - [26](26-inspect-columns-exact-name.md): Built: `inspect --columns <name>` selects exactly one object: the match is case-sensitive, never split on dots, and the schema comes only from `--schema` (plan docs/plans/2026-10-07-inspect-columns-name.md).
 - [90](90-core-builds-an-estimated-plan-for-one-read.md): The core plans one read without running it: Session::plan, sql::plannable and sql::plan_sql, on every backend (plan docs/plans/2026-10-07-core-estimated-plan.md).
 - [91](91-query-plan-prints-the-estimated-plan.md): `query --plan` prints the estimated plan of one read through `-o`, and exits 2 for `--arg`, a statement that cannot be planned, and a write even with `--allow-write`.
+- [30](30-binsql-source-verb-with-list-and-show.md): Built: `binsql source list` and `source show NAME` list saved data sources with their DSN masked; plan docs/plans/2026-10-07-source-list-show.md.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
