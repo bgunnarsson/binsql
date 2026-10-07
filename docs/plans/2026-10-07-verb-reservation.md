@@ -1,7 +1,7 @@
 ---
 title: Verb names are reserved for new top-level data sources, and `binsql -- <name>` opens any saved name
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
