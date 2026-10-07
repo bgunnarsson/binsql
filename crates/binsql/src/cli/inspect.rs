@@ -235,11 +235,12 @@ fn select(objects: Vec<ObjectRef>, catalog: &str, name: &str) -> Result<Vec<Obje
         objects.into_iter().partition(|object| object.name == name);
 
     if matches.is_empty() {
-        let near: Vec<_> = others
+        let mut near: Vec<_> = others
             .iter()
             .filter(|object| object.name.eq_ignore_ascii_case(name))
             .map(ObjectRef::display)
             .collect();
+        near.sort();
         let mut message = format!("no table or view named {name} in {catalog}");
         if !near.is_empty() {
             message.push_str(&format!(
@@ -254,6 +255,7 @@ fn select(objects: Vec<ObjectRef>, catalog: &str, name: &str) -> Result<Vec<Obje
         .iter()
         .map(|object| object.schema.clone().unwrap_or_default())
         .collect();
+    schemas.sort();
     schemas.dedup();
     if schemas.len() > 1 {
         return Err(usage(format!(
@@ -414,7 +416,10 @@ mod tests {
     #[test]
     fn a_missing_name_offers_the_names_that_differ_only_in_case() {
         let failure = select(
-            vec![object(Some("sales"), "Artist", ObjectKind::Table)],
+            vec![
+                object(Some("sales"), "Artist", ObjectKind::Table),
+                object(Some("sales"), "ARTIST", ObjectKind::View),
+            ],
             "shop",
             "artist",
         )
@@ -422,7 +427,8 @@ mod tests {
         assert!(!failure.usage);
         assert_eq!(
             failure.message,
-            "no table or view named artist in shop; names that differ only in case: sales.Artist"
+            "no table or view named artist in shop; \
+             names that differ only in case: sales.ARTIST, sales.Artist"
         );
 
         let failure = select(
@@ -439,7 +445,8 @@ mod tests {
     fn a_name_in_two_schemas_is_refused() {
         let failure = select(
             vec![
-                object(Some("a"), "orders", ObjectKind::Table),
+                object(Some("b"), "orders", ObjectKind::Table),
+                object(Some("a"), "orders", ObjectKind::View),
                 object(Some("b"), "orders", ObjectKind::View),
             ],
             "shop",
