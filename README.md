@@ -398,6 +398,27 @@ cached secret and caches what it fetches, for a secret rotated since it was
 cached. `binsql source clear-cache` deletes every cached secret and the key that
 protects them; `BINSQL_SECRET_TTL=0` keeps them out of the cache altogether.
 
+`binsql source add NAME` saves a new data source and `binsql source edit NAME`
+changes a saved one; both print the saved row. A folder goes in the name, as
+`team/prod`. The connection string never goes on the command line, where it
+would sit in your shell history: `--dsn-stdin` reads it from stdin and
+`--dsn-env VAR` from a variable, while `--dsn` takes only a sqlite path or a
+`keyvault://` or vault URL reference, which hold no secret. A connection string
+is filed in the OS keychain and the config holds `keychain://NAME`;
+`--no-keychain` keeps it in your config instead, and is refused for the project
+file, which is meant to be shared. The other flags are `-d/--driver`,
+`--description`, `--readonly`/`--no-readonly`,
+`--open-on-start`/`--no-open-on-start` and `--scope user|project`: a new data
+source goes into the project file when there is one, and an edited one stays in
+its own unless `--scope` moves it. `source edit` changes only what it is given,
+and `--rename NEW` saves it under a new name, carrying its keychain entry with it.
+
+```sh
+printf %s "$PROD_DSN" | binsql source add eimskip/prod --dsn-stdin --readonly
+binsql source add scratch --dsn ./scratch.db --scope user
+binsql source edit eimskip/prod --description "read replica" --rename eimskip/replica
+```
+
 ## Databases
 
 | Driver names | Connection string |
@@ -616,12 +637,9 @@ targets, nothing published — and refuses a tag that disagrees with `Cargo.toml
 What works today is everything above. What has **not** been carried across from
 v2 yet:
 
-- **Changing data sources from the command line.** `binsql source list` and
-  `source show` read them, `source default` sets the default, and `source test`
-  and `source clear-cache` work; v2's `binsql conn add` has no counterpart yet, so a
-  data source is added with `⌃N` in the TUI and edited with `e` in its tree, or
-  the config is edited by hand — which means knowing whether you meant the user file or
-  a project's.
+- **Removing a data source from the command line.** `binsql source add` and
+  `source edit` cover v2's `binsql conn add`, but there is no `source remove`
+  yet: a data source is deleted in the TUI, or the config is edited by hand.
 - **Managed identity and service-principal credentials** for Key Vault, as
   binsql's own. v2 linked them in; v3 reaches the same identities through
   `az login --identity` and `az login --service-principal`, run first (see

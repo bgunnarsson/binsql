@@ -175,7 +175,7 @@ Decided here:
   - Verify: `cargo test -p binsql --bins source`, `cargo test -p binsql --test command_mode`,
     `cargo clippy --workspace --all-targets`.
 
-- [ ] **Docs: HELP and README.** In `cli/mod.rs` HELP: add `binsql source add NAME` and
+- [x] **Docs: HELP and README.** In `cli/mod.rs` HELP: add `binsql source add NAME` and
   `binsql source edit NAME` to the command list (`mod.rs:97-103`), and a paragraph in the
   SOURCE section (`mod.rs:143-162`) listing the DSN flags and their rule, the other flags,
   the keychain default, `--no-keychain` (user scope only), the default scope, `--rename`,

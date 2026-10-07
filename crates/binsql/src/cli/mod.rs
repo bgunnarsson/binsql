@@ -101,6 +101,8 @@ COMMAND MODE
     binsql source test [NAME]  connect to it, or to the default, and say how far
                                it got
     binsql source clear-cache  delete the cached Key Vault secrets
+    binsql source add NAME     save a new data source
+    binsql source edit NAME    change a saved one
 
 CONNECTION
     -c, --conn NAME       a saved data source, `folder/name` or a bare name
@@ -160,6 +162,23 @@ SOURCE
     --fresh                skip the cached secret and refresh it
     source clear-cache deletes every cached secret and the key that protects
     them. BINSQL_SECRET_TTL=0 keeps secrets out of the cache for every command.
+
+    source add saves a new data source and source edit changes one, each
+    printing its row. Folder and name are written folder/name. A connection
+    string comes on stdin or from a variable, never on the command line:
+    --dsn-stdin            read it from stdin
+    --dsn-env VAR          read it from the variable VAR
+    --dsn VALUE            a sqlite path or a secret reference only
+    -d, --driver NAME      the driver (default: inferred, or kept on edit)
+    --description TEXT     a note shown beside it
+    --readonly / --no-readonly
+    --open-on-start / --no-open-on-start
+    --scope user|project   the file to save it in (default: its own file, and
+                           a new one in the project's when there is one)
+    --no-keychain          keep the string in your config rather than the
+                           keychain; refused in the project file
+    --rename NEW           source edit: save it under a new name
+    What edit is not given stays as it was, the connection string included.
 
 BIND VALUES
     An --arg is text unless it says otherwise: int:42, float:1.5, bool:true,
