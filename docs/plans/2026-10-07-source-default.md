@@ -94,7 +94,7 @@ never reach `ratatui::init`; every `source default` form ends before it.
 
 ## Tasks
 
-- [ ] **Core.** `Workspace::set_default` as above, with tests in
+- [x] **Core.** `Workspace::set_default` as above, with tests in
   `workspace.rs`'s module using `workspace()` (`:365`) and reading the files
   back with `Config::load_from`:
   - user scope: `set_default("scratch", None)` writes `default: "scratch"`

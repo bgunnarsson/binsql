@@ -221,6 +221,46 @@ impl Workspace {
         Ok(())
     }
 
+    /// Makes a saved connection the default, in its own file unless `scope`
+    /// names another.
+    ///
+    /// The project file's default wins the merge, so writing the user file
+    /// under a project default naming something else is refused rather than
+    /// written to no effect. A connection that exists only for this run is
+    /// refused too: the next run would find the default naming nothing.
+    pub fn set_default(&mut self, id: &str, scope: Option<Scope>) -> Result<()> {
+        let Some(own) = self.scope_of(id) else {
+            return Err(Error::config(anyhow::anyhow!(
+                "{id} is not saved in a file, so it cannot be the default"
+            )));
+        };
+        let scope = scope.unwrap_or(own);
+        match scope {
+            Scope::User => {
+                let project_default = self.project.as_ref().and_then(|p| p.default.clone());
+                if let Some(default) = project_default
+                    && self.merged.resolve(&default).as_deref() != Some(id)
+                {
+                    return Err(Error::config(anyhow::anyhow!(
+                        "this project's {PROJECT_FILE} sets the default to {default}, which wins over your config; pass --scope project to change it there"
+                    )));
+                }
+                self.user.default = Some(id.to_string());
+            }
+            Scope::Project => {
+                let project = self.project.as_mut().ok_or_else(|| {
+                    Error::config(anyhow::anyhow!(
+                        "there is no {PROJECT_FILE} here to save the default in"
+                    ))
+                })?;
+                project.default = Some(id.to_string());
+            }
+        }
+        self.write(scope)?;
+        self.rebuild();
+        Ok(())
+    }
+
     /// Saves what a form or the command line described: files its secret,
     /// writes the config, and on a rename drops the old name.
     ///
@@ -501,6 +541,89 @@ mod tests {
             .set("new", source("/tmp/n.db"), Scope::Project)
             .expect_err("there is no project file");
         assert!(error.to_string().contains(PROJECT_FILE), "{error}");
+    }
+
+    #[test]
+    fn the_default_goes_into_the_file_the_source_is_in() {
+        let mut workspace = workspace("default-own-file", USER, None);
+        workspace.set_default("scratch", None).expect("setting");
+        assert_eq!(workspace.default.as_deref(), Some("scratch"));
+        let written = Config::load_from(workspace.user_path()).unwrap();
+        assert_eq!(written.default.as_deref(), Some("scratch"));
+    }
+
+    #[test]
+    fn the_default_can_go_into_the_project_file() {
+        let mut workspace = workspace("default-project-file", USER, Some(PROJECT));
+        workspace
+            .set_default("eimskip/local", None)
+            .expect("setting");
+        let project = Config::load_from(workspace.project_path().unwrap()).unwrap();
+        assert_eq!(project.default.as_deref(), Some("eimskip/local"));
+        assert!(
+            !workspace.user_path().exists(),
+            "the user file is left alone"
+        );
+
+        workspace
+            .set_default("scratch", Some(Scope::Project))
+            .expect("setting a user source as the project's default");
+        let project = Config::load_from(workspace.project_path().unwrap()).unwrap();
+        assert_eq!(project.default.as_deref(), Some("scratch"));
+        assert_eq!(workspace.default.as_deref(), Some("scratch"));
+    }
+
+    #[test]
+    fn a_user_default_under_a_differing_project_default_is_refused() {
+        let project = r#"{
+            "connections": {
+                "eimskip": { "local": { "driver": "mssql", "dsn": "keyvault://kv/dsn" } }
+            },
+            "default": "eimskip/local"
+        }"#;
+        let mut workspace = workspace("default-shadowed", USER, Some(project));
+        let error = workspace
+            .set_default("scratch", None)
+            .expect_err("the project's default would win");
+        assert!(error.to_string().contains("--scope project"), "{error}");
+        assert!(!workspace.user_path().exists(), "nothing written");
+        assert_eq!(workspace.default.as_deref(), Some("eimskip/local"));
+
+        workspace
+            .set_default("scratch", Some(Scope::Project))
+            .expect("the project file can be changed");
+        assert_eq!(workspace.default.as_deref(), Some("scratch"));
+    }
+
+    #[test]
+    fn a_project_default_naming_the_same_source_lets_the_user_file_agree() {
+        let project = r#"{
+            "connections": {
+                "eimskip": { "local": { "driver": "mssql", "dsn": "keyvault://kv/dsn" } }
+            },
+            "default": "eimskip/local"
+        }"#;
+        let mut workspace = workspace("default-agrees", USER, Some(project));
+        workspace
+            .set_default("eimskip/local", Some(Scope::User))
+            .expect("a project default naming the same source is no conflict");
+        let written = Config::load_from(workspace.user_path()).unwrap();
+        assert_eq!(written.default.as_deref(), Some("eimskip/local"));
+    }
+
+    #[test]
+    fn a_default_needs_a_saved_source_and_a_file_to_go_in() {
+        let mut workspace = workspace("default-refused", USER, None);
+        let error = workspace
+            .set_default("scratch", Some(Scope::Project))
+            .expect_err("there is no project file");
+        assert!(error.to_string().contains(PROJECT_FILE), "{error}");
+
+        workspace.add_ephemeral("ad-hoc", source("/tmp/ad-hoc.db"));
+        assert!(workspace.set_default("ad-hoc", None).is_err());
+        assert!(workspace.set_default("ad-hoc", Some(Scope::User)).is_err());
+        assert!(workspace.set_default("nope", None).is_err());
+        assert!(!workspace.user_path().exists(), "nothing written");
     }
 
     /// A credential store that writes nothing and remembers what it was
