@@ -53,7 +53,7 @@ pub const PROJECT_FILE: &str = ".binsql.json";
 
 /// The bare names `binsql <verb>` takes. A new top-level data source may not
 /// use one; inside a folder it may.
-pub const RESERVED_NAMES: [&str; 3] = ["query", "exec", "inspect"];
+pub const RESERVED_NAMES: [&str; 4] = ["query", "exec", "inspect", "source"];
 
 pub struct Workspace {
     user: Config,
@@ -699,20 +699,28 @@ mod tests {
     #[test]
     fn a_new_top_level_verb_name_is_refused() {
         let mut workspace = workspace("reserved", USER, None);
-        let error = workspace
-            .set("query", source("/tmp/q.db"), Scope::User)
-            .expect_err("query is a command");
-        assert!(error.to_string().contains("folder/query"), "{error}");
-        assert!(workspace.get("query").is_none());
+        for verb in RESERVED_NAMES {
+            let error = workspace
+                .set(verb, source("/tmp/q.db"), Scope::User)
+                .expect_err("a command");
+            assert!(
+                error.to_string().contains(&format!("folder/{verb}")),
+                "{error}"
+            );
+            assert!(workspace.get(verb).is_none());
+        }
     }
 
     #[test]
     fn a_verb_name_inside_a_folder_is_saved() {
         let mut workspace = workspace("reserved-folder", USER, None);
-        workspace
-            .set("folder/query", source("/tmp/q.db"), Scope::User)
-            .expect("a folder entry is never a command");
-        assert!(workspace.get("folder/query").is_some());
+        for verb in RESERVED_NAMES {
+            let id = format!("folder/{verb}");
+            workspace
+                .set(&id, source("/tmp/q.db"), Scope::User)
+                .expect("a folder entry is never a command");
+            assert!(workspace.get(&id).is_some());
+        }
     }
 
     #[test]

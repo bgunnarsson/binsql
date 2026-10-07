@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
 
     // A verb means command mode; anything else is a data source to open, so
     // `binsql eimskip/prod` still means what it always did.
-    if args.first().is_some_and(|arg| cli::is_verb(arg)) {
+    if cli::is_command(&args) {
         std::process::exit(cli::main(args).await);
     }
 
@@ -307,6 +307,17 @@ mod tests {
     #[test]
     fn rejects_unknown_options() {
         assert!(parse_args(args(&["--nope"])).is_err());
+    }
+
+    #[test]
+    fn source_alone_or_with_options_is_a_target() {
+        let options = parse_args(args(&["source"])).unwrap().unwrap();
+        assert_eq!(options.target.as_deref(), Some("source"));
+        let options = parse_args(args(&["source", "-d", "postgres"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(options.target.as_deref(), Some("source"));
+        assert_eq!(options.backend, Some(Backend::Postgres));
     }
 
     #[test]

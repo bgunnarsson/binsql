@@ -101,7 +101,7 @@ None found.
   `?password=` parameter; mysql URL `mysql://u:secret@h:3306/db`;
   go-sql-driver `u:secret@tcp(h:3306)/db`; a sqlite path unchanged.
   Verify: `cargo test -p binsql-core`, `cargo clippy --workspace --all-targets`.
-- [ ] **Dispatch.** Add `source` to `RESERVED_NAMES`; add `cli::is_command`
+- [x] **Dispatch.** Add `source` to `RESERVED_NAMES`; add `cli::is_command`
   and use it at `main.rs:41`; add `mod source` and the `"source"` arm in
   `cli::main` (`cli/mod.rs:59`); create `cli/source.rs` whose `run` parses as
   above and answers every op with `unknown source command X` (exit 2), or

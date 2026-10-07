@@ -10,6 +10,7 @@ mod exec;
 mod inspect;
 mod query;
 mod render;
+mod source;
 
 use std::io::{IsTerminal, Read, Write};
 
@@ -43,12 +44,18 @@ pub fn failed(message: impl Into<String>) -> Failure {
 
 type Result<T> = std::result::Result<T, Failure>;
 
-/// Whether the first argument names a command-mode verb.
+/// Whether the arguments are a command-mode verb's.
 ///
 /// Anything else is the TUI's, so `binsql eimskip/prod` still opens a data
 /// source named on the command line rather than being rejected as a bad verb.
-pub fn is_verb(name: &str) -> bool {
-    binsql_core::RESERVED_NAMES.contains(&name)
+/// `source` is a command only with an operation after it: alone or with
+/// options it opens a data source named `source`, as it always did.
+pub fn is_command(args: &[String]) -> bool {
+    match args {
+        [verb, operation, ..] if verb == "source" => !operation.starts_with('-'),
+        [verb, ..] => verb != "source" && binsql_core::RESERVED_NAMES.contains(&verb.as_str()),
+        [] => false,
+    }
 }
 
 /// Runs a command and returns the process exit code.
@@ -60,7 +67,8 @@ pub async fn main(args: Vec<String>) -> i32 {
         "query" => query::run(rest).await,
         "exec" => exec::run(rest).await,
         "inspect" => inspect::run(rest).await,
-        // Unreachable through `main`, which checks `is_verb` first, but this
+        "source" => source::run(rest).await,
+        // Unreachable through `main`, which checks `is_command` first, but this
         // match and the reserved names in core have to agree, and this is
         // where that would show.
         other => Err(usage(format!("unknown command {other}"))),
@@ -367,11 +375,21 @@ mod tests {
 
     #[test]
     fn the_verbs_are_the_reserved_names() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         for verb in ["query", "exec", "inspect"] {
-            assert!(is_verb(verb), "{verb}");
+            assert!(is_command(&args(&[verb])), "{verb}");
         }
-        for name in ["source", "eimskip/prod", "--"] {
-            assert!(!is_verb(name), "{name}");
+        assert!(is_command(&args(&["source", "list"])));
+        for list in [
+            &["source"][..],
+            &["source", "-d", "postgres"],
+            &["source", "--help"],
+            &["source", "--", "x"],
+            &["eimskip/prod"],
+            &["--"],
+            &[],
+        ] {
+            assert!(!is_command(&args(list)), "{list:?}");
         }
     }
 }

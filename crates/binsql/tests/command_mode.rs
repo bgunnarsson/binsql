@@ -836,6 +836,25 @@ fn usage_mistakes_exit_two_and_say_what_was_wrong() {
 }
 
 #[test]
+fn source_is_a_command_only_with_an_operation_after_it() {
+    let fixture = Fixture::new("source-dispatch");
+    fixture.write_config();
+
+    // Alone it is still a data source to open, and there is none named so.
+    fixture
+        .binsql(&["source"])
+        .failed()
+        .stderr_has("not a saved data source");
+    let help = fixture.binsql(&["source", "--help"]).succeeds();
+    assert!(help.stdout.contains("COMMAND MODE"), "{}", help.stdout);
+
+    fixture
+        .binsql(&["source", "frob"])
+        .refused()
+        .stderr_has("unknown source command frob");
+}
+
+#[test]
 fn a_file_and_stdin_are_both_read() {
     let fixture = Fixture::new("input");
     fixture.seed();
