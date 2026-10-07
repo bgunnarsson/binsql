@@ -23,8 +23,9 @@ no AI mentions in commits. Docs only, so no tests.
   token is fetched for it, and no catalog connection re-reads Key Vault — it
   reuses the string the primary connection resolved. The Command mode
   paragraph already says such connections are outside the budget.
-- The SQL Server reconnect after a cancelled statement fetches a new token
-  outside the budget, and the Azure AD section says so.
+- The Azure AD section says the token is fetched once: it is baked into the
+  tiberius `Config`, so the reconnect after a cancelled statement reuses it
+  and calls no `az`.
 - The stale closing sentence of the Key Vault section is replaced, not kept
   beside the new text: `az`'s stdin is closed, so it cannot stop at a prompt.
 
@@ -36,7 +37,7 @@ None in `docs/solutions`.
 
 - The Azure AD section says fetching the token is part of connecting, that
   running out kills `az` and what it started, with `while connecting`, and
-  that the reconnect after a cancel is outside the budget.
+  that nothing fetches a second token.
 - The Key Vault section says the secret read counts, that running out kills
   `az` and caches nothing, with `while resolving the connection string`, that
   a cache hit makes no call, and that `--catalog` never reads the vault again.
@@ -44,7 +45,7 @@ None in `docs/solutions`.
 
 ## Tasks
 
-- [ ] **1. The two sections.** `README.md`: Azure AD for SQL Server, Azure Key
+- [x] **1. The two sections.** `README.md`: Azure AD for SQL Server, Azure Key
   Vault references.
   Verify: `cargo test -p binsql` (the README is not tested, but HELP is
   unchanged).

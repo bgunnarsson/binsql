@@ -576,6 +576,13 @@ A connection string containing `fedauth=` authenticates with an Azure AD token
 instead of a password, exactly as it did in v2. The token comes from the Azure
 CLI, so `az` must be on `PATH` and `az login` must have been run.
 
+Under `--connect-timeout-ms`, fetching the token is part of connecting. If
+the budget runs out while `az` is still working, binsql kills `az` — on unix,
+with everything it started — and the error ends `while connecting`.
+The token is fetched once: the connection that replaces one lost to a
+cancelled statement reuses it, and `inspect --catalog` reads every catalog
+over the first connection.
+
 ### The keychain
 
 A connection string that belongs to one machine goes in that machine's
@@ -664,9 +671,16 @@ az login --identity    # a managed identity, on Azure compute
 ```
 
 Both Key Vault references and `fedauth=` then use that login. Without one,
-`az` fails with its own error, which binsql passes on. There is no deadline on
-the call yet, and `az` shares binsql's stdin, so an `az` that hangs or stops at
-a prompt holds binsql with it.
+`az` fails with its own error, which binsql passes on. `az` gets no stdin, so
+it cannot stop at a prompt, but on its own it has no deadline: an `az` that
+hangs holds binsql with it.
+
+`--connect-timeout-ms` is that deadline. Reading the secret counts against
+the budget; if it runs out while `az` is still working, binsql kills `az` — on
+unix, with everything it started — caches nothing, and the error ends
+`while resolving the connection string`. A reference still in the cache makes
+no call at all. `inspect --catalog` never reads the vault again: a further
+catalog's connection reuses the string the first one resolved.
 
 ### The schema cache
 
