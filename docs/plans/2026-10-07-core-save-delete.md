@@ -130,7 +130,7 @@ None found.
   new id, drops the old one and logs no `delete`; a rename with a new secret
   logs only `set(new)`; a plain DSN with no secret makes no store call.
   Verify: `cargo test -p binsql-core workspace::tests::save_`
-- [ ] **`Workspace::delete` and `Removed`.** Add both. Tests, named
+- [x] **`Workspace::delete` and `Removed`.** Add both. Tests, named
   `delete_…`: a `keychain://` source logs `delete(account)` and the recorder
   saw the config file without the id at that moment; a plain DSN logs
   nothing; a missing id returns `Ok(None)` and logs nothing; a failing store

@@ -279,6 +279,25 @@ impl Workspace {
         Ok(removed)
     }
 
+    /// Removes a connection and then its secret, returning `None` when there
+    /// was no such connection.
+    pub fn delete(&mut self, id: &str, store: &impl SecretStore) -> Result<Option<Removed>> {
+        // Read before the config drops the entry, since it is derived from the
+        // connection string it is about to take away.
+        let account = self
+            .get(id)
+            .and_then(|source| keychain::account(&source.dsn))
+            .map(str::to_string);
+        if !self.remove(id)? {
+            return Ok(None);
+        }
+        // Only after the config is written: a secret left behind by a failed
+        // save is recoverable, one deleted for a connection that is still
+        // listed is not.
+        let secret_error = account.and_then(|account| store.delete(&account).err());
+        Ok(Some(Removed { secret_error }))
+    }
+
     /// Registers a connection for this run only — a DSN given on the command
     /// line, which nobody asked to have saved.
     pub fn add_ephemeral(&mut self, id: &str, source: DataSource) {
@@ -297,6 +316,12 @@ impl Workspace {
             Scope::User => self.user.save_to(&self.user_path, Visibility::Private),
         }
     }
+}
+
+/// A connection [`Workspace::delete`] took out of the config.
+pub struct Removed {
+    /// Why its secret is still in the credential store, when deleting it failed.
+    pub secret_error: Option<Error>,
 }
 
 /// The project file to use: `BINSQL_PROJECT` if it is set, otherwise the
@@ -629,6 +654,46 @@ mod tests {
             .unwrap();
         assert!(store.calls().is_empty());
         assert_eq!(workspace.get("scratch").unwrap().dsn, "/tmp/t.db");
+    }
+
+    #[test]
+    fn delete_removes_the_secret_only_once_the_config_is_written() {
+        let mut workspace = workspace("delete-keychain", USER, None);
+        // On disk first, so the recorder has a file that names the secret.
+        workspace.write(Scope::User).unwrap();
+        let store = Recorder {
+            config: Some(workspace.user_path().to_path_buf()),
+            ..Recorder::default()
+        };
+        let removed = workspace.delete("eimskip/prod", &store).unwrap();
+        assert!(removed.is_some_and(|removed| removed.secret_error.is_none()));
+        assert_eq!(store.calls(), ["delete eimskip/prod listed=false"]);
+        assert!(workspace.get("eimskip/prod").is_none());
+    }
+
+    #[test]
+    fn delete_leaves_the_store_alone_for_a_plain_string() {
+        let mut workspace = workspace("delete-plain", USER, None);
+        let store = Recorder::default();
+        assert!(workspace.delete("scratch", &store).unwrap().is_some());
+        assert!(store.calls().is_empty());
+    }
+
+    #[test]
+    fn delete_of_a_missing_source_does_nothing() {
+        let mut workspace = workspace("delete-missing", USER, None);
+        let store = Recorder::default();
+        assert!(workspace.delete("nowhere", &store).unwrap().is_none());
+        assert!(store.calls().is_empty());
+    }
+
+    #[test]
+    fn delete_reports_a_secret_it_could_not_remove() {
+        let mut workspace = workspace("delete-failing", USER, None);
+        let store = Recorder::failing();
+        let removed = workspace.delete("eimskip/prod", &store).unwrap().unwrap();
+        assert!(removed.secret_error.is_some());
+        assert!(workspace.get("eimskip/prod").is_none());
     }
 
     #[test]

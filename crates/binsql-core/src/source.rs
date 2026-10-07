@@ -176,7 +176,9 @@ mod tests {
 
     #[test]
     fn a_folder_qualifies_the_name() {
-        let saved = draft(" eimskip ", " prod ", "postgres://h/db").build().unwrap();
+        let saved = draft(" eimskip ", " prod ", "postgres://h/db")
+            .build()
+            .unwrap();
         assert_eq!(saved.id, "eimskip/prod");
         assert_eq!(saved.source.backend, Backend::Postgres);
     }

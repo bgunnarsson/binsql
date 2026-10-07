@@ -29,4 +29,4 @@ pub use secrets::{Reference, Resolver};
 pub use session::Session;
 pub use sql::{Bound, Kind, Statement};
 pub use value::{Column, ResultSet, Value};
-pub use workspace::{RESERVED_NAMES, Scope, Workspace};
+pub use workspace::{RESERVED_NAMES, Removed, Scope, Workspace};
