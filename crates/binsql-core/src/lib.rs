@@ -22,7 +22,7 @@ pub mod workspace;
 pub use adapter::Adapter;
 pub use backend::{Backend, Dialect};
 pub use config::{Config, DataSource};
-pub use error::{Error, Result};
+pub use error::{Error, Reason, Result};
 pub use schema::{Catalog, ObjectKind, ObjectRef};
 pub use schema_cache::{Level, SchemaCache, SourceId};
 pub use secrets::{Reference, Resolver};

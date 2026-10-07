@@ -39,11 +39,26 @@ pub struct Failure {
     /// Lines text mode prints indented under the message. JSON leaves them
     /// out: they quote the SQL, which `statement` stands in for.
     pub context: Vec<String>,
+    /// Why it failed, in a word from the contract's list.
+    pub reason: Option<&'static str>,
+    /// The message taken apart, when a core error gives it in parts.
+    parts: Option<Box<Parts>>,
+    /// The connection string as given, masked wherever the message quotes it.
+    dsn: Option<Box<(Backend, String)>>,
+}
+
+#[derive(Debug, Default)]
+struct Parts {
     /// The message without the SQL a core refusal quotes, which JSON prints
     /// in its place.
     bare: Option<String>,
-    /// The connection string as given, masked wherever the message quotes it.
-    dsn: Option<Box<(Backend, String)>>,
+    /// JSON's message where it is shorter than text's: what `detail` and
+    /// `hint` say is left out of it.
+    summary: Option<String>,
+    /// The next step to try.
+    hint: Option<String>,
+    /// What the tool that failed said, as it said it.
+    detail: Option<String>,
 }
 
 pub fn usage(message: impl Into<String>) -> Failure {
@@ -55,35 +70,72 @@ pub fn failed(message: impl Into<String>) -> Failure {
 }
 
 /// A core error as a failure, with `message` in place of its own text.
+/// `message` ends with the error's text, if it quotes it at all.
 pub fn caused(message: impl Into<String>, error: &binsql_core::Error) -> Failure {
     use binsql_core::Error;
+    let message = message.into();
     let (category, phase) = match error {
         Error::UnknownBackend(_) | Error::Placeholders { .. } => (Category::Usage, Phase::Prepare),
         Error::Connect { .. } => (Category::Connect, Phase::Connect),
+        Error::Secret { .. } => (Category::Secret, Phase::Connect),
         Error::Query(_) => (Category::Database, Phase::Execute),
         Error::ReadOnly { .. } | Error::NotPlannable { .. } => (Category::Refused, Phase::Prepare),
         Error::Cancelled => (Category::Cancelled, Phase::Execute),
         Error::Config(_) => (Category::Config, Phase::Execute),
         Error::Io(_) => (Category::Io, Phase::Execute),
     };
-    failed(message).category(category).phase(phase)
+    // The error's own text, shortened, behind whatever `message` puts
+    // before it.
+    let shortened = |short: String| {
+        message
+            .strip_suffix(&error.to_string())
+            .map(|prefix| format!("{prefix}{short}"))
+    };
+
+    let mut failure = failed(message.clone()).category(category).phase(phase);
+    match error {
+        Error::ReadOnly { data_source, .. } => {
+            failure.parts = Some(Box::new(Parts {
+                bare: shortened(format!(
+                    "{data_source} is registered read-only; refusing to run the statement"
+                )),
+                ..Parts::default()
+            }));
+        }
+        Error::NotPlannable { .. } => {
+            failure.parts = Some(Box::new(Parts {
+                bare: shortened(
+                    "only one SELECT, WITH, VALUES or TABLE statement can be planned".to_string(),
+                ),
+                ..Parts::default()
+            }));
+        }
+        Error::Secret {
+            reference,
+            reason,
+            hint,
+            detail,
+        } => {
+            failure.reason = reason.map(|reason| reason.as_str());
+            failure.parts = Some(Box::new(Parts {
+                summary: shortened(format!("reading {reference}")),
+                hint: hint.clone(),
+                detail: Some(detail.clone()),
+                ..Parts::default()
+            }));
+        }
+        Error::Connect {
+            reason: Some(reason),
+            ..
+        } => failure.reason = Some(reason.as_str()),
+        _ => {}
+    }
+    failure
 }
 
 /// A core error as a failure, in its own words.
 pub fn core(error: binsql_core::Error) -> Failure {
-    use binsql_core::Error;
-    let bare = match &error {
-        Error::ReadOnly { data_source, .. } => Some(format!(
-            "{data_source} is registered read-only; refusing to run the statement"
-        )),
-        Error::NotPlannable { .. } => {
-            Some("only one SELECT, WITH, VALUES or TABLE statement can be planned".to_string())
-        }
-        _ => None,
-    };
-    let mut failure = caused(error.to_string(), &error);
-    failure.bare = bare;
-    failure
+    caused(error.to_string(), &error)
 }
 
 impl Failure {
@@ -96,7 +148,8 @@ impl Failure {
             statement: None,
             completed: None,
             context: Vec::new(),
-            bare: None,
+            reason: None,
+            parts: None,
             dsn: None,
         }
     }
@@ -281,8 +334,9 @@ fn report(failure: &Failure, json: bool) -> i32 {
     }
 
     let mut message = failure
-        .bare
-        .clone()
+        .parts
+        .as_ref()
+        .and_then(|parts| parts.bare.clone())
         .unwrap_or_else(|| failure.message.clone());
     for line in &failure.context {
         message.push_str("\n  ");
@@ -301,26 +355,31 @@ fn report(failure: &Failure, json: bool) -> i32 {
 /// keeps it; renaming, removing or changing the meaning of one raises it.
 const ERROR_SCHEMA: u64 = 1;
 
+/// How much of a tool's own words `detail` keeps.
+const DETAIL_LIMIT: usize = 1000;
+
 fn error_record(failure: &Failure, exit: i32) -> String {
-    // The stored string is matched verbatim, so it goes before the patterns
-    // rewrite any part of it.
-    let mut message = failure
-        .bare
-        .clone()
-        .unwrap_or_else(|| failure.message.clone());
-    if let Some(stored) = &failure.dsn {
-        let (backend, dsn) = stored.as_ref();
-        message = binsql_core::session::masked(message, *backend, dsn);
-    }
-    let message = redact(&message);
+    let parts = failure.parts.as_deref();
+    let message = parts
+        .and_then(|parts| parts.summary.as_ref().or(parts.bare.as_ref()))
+        .unwrap_or(&failure.message);
     let mut fields: Vec<(&str, serde_json::Value)> = vec![
         ("type", "error".into()),
         ("schema", ERROR_SCHEMA.into()),
         ("exit", exit.into()),
         ("category", failure.category.as_str().into()),
         ("phase", failure.phase.as_str().into()),
-        ("message", message.into()),
+        ("message", failure.cleaned(message).into()),
     ];
+    if let Some(reason) = failure.reason {
+        fields.push(("reason", reason.into()));
+    }
+    if let Some(hint) = parts.and_then(|parts| parts.hint.as_ref()) {
+        fields.push(("hint", hint.as_str().into()));
+    }
+    if let Some(detail) = parts.and_then(|parts| parts.detail.as_ref()) {
+        fields.push(("detail", capped(failure.cleaned(detail)).into()));
+    }
     if let Some(position) = failure.statement {
         fields.push(("statement", position.into()));
     }
@@ -328,6 +387,30 @@ fn error_record(failure: &Failure, exit: i32) -> String {
         fields.push(("completed", count.into()));
     }
     record(&fields)
+}
+
+impl Failure {
+    /// `text` with the secrets it could quote masked.
+    fn cleaned(&self, text: &str) -> String {
+        // The stored string is matched verbatim, so it goes before the
+        // patterns rewrite any part of it.
+        let text = match &self.dsn {
+            Some(stored) => {
+                let (backend, dsn) = stored.as_ref();
+                binsql_core::session::masked(text.to_string(), *backend, dsn)
+            }
+            None => text.to_string(),
+        };
+        redact(&text)
+    }
+}
+
+/// `text` cut to [`DETAIL_LIMIT`] characters, on a character boundary.
+fn capped(text: String) -> String {
+    match text.char_indices().nth(DETAIL_LIMIT) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text,
+    }
 }
 
 fn notice_record(message: &str) -> String {
@@ -635,7 +718,7 @@ pub async fn connect(args: &Args) -> Result<Session> {
     Session::open(name.clone(), source).await.map_err(|error| {
         // A config error out of opening is a secret that would not resolve.
         let category = match error {
-            binsql_core::Error::Config(_) => Category::Secret,
+            binsql_core::Error::Config(_) | binsql_core::Error::Secret { .. } => Category::Secret,
             _ => Category::Connect,
         };
         caused(format!("connecting to {name}: {error}"), &error)
@@ -946,6 +1029,59 @@ mod tests {
         let record = error_record(&failure, 1);
         assert!(
             !record.contains("hun") && !record.contains("ter2"),
+            "{record}"
+        );
+    }
+
+    fn secret(detail: &str) -> binsql_core::Error {
+        binsql_core::Error::Secret {
+            reference: "keyvault://v/s".to_string(),
+            reason: Some(binsql_core::Reason::AzUnauthenticated),
+            hint: Some("no usable Azure credential — run `az login`".to_string()),
+            detail: detail.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_secret_failure_keeps_its_text_and_splits_its_record() {
+        let error = secret("Please run 'az login' to setup account.");
+        let failure = caused(format!("connecting to prod: {error}"), &error);
+        assert_eq!(failure.message, format!("connecting to prod: {error}"));
+        assert_eq!(
+            error_record(&failure, 1),
+            r#"{"type":"error","schema":1,"exit":1,"category":"secret","phase":"connect","message":"connecting to prod: reading keyvault://v/s","reason":"az-unauthenticated","hint":"no usable Azure credential — run `az login`","detail":"Please run 'az login' to setup account."}"#
+        );
+    }
+
+    #[test]
+    fn a_record_masks_a_token_in_the_detail() {
+        let error = secret("AADSTS50173: token eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl expired");
+        let record = error_record(&core(error), 1);
+        assert!(
+            !record.contains("eyJ") && record.contains("token **** expired"),
+            "{record}"
+        );
+    }
+
+    #[test]
+    fn a_record_caps_the_detail() {
+        let record = error_record(&core(secret(&"é".repeat(DETAIL_LIMIT + 5))), 1);
+        let detail = format!("{}…", "é".repeat(DETAIL_LIMIT));
+        assert!(
+            record.contains(&format!(r#""detail":"{detail}""#)),
+            "{record}"
+        );
+    }
+
+    #[test]
+    fn a_token_failure_carries_its_reason() {
+        let record = error_record(
+            &core(binsql_core::Error::token(anyhow::anyhow!("az exited 1"))),
+            1,
+        );
+        assert!(
+            record.contains(r#""category":"connect""#)
+                && record.contains(r#""reason":"azure-ad-token""#),
             "{record}"
         );
     }

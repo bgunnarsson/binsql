@@ -13,6 +13,8 @@ pub enum Error {
         name: String,
         #[source]
         source: anyhow::Error,
+        /// Set when binsql knows which part of connecting failed.
+        reason: Option<Reason>,
     },
 
     #[error("{0}")]
@@ -46,6 +48,17 @@ pub enum Error {
     #[error("{0}")]
     Config(#[source] anyhow::Error),
 
+    /// A secret could not be read. The text is the one the parts always made;
+    /// they are kept apart for a caller that wants the next step on its own.
+    #[error("{}", secret_text(.reference, .reason, .hint, .detail))]
+    Secret {
+        reference: String,
+        reason: Option<Reason>,
+        hint: Option<String>,
+        /// What the tool that was asked said, as it said it.
+        detail: String,
+    },
+
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -59,11 +72,61 @@ impl Error {
         Error::Connect {
             name: name.to_string(),
             source: err.into(),
+            reason: None,
+        }
+    }
+
+    /// The Azure AD token for a `fedauth=` connection could not be had.
+    pub fn token(err: impl Into<anyhow::Error>) -> Self {
+        Error::Connect {
+            name: "azure ad".to_string(),
+            source: err.into(),
+            reason: Some(Reason::AzureAdToken),
         }
     }
 
     pub fn config(err: impl Into<anyhow::Error>) -> Self {
         Error::Config(err.into())
+    }
+}
+
+/// Why a secret or a token could not be had, finer than the variant. A
+/// caller reading these must treat one it does not know as no reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    AzMissing,
+    AzUnauthenticated,
+    VaultForbidden,
+    SecretNotFound,
+    VaultNotFound,
+    AzureAdToken,
+}
+
+impl Reason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Reason::AzMissing => "az-missing",
+            Reason::AzUnauthenticated => "az-unauthenticated",
+            Reason::VaultForbidden => "vault-forbidden",
+            Reason::SecretNotFound => "secret-not-found",
+            Reason::VaultNotFound => "vault-not-found",
+            Reason::AzureAdToken => "azure-ad-token",
+        }
+    }
+}
+
+fn secret_text(
+    reference: &str,
+    reason: &Option<Reason>,
+    hint: &Option<String>,
+    detail: &str,
+) -> String {
+    match (reason, hint) {
+        (Some(Reason::AzMissing), _) => {
+            format!("running `az`: {detail}. Is the Azure CLI installed?")
+        }
+        (_, Some(hint)) => format!("reading {reference}: {detail}\n\n{hint}"),
+        (_, None) => format!("reading {reference}: {detail}"),
     }
 }
 

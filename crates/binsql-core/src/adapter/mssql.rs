@@ -827,32 +827,30 @@ async fn azure_cli_token() -> Result<String> {
         .output()
         .await
         .map_err(|e| {
-            Error::connect(
-                "azure ad",
-                anyhow::anyhow!("running `az`: {e}. Is the Azure CLI installed?"),
-            )
+            Error::token(anyhow::anyhow!(
+                "running `az`: {e}. Is the Azure CLI installed?"
+            ))
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::connect(
-            "azure ad",
-            anyhow::anyhow!("`az account get-access-token` failed: {}", stderr.trim()),
-        ));
+        return Err(Error::token(anyhow::anyhow!(
+            "`az account get-access-token` failed: {}",
+            stderr.trim()
+        )));
     }
 
     let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| Error::connect("azure ad", anyhow::anyhow!("parsing `az` output: {e}")))?;
+        .map_err(|e| Error::token(anyhow::anyhow!("parsing `az` output: {e}")))?;
 
     parsed
         .get("accessToken")
         .and_then(|token| token.as_str())
         .map(str::to_string)
         .ok_or_else(|| {
-            Error::connect(
-                "azure ad",
-                anyhow::anyhow!("`az` returned no accessToken. Try `az login`."),
-            )
+            Error::token(anyhow::anyhow!(
+                "`az` returned no accessToken. Try `az login`."
+            ))
         })
 }
 

@@ -27,8 +27,8 @@ same, and no exit code changes.
 - The token failure stays `Error::Connect`, which gains `reason`; `probe`
   reads the token stage from the reason instead of the `azure ad` label, so a
   connection string spelled `azure ad` can no longer pass for it.
-- The token failure carries the reason and, when `az` ran and failed, its
-  stderr as `detail`; it has no hint, since today's text has none.
+- The token failure carries only the reason: its stderr is already in the
+  message, redacted, and today's text has no hint to split off.
 - `detail` is capped at 1000 characters, cut on a character boundary and
   ended with `…`.
 - JSON's message for a secret failure is the text up to the reference
@@ -58,7 +58,7 @@ never name a zsh variable `status`.
 
 ## Tasks
 
-- [ ] **1. The core types the failure.**
+- [x] **1. The core types the failure.**
   `error.rs`: `Reason` with `as_str`; `Error::Secret`; `Error::Connect`
   gains `reason`, and `Error::token` builds the `azure ad` one.
   `secrets/azure.rs`: `classify` returns the reason and hint, `fetch`
@@ -67,7 +67,7 @@ never name a zsh variable `status`.
   Verify: `cargo test -p binsql-core` — one test per classification, the
   existing fixtures, and the text of each case unchanged.
 
-- [ ] **2. The record carries them.**
+- [x] **2. The record carries them.**
   `cli/mod.rs`: `Failure` gains `reason`, `hint` and `detail`; `caused`
   fills them from the error and sets the JSON message; `error_record`
   writes them in the contract's order, `detail` masked and capped.

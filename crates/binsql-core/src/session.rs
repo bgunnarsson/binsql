@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::adapter::{self, Adapter};
 use crate::backend::{Backend, Dialect};
 use crate::config::{DataSource, mask_dsn};
-use crate::error::{Error, Result};
+use crate::error::{Error, Reason, Result};
 use crate::schema::ObjectRef;
 use crate::secrets::Resolver;
 use crate::sql::{self, Bound};
@@ -136,13 +136,11 @@ impl Session {
         match adapter::connect(source.backend, &dsn).await {
             Ok(_) => Ok(()),
             Err(err) => {
-                // The token error is labelled `azure ad`; every other connect
-                // error is labelled with the connection string, which could
-                // be those same words.
                 let stage = match &err {
-                    Error::Connect { name, .. } if name == "azure ad" && name != dsn.trim() => {
-                        Stage::Token
-                    }
+                    Error::Connect {
+                        reason: Some(Reason::AzureAdToken),
+                        ..
+                    } => Stage::Token,
                     _ => Stage::Connect,
                 };
                 Err(ProbeFailure {
