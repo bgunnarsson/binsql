@@ -1979,6 +1979,19 @@ fn text_errors_are_unchanged() {
 }
 
 #[test]
+fn an_unknown_statement_is_refused_with_its_article() {
+    let fixture = Fixture::new("error-unknown");
+    fixture.seed();
+    let run = fixture.direct(&["query", "frobnicate artist"]).refused();
+    assert!(
+        run.stderr
+            .starts_with("error: refusing to run an unknown statement with `query`"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
 fn require_rows_fails_an_empty_result_after_printing_it() {
     let fixture = Fixture::new("require-rows-empty");
     fixture.seed();

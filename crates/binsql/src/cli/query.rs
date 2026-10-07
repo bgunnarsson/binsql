@@ -80,8 +80,8 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             let summary = sql::summarize(&statement.sql, backend, 80);
             return Err(usage(if statement.kind.mutates() {
                 format!(
-                    "--plan plans reads only; drop --plan to run a {} statement",
-                    statement.kind.label()
+                    "--plan plans reads only; drop --plan to run {} statement",
+                    a(statement.kind)
                 )
             } else {
                 "--plan plans one SELECT, WITH, VALUES or TABLE statement".to_string()
@@ -103,8 +103,8 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     // committed, so streaming refuses it outright.
     if streaming && statement.kind.mutates() {
         return Err(usage(format!(
-            "--stream reads only; drop --stream to run a {} statement, or use `binsql exec`",
-            statement.kind.label(),
+            "--stream reads only; drop --stream to run {} statement, or use `binsql exec`",
+            a(statement.kind),
         ))
         .category(Category::Refused)
         .phase(Phase::Prepare)
@@ -117,8 +117,8 @@ pub async fn run(args: Vec<String>) -> Result<()> {
 
     if statement.kind.mutates() && !args.is_set(&["allow-write"]) {
         return Err(usage(format!(
-            "refusing to run a {} statement with `query`: use `binsql exec`, or --allow-write",
-            statement.kind.label(),
+            "refusing to run {} statement with `query`: use `binsql exec`, or --allow-write",
+            a(statement.kind),
         ))
         .category(Category::Refused)
         .phase(Phase::Prepare)
@@ -172,4 +172,14 @@ fn require(require_rows: bool, rows: usize) -> Result<()> {
             .phase(Phase::Output));
     }
     Ok(())
+}
+
+/// The kind with its article, so a refusal reads "an unknown statement".
+fn a(kind: sql::Kind) -> String {
+    let label = kind.label();
+    if label.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        format!("an {label}")
+    } else {
+        format!("a {label}")
+    }
 }
