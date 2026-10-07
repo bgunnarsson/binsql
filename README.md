@@ -408,15 +408,28 @@ installed.
 
 | Variable | Effect |
 | --- | --- |
-| `BINSQL_SECRET_TTL` | Cache lifetime in seconds. `0` resolves every time and writes nothing to disk. |
+| `BINSQL_SECRET_TTL` | Cache lifetime in seconds. `0` resolves every time and writes nothing to disk, which is also how to pick up a secret rotated within the cache lifetime. |
 | `BINSQL_KEYVAULT_SUFFIX` | Key Vault DNS suffix, for sovereign clouds. |
 
 Secrets are fetched through the Azure CLI, so this needs `az` and `az login`
 just as `fedauth=` does. **Narrower than v2**, which linked the Azure SDK and
 could also use a managed identity or an `AZURE_CLIENT_ID` service principal via
 `BINSQL_AZURE_CREDENTIAL`. Shelling out to `az` keeps one Azure story rather
-than two — `fedauth=` uses the same mechanism — but a CI job has no `az login`
-to lean on, so see [Status](#status).
+than two — `fedauth=` uses the same mechanism.
+
+A CI job, a container or an agent gets its login the same way, with one of the
+Azure CLI's non-interactive forms run before binsql:
+
+```sh
+az login --service-principal -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID"
+az login --service-principal -u "$AZURE_CLIENT_ID" --federated-token "$TOKEN" --tenant "$AZURE_TENANT_ID"
+az login --identity    # a managed identity, on Azure compute
+```
+
+Both Key Vault references and `fedauth=` then use that login. `az` is run with
+no stdin, so a missing login fails with its error rather than waiting at a
+prompt. There is no deadline on the call yet, so a hung `az` holds binsql with
+it.
 
 ### The schema cache
 
@@ -528,10 +541,10 @@ v2 yet:
 - **Managing data sources from the command line.** v2 had `binsql conn add`. In
   v3 a data source is added with `⌃N`, or by editing the config by hand — which
   now means knowing whether you meant the user file or a project's.
-- **Managed identity and service-principal credentials** for Key Vault. The
-  references work and so does the CLI credential; the other two arms of v2's
-  chain are missing, which matters now that command mode is here and a CI job
-  has no `az login` to lean on.
+- **Managed identity and service-principal credentials** for Key Vault, as
+  binsql's own. v2 linked them in; v3 reaches the same identities through
+  `az login --identity` and `az login --service-principal`, run first (see
+  [Azure Key Vault references](#azure-key-vault-references)).
 - Exporting a result set, editing values in the grid, query history, and
   filtering the tree.
 
