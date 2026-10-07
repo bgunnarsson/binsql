@@ -126,7 +126,7 @@ what changes least:
   - `cargo test -p binsql --test command_mode inspect`
   - `cargo clippy -p binsql --all-targets -- -D warnings`
 
-- [ ] **2. Document the named form.**
+- [x] **2. Document the named form.**
   - In `crates/binsql/src/cli/mod.rs`, add to the INSPECT section of HELP
     (:118-122) that `--columns` takes an optional exact `NAME`, with the schema
     only from `--schema`.

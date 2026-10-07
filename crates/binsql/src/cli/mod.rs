@@ -119,7 +119,9 @@ INSPECT
         --catalog NAME    the database to read (default: the connected one)
         --schema NAME     the schema to read
         --columns         every table and view's columns, one row each, with
-                          the catalog, schema, object and kind they belong to
+                          the catalog, schema, object and kind they belong to;
+                          a NAME after it is matched exactly, never split on
+                          dots, with the schema taken from --schema alone
 
 BIND VALUES
     An --arg is text unless it says otherwise: int:42, float:1.5, bool:true,

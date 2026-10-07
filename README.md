@@ -223,6 +223,7 @@ binsql exec  -f migration.sql --dry-run              # write, and keep nothing
 binsql inspect                                       # what tables are there
 binsql inspect artist                                # what columns has it got
 binsql inspect --columns -o jsonl                    # every column of everything
+binsql inspect --columns artist -o json              # one object, exact name
 ```
 
 The split between the verbs is a safety boundary rather than a convenience.
@@ -329,6 +330,13 @@ stderr. Read it as JSON or JSONL: CSV and TSV print a null and an empty string
 the same way. SQL Server's `type` is the bare type name, without its length or
 precision, and on SQLite generated columns and the hidden columns of a virtual
 table are not listed.
+
+A name after `--columns` is an identity rather than a guess: it is matched
+exactly, case included, and never split on dots, so a table called `a.b` can be
+named and its schema comes from `--schema` alone. No match exits `1`, naming any
+objects that differ only in case; a name found in more than one schema exits
+`2` until `--schema` says which. Plain `inspect NAME` still matches loosely, as
+it always has.
 
 Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".
@@ -561,8 +569,6 @@ v2 yet:
   [Azure Key Vault references](#azure-key-vault-references)).
 - Exporting a result set, editing values in the grid, query history, and
   filtering the tree.
-- **Naming one table with `inspect --columns`.** It is refused for now, until
-  the name is matched exactly; `inspect <name>` describes one table meanwhile.
 
 ## Licence
 
