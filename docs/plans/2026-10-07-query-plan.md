@@ -71,7 +71,7 @@ None found.
   `PRAGMA`, `--arg`, and `DELETE` with `--allow-write` followed by a query
   showing the row remains. Verify: `cargo test -p binsql --test command_mode`
   and `cargo clippy --workspace --all-targets`.
-- [ ] Document `--plan`. Add a `--plan` line to the QUERY part of `HELP`
+- [x] Document `--plan`. Add a `--plan` line to the QUERY part of `HELP`
   (`crates/binsql/src/cli/mod.rs:105-109`) and to the README query flags
   (`README.md:265-269`), with a short subsection: the backend table from 23
   (SQLite `EXPLAIN QUERY PLAN` rows; PostgreSQL `EXPLAIN (FORMAT JSON)` one

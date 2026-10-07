@@ -107,6 +107,8 @@ QUERY
         --arg VALUE       fill the next ? placeholder; repeat, in order
         --limit N         stop after N rows (default: all of them)
         --allow-write     permit a statement that writes (prefer `exec`)
+        --plan            print the estimated plan of one read instead of running
+                          it; `-o raw` for the bare document
 
 EXEC
     -f, --file FILE       read the script from a file, or from stdin for `-`

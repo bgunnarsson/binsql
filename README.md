@@ -268,6 +268,28 @@ statement that has to write from the reading verb. It runs exactly one
 statement: handed a script, it says so and points at `exec` rather than running
 the first and dropping the rest.
 
+`--plan` prints the plan the database estimates for one `SELECT`, `WITH`,
+`VALUES` or `TABLE` statement, and does not run it. A write is refused even
+with `--allow-write` — drop `--plan` to run it — and so are `--arg` and a
+statement that is already an `EXPLAIN`, `SHOW` or `PRAGMA`. A read-only data
+source can plan.
+
+| | Sent | Returns |
+| --- | --- | --- |
+| SQLite | `EXPLAIN QUERY PLAN` | rows of `id, parent, notused, detail` |
+| PostgreSQL | `EXPLAIN (FORMAT JSON)` | one JSON value |
+| MySQL | `EXPLAIN FORMAT=JSON` | one JSON value as text |
+| SQL Server | `SET SHOWPLAN_XML ON` around the statement | one XML value |
+
+The plan comes back as a result set and goes through `-o` like any other, so
+`-o raw` prints the bare document for `jq` or an XML tool. It is an estimate:
+no row counts or timings from a run. SQL Server needs the `SHOWPLAN`
+permission (`GRANT SHOWPLAN TO <user>`), and says so when it is missing.
+
+```sh
+binsql query --plan "SELECT * FROM orders WHERE customer_id = 31" -o raw | jq .
+```
+
 `exec` takes `-f, --file FILE`, and:
 
 | | |
