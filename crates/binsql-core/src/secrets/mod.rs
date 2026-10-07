@@ -59,6 +59,16 @@ impl Resolver {
     /// Returns `dsn` unchanged when it is a literal connection string, or
     /// fetches the referenced secret when it is a reference.
     pub async fn resolve(&self, dsn: &str) -> Result<String> {
+        self.resolve_with(dsn, true).await
+    }
+
+    /// Resolves as `resolve` does but skips the cached copy, refreshing it on
+    /// success — for a secret rotated before its cache entry ran out.
+    pub async fn resolve_fresh(&self, dsn: &str) -> Result<String> {
+        self.resolve_with(dsn, false).await
+    }
+
+    async fn resolve_with(&self, dsn: &str, read_cache: bool) -> Result<String> {
         // The credential store is local, so this neither waits on a network nor
         // goes through the cache — writing it to the cache file would put the
         // secret somewhere the keychain is not.
@@ -81,7 +91,7 @@ impl Resolver {
 
         let reference = Reference::parse(dsn, self.suffix.as_deref())?;
 
-        if let Some(cached) = self.cache.get(&reference) {
+        if read_cache && let Some(cached) = self.cache.get(&reference) {
             return Ok(cached);
         }
 
@@ -143,6 +153,33 @@ mod tests {
         // No `az` process is spawned; a miss here would try to run one and fail.
         let resolved = resolver.resolve("keyvault://kv/dsn").await.unwrap();
         assert_eq!(resolved, "Server=db;Database=app");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_fresh_resolve_skips_the_cached_copy() {
+        let dir =
+            std::env::temp_dir().join(format!("binsql-resolver-fresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let resolver = resolver(&dir);
+        let dsn = "keyvault://binsql-no-such-vault/dsn";
+        let reference = Reference::parse(dsn, None).unwrap();
+        resolver.cache().put(&reference, "Server=db").unwrap();
+
+        assert_eq!(resolver.resolve(dsn).await.unwrap(), "Server=db");
+        // Past the cache it goes to `az`, which is missing or cannot read a
+        // vault that does not exist; either way the cached copy is not returned.
+        assert!(resolver.resolve_fresh(dsn).await.is_err());
+        assert_eq!(
+            resolver
+                .resolve_fresh("postgres://app@localhost/app")
+                .await
+                .unwrap(),
+            "postgres://app@localhost/app"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -186,7 +186,7 @@ form returns before the TUI.
 
 ## Tasks
 
-- [ ] **Resolver.** `resolve_with`, `resolve`, and `resolve_fresh` in
+- [x] **Resolver.** `resolve_with`, `resolve`, and `resolve_fresh` in
   `secrets/mod.rs`. Add these tests to its module, using `resolver(&dir)`
   (`:116`):
   - Seed `keyvault://binsql-no-such-vault/dsn` with `cache().put`.
