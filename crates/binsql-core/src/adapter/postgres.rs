@@ -251,18 +251,17 @@ impl Adapter for PostgresAdapter {
         .await
         .map_err(Error::query)?;
 
-        Ok(rows
-            .iter()
-            .filter_map(|row| {
-                Some(Column {
-                    name: row.try_get("attname").ok()?,
+        rows.iter()
+            .map(|row| {
+                Ok(Column {
+                    name: row.try_get("attname").map_err(Error::query)?,
                     type_name: row.try_get("type_name").unwrap_or_default(),
                     nullable: row.try_get("nullable").ok(),
                     default: row.try_get("default_value").ok().flatten(),
                     primary_key: row.try_get("primary_key").unwrap_or(false),
                 })
             })
-            .collect())
+            .collect()
     }
 
     async fn run(

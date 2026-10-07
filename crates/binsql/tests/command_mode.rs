@@ -531,6 +531,27 @@ fn inspect_lists_tables_and_describes_one() {
 }
 
 #[test]
+fn inspect_lists_columns_in_declared_order() {
+    let fixture = Fixture::new("inspect-order");
+    fixture
+        .direct(&[
+            "exec",
+            "CREATE TABLE track (title TEXT NOT NULL, album INTEGER, id INTEGER PRIMARY KEY)",
+        ])
+        .succeeds();
+
+    fixture
+        .direct(&["inspect", "track", "-o", "csv"])
+        .succeeds()
+        .stdout_has(
+            "column,type,nullable,default,primary_key\n\
+             title,TEXT,false,,false\n\
+             album,INTEGER,true,,false\n\
+             id,INTEGER,true,,true\n",
+        );
+}
+
+#[test]
 fn a_saved_data_source_and_the_default_both_work() {
     let fixture = Fixture::new("saved");
     fixture.write_config();

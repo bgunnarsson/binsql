@@ -249,11 +249,10 @@ impl Adapter for MySqlAdapter {
         .await
         .map_err(Error::query)?;
 
-        Ok(rows
-            .iter()
-            .filter_map(|row| {
-                Some(Column {
-                    name: row.try_get("name").ok()?,
+        rows.iter()
+            .map(|row| {
+                Ok(Column {
+                    name: row.try_get("name").map_err(Error::query)?,
                     type_name: row.try_get("type_name").unwrap_or_default(),
                     nullable: row
                         .try_get::<String, _>("nullable")
@@ -268,7 +267,7 @@ impl Adapter for MySqlAdapter {
                         .is_ok_and(|key| key == "PRI"),
                 })
             })
-            .collect())
+            .collect()
     }
 
     async fn run(

@@ -395,19 +395,24 @@ impl Adapter for MsSqlAdapter {
 
         let result = self.ask(&sql, None).await?;
 
-        Ok(result
+        result
             .rows
             .iter()
-            .filter_map(|row| {
-                Some(Column {
-                    name: row.first()?.to_text(),
+            .map(|row| {
+                Ok(Column {
+                    name: row
+                        .first()
+                        .ok_or_else(|| {
+                            Error::query(anyhow::anyhow!("a column row came back with no name"))
+                        })?
+                        .to_text(),
                     type_name: row.get(1).map(Value::to_text).unwrap_or_default(),
                     nullable: row.get(2).map(nullable),
                     default: row.get(3).filter(|v| !v.is_null()).map(Value::to_text),
                     primary_key: matches!(row.get(4), Some(Value::Int(1))),
                 })
             })
-            .collect())
+            .collect()
     }
 
     async fn run(

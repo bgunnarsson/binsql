@@ -81,7 +81,7 @@ None found.
   `is_nullable_reads_bit_and_int` asserting `nullable(&Value::Bool(false)) ==
   false`, `Bool(true) == true`, `Int(0) == false`, `Int(1) == true`.
   Verify: `cargo test -p binsql-core mssql`.
-- [ ] Decode failures are errors. In each `columns` replace
+- [x] Decode failures are errors. In each `columns` replace
   `.iter().filter_map(|row| { ... Some(Column { .. }) })` with
   `.iter().map(|row| { ... Ok(Column { .. }) }).collect()` (the function already
   returns `Result<Vec<Column>>`, so `collect()` into it):
@@ -94,7 +94,7 @@ None found.
   All other field expressions stay as they are.
   Verify: `cargo build -p binsql-core` and
   `cargo test -p binsql --test command_mode inspect`.
-- [ ] SQLite order. In `sqlite.rs:128` make the query
+- [x] SQLite order. In `sqlite.rs:128` make the query
   `SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info(?, ?) ORDER BY cid`.
   In `crates/binsql/tests/command_mode.rs` add, after
   `inspect_lists_tables_and_describes_one` (line 510),

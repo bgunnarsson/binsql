@@ -125,7 +125,7 @@ impl Adapter for SqliteAdapter {
     async fn columns(&self, object: &ObjectRef) -> Result<Vec<Column>> {
         let catalog = object.catalog.as_deref().unwrap_or("main");
         let rows = sqlx::query(
-            "SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?, ?)",
+            "SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?, ?) ORDER BY cid",
         )
         .bind(&object.name)
         .bind(catalog)
@@ -133,12 +133,11 @@ impl Adapter for SqliteAdapter {
         .await
         .map_err(Error::query)?;
 
-        Ok(rows
-            .iter()
-            .filter_map(|row| {
-                let name: String = row.try_get("name").ok()?;
+        rows.iter()
+            .map(|row| {
+                let name: String = row.try_get("name").map_err(Error::query)?;
                 let type_name: String = row.try_get("type").unwrap_or_default();
-                Some(Column {
+                Ok(Column {
                     name,
                     type_name,
                     nullable: Some(row.try_get::<i64, _>("notnull").unwrap_or(0) == 0),
@@ -149,7 +148,7 @@ impl Adapter for SqliteAdapter {
                     primary_key: row.try_get::<i64, _>("pk").unwrap_or(0) > 0,
                 })
             })
-            .collect())
+            .collect()
     }
 
     /// There is no server to call off: SQLite runs in this process, so dropping
