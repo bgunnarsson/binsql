@@ -356,6 +356,9 @@ fn set_owner_only(_path: &Path, _mode: u32) -> Result<()> {
 /// takes as the password is what gets hidden: PostgreSQL's keyword form splits
 /// on whitespace and nothing else, SQL Server's on `;` outside a quoted value.
 pub fn mask_dsn(backend: Backend, dsn: &str) -> String {
+    if backend == Backend::MsSql {
+        return mask_mssql(dsn);
+    }
     let lead = dsn.len() - dsn.trim_start().len();
     if let Some(scheme_end) = url_scheme_end(&dsn[lead..]) {
         return mask_url(dsn, lead + scheme_end + 3);
@@ -365,6 +368,25 @@ pub fn mask_dsn(backend: Backend, dsn: &str) -> String {
         Backend::MySql if dsn.contains('@') => mask_userinfo(dsn),
         _ => mask_ado(dsn),
     }
+}
+
+/// SQL Server's, as `build_config` reads it: a `://` anywhere makes it a URL,
+/// and `fedauth=` comes out on a plain split at every `;` first, which can
+/// leave a password term that a quoted value had held. So both readings are
+/// masked: the URL's, the quoted one, then the plain split.
+fn mask_mssql(dsn: &str) -> String {
+    let masked = match dsn.find("://") {
+        Some(scheme_end) => mask_ado(&mask_url(dsn, scheme_end + 3)),
+        None => mask_ado(dsn),
+    };
+    masked
+        .split(';')
+        .map(|term| match term.split_once('=') {
+            Some((key, _)) if is_password_key(key) => format!("{key}=****"),
+            _ => term.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 /// Where a URL's `://` is, when the DSN starts with a scheme: a `://` later on,
@@ -632,6 +654,16 @@ mod tests {
                 MsSql,
                 "sqlserver://u:p@h;password=secret?database=app",
                 "sqlserver://u:****@****?database=app",
+            ),
+            (
+                MsSql,
+                "server=sqlserver://u:secret@h:1433?database=app",
+                "server=sqlserver://u:****@h:1433?database=app",
+            ),
+            (
+                MsSql,
+                "Server=h;fedauth={x;Password=secret;y=z};Database=d",
+                "Server=h;fedauth={x;Password=****;y=z};Database=d",
             ),
             (
                 MySql,
