@@ -88,6 +88,7 @@ changes to `query`, `exec` and `inspect`.
 - [62](62-inspect-under-the-deadline.md): `inspect --timeout-ms N` drops its metadata reads at the deadline and exits 1 as category `timeout`; `timeout-ms` is now shared by every verb that runs SQL.
 - [64](64-postgresql-and-mysql-stop-the-server-statement-ins.md): A cancel inside a PostgreSQL or MySQL transaction stops the statement on the server before the rollback, naming the session after `BEGIN` so a pooling proxy cannot misdirect it.
 - [68](68-check-sqlite-behaviour-under-timeout-ms.md): On SQLite a cancelled statement that returns no rows runs on until the process exits, so the deadline is enforced by exiting; a lock wait meets the driver's 5 s busy timeout as `database is locked` first.
+- [71](71-render-encodes-one-record-at-a-time-without-changi.md): CSV, TSV and JSONL each encode one record at a time; the buffered output is built from them, byte for byte as before.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.

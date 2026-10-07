@@ -1,7 +1,7 @@
 ---
 title: "Render encodes one record at a time"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
