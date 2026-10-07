@@ -95,6 +95,28 @@ async fn a_probe_names_the_stage_that_stopped_it() {
         .expect_err("a vault URL without a secret cannot resolve");
     assert_eq!(failure.stage, Stage::Secret);
 
+    let failure = Session::probe(
+        &source("https://sa:hunter2@kv-demo.vault.azure.net/"),
+        &resolver,
+        false,
+    )
+    .await
+    .expect_err("a vault URL without a secret cannot resolve");
+    assert_eq!(failure.stage, Stage::Secret);
+    assert!(!failure.message.contains("hunter2"), "{}", failure.message);
+
+    let failure = Session::probe(
+        &DataSource {
+            backend: Backend::MsSql,
+            ..source("azure ad")
+        },
+        &resolver,
+        false,
+    )
+    .await
+    .expect_err("`azure ad` is no connection string");
+    assert_eq!(failure.stage, Stage::Connect);
+
     let missing = dir.join("no-such-dir").join("app.db");
     let failure = Session::probe(&source(&missing.display().to_string()), &resolver, false)
         .await

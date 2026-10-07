@@ -42,6 +42,40 @@ pub struct ProbeFailure {
     pub message: String,
 }
 
+/// `message` with every copy of `dsn` replaced by its masked form, and then
+/// whatever masking hid — the password, when there is one — wherever else the
+/// message quotes it, as in a host the URL's userinfo is still attached to.
+fn masked(mut message: String, backend: Backend, dsn: &str) -> String {
+    let mask = mask_dsn(backend, dsn);
+    for raw in [dsn, dsn.trim()] {
+        if !raw.is_empty() {
+            message = message.replace(raw, &mask);
+        }
+    }
+    let hidden = hidden(dsn, &mask);
+    if !hidden.is_empty() {
+        message = message.replace(hidden, "****");
+    }
+    message
+}
+
+/// The span of `dsn` that `mask` differs in.
+fn hidden<'a>(dsn: &'a str, mask: &str) -> &'a str {
+    let start = dsn
+        .char_indices()
+        .zip(mask.chars())
+        .find(|((_, a), b)| a != b)
+        .map_or(dsn.len().min(mask.len()), |((i, _), _)| i);
+    let end = dsn[start..]
+        .chars()
+        .rev()
+        .zip(mask[start.min(mask.len())..].chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum::<usize>();
+    &dsn[start..dsn.len() - end]
+}
+
 /// One open data source.
 ///
 /// A session is usually one connection, but a backend that cannot read across
@@ -93,26 +127,28 @@ impl Session {
         } else {
             resolver.resolve(&source.dsn).await
         };
+        // A resolver or driver may quote the connection string back, password
+        // and all, so it is swapped for its masked form.
         let dsn = resolved.map_err(|err| ProbeFailure {
             stage: Stage::Secret,
-            message: err.to_string(),
+            message: masked(err.to_string(), source.backend, &source.dsn),
         })?;
         match adapter::connect(source.backend, &dsn).await {
             Ok(_) => Ok(()),
             Err(err) => {
+                // The token error is labelled `azure ad`; every other connect
+                // error is labelled with the connection string, which could
+                // be those same words.
                 let stage = match &err {
-                    Error::Connect { name, .. } if name == "azure ad" => Stage::Token,
+                    Error::Connect { name, .. } if name == "azure ad" && name != dsn.trim() => {
+                        Stage::Token
+                    }
                     _ => Stage::Connect,
                 };
-                // A driver may quote the connection string back, password and
-                // all, so it is swapped for its masked form.
-                let mut message = err.to_string();
-                for raw in [dsn.as_str(), dsn.trim()] {
-                    if !raw.is_empty() {
-                        message = message.replace(raw, &mask_dsn(source.backend, &dsn));
-                    }
-                }
-                Err(ProbeFailure { stage, message })
+                Err(ProbeFailure {
+                    stage,
+                    message: masked(err.to_string(), source.backend, &dsn),
+                })
             }
         }
     }
@@ -313,5 +349,33 @@ impl Session {
             .await?
             .columns(object)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_password_is_masked_wherever_the_message_quotes_it() {
+        let dsn = "https://sa:hunter2@kv.vault.azure.net/";
+        let message = format!("{dsn} names the vault sa:hunter2@kv.vault.azure.net");
+        assert_eq!(
+            masked(message, Backend::MsSql, dsn),
+            "https://sa:****@kv.vault.azure.net/ names the vault sa:****@kv.vault.azure.net"
+        );
+    }
+
+    #[test]
+    fn a_dsn_with_no_password_leaves_the_message_alone() {
+        let dsn = "postgres://app@db/app";
+        assert_eq!(
+            masked(
+                format!("connecting to {dsn}: refused"),
+                Backend::Postgres,
+                dsn
+            ),
+            "connecting to postgres://app@db/app: refused"
+        );
     }
 }
