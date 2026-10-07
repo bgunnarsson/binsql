@@ -997,6 +997,10 @@ impl App {
             scope,
         } = saved;
         let renamed_from = previous.filter(|previous| *previous != id);
+        // Before the secret, so a refused name files nothing under it.
+        self.config
+            .check_new_id(&id)
+            .map_err(|error| error.to_string())?;
 
         match &secret {
             Some(secret) => keychain::set(&id, secret).map_err(|error| error.to_string())?,

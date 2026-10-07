@@ -74,7 +74,7 @@ None found. (No `docs/solutions` in this repo.) Project note: command-mode
     `query`, `exec`, `inspect`, false for `source`, `eimskip/prod`, `--`.
   Verify: `cargo test -p binsql`.
 
-- [ ] **3. `⌃N` checks before filing the secret.**
+- [x] **3. `⌃N` checks before filing the secret.**
   `App::save_data_source` (`crates/binsql/src/app/mod.rs:991`) writes the
   keychain (`:1002`, `:1007`) before `config.set` (`:1014`), so a refused name
   would leave a secret filed under `query`. Add as its first statement after
