@@ -356,7 +356,7 @@ fn set_owner_only(_path: &Path, _mode: u32) -> Result<()> {
 /// takes as the password is what gets hidden: PostgreSQL's keyword form splits
 /// on whitespace and nothing else, SQL Server's on `;` outside a quoted value.
 pub fn mask_dsn(backend: Backend, dsn: &str) -> String {
-    if let Some(scheme_end) = dsn.find("://") {
+    if let Some(scheme_end) = url_scheme_end(dsn) {
         return mask_url(dsn, scheme_end + 3);
     }
     match backend {
@@ -366,8 +366,21 @@ pub fn mask_dsn(backend: Backend, dsn: &str) -> String {
     }
 }
 
+/// Where a URL's `://` is, when the DSN starts with a scheme: a `://` later on,
+/// in an ADO string's application name say, does not make it a URL.
+fn url_scheme_end(dsn: &str) -> Option<usize> {
+    let end = dsn.find("://")?;
+    let scheme = &dsn[..end];
+    (scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
+    .then_some(end)
+}
+
 /// `scheme://user:password@host/db?password=…`: the password after the user,
-/// and any query parameter whose decoded name is a password.
+/// and any query parameter whose decoded name is a password or whose decoded
+/// value holds one, as SQL Server's URL, rewritten to ADO, can.
 fn mask_url(dsn: &str, authority: usize) -> String {
     let (head, rest) = dsn.split_at(authority);
     let rest = mask_userinfo(rest);
@@ -377,7 +390,14 @@ fn mask_url(dsn: &str, authority: usize) -> String {
     let query = rest[question + 1..]
         .split('&')
         .map(|pair| match pair.split_once('=') {
-            Some((key, _)) if is_password_key(&decode_percent(key)) => format!("{key}=****"),
+            Some((key, value))
+                if is_password_key(&decode_percent(key)) || {
+                    let value = decode_percent(value);
+                    mask_ado(&value) != value
+                } =>
+            {
+                format!("{key}=****")
+            }
             _ => pair.to_string(),
         })
         .collect::<Vec<_>>()
@@ -572,6 +592,16 @@ mod tests {
                 Postgres,
                 "postgres://u@h/db?%70assword=secret&x=1",
                 "postgres://u@h/db?%70assword=****&x=1",
+            ),
+            (
+                MsSql,
+                "Server=h;Password=secret;Application Name=https://app",
+                "Server=h;Password=****;Application Name=https://app",
+            ),
+            (
+                MsSql,
+                "sqlserver://h?database=app%3Bpassword%3Dsecret",
+                "sqlserver://h?database=****",
             ),
             (
                 MySql,
