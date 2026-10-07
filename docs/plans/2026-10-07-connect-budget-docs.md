@@ -1,7 +1,7 @@
 ---
 title: "The README says what the connect budget promises"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context

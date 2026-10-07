@@ -81,6 +81,7 @@ changes to `query`, `exec` and `inspect`.
 - [14](14-capability-probe.md): `binsql --capabilities` prints an offline JSON manifest of version, backends, command flags, formats and exit codes.
 - [50](50-az-and-keychain-reads-can-be-interrupted.md): Dropping an `az` read kills `az` and everything it started (its own process group on unix), and keychain reads run on a blocking thread, so 51's deadline can cut either.
 - [51](51-connect-timeout-ms-caps-opening-a-connection.md): `--connect-timeout-ms` (or `BINSQL_CONNECT_TIMEOUT_MS`) caps resolving and connecting, from before the config loads; running out is exit 1, category `connect-timeout`, naming the step.
+- [52](52-readme-says-what-the-connect-budget-promises.md): The README's Azure AD and Key Vault sections say the budget counts the `az` calls and kills `az` when it runs out, and that `--catalog` fetches no second token and reads no vault again.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
