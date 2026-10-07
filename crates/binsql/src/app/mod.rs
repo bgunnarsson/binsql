@@ -12,6 +12,7 @@ use ratatui::layout::Rect;
 
 use binsql_core::schema_cache::{Key, Level};
 use binsql_core::secrets::keychain;
+use binsql_core::source::Saved;
 use binsql_core::{
     Catalog, Column, Error, ObjectKind, ObjectRef, ResultSet, SchemaCache, Session, SourceId,
     Workspace,
@@ -22,7 +23,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio_util::sync::CancellationToken;
 
 use console::{Console, DEFAULT_LIMIT, Grid, Outcome};
-use overlay::{Overlay, Saved};
+use overlay::Overlay;
 use tree::{LoadState, Node, NodeId, NodeKind, Tree};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

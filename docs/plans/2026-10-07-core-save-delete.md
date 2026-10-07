@@ -109,7 +109,7 @@ None found.
   string, no secret; untouched reference → re-keyed reference, no secret) and
   folder qualification.
   Verify: `cargo test -p binsql-core source::`
-- [ ] **The form delegates.** `ConnectForm::build` builds a `Draft` from its
+- [x] **The form delegates.** `ConnectForm::build` builds a `Draft` from its
   fields (`previous: self.editing.clone()`) and returns `draft.build()`;
   remove `Saved` from `overlay.rs` and import it from `binsql_core::source`
   in `overlay.rs` and `app/mod.rs:25`. `effective_backend` stays for the

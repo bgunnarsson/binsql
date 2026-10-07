@@ -2,6 +2,7 @@
 //! command palette, and the connection form.
 
 use binsql_core::secrets::keychain;
+use binsql_core::source::{Draft, Saved};
 use binsql_core::{Backend, Config, DataSource, Scope, Workspace};
 
 use super::App;
@@ -264,23 +265,6 @@ impl Field {
     }
 }
 
-/// What the form produced: where to save it, and — when the connection string
-/// is to live in the credential store rather than the config — the string to
-/// file there first.
-pub struct Saved {
-    pub id: String,
-    pub source: DataSource,
-    /// The connection string to write to the credential store under `id`.
-    /// `None` leaves the store alone, either because the string is in the
-    /// config or because an edit did not retype it.
-    pub secret: Option<String>,
-    /// The name this was saved under before, so a rename can take the old entry
-    /// with it.
-    pub previous: Option<String>,
-    /// The config file to write it to.
-    pub scope: Scope,
-}
-
 pub struct ConnectForm {
     /// Groups the connection in the sidebar. Empty leaves it at the top level.
     pub folder: String,
@@ -468,63 +452,18 @@ impl ConnectForm {
 
     /// Validates and returns what to save.
     pub fn build(&self) -> Result<Saved, String> {
-        let name = self.name.trim();
-        if name.is_empty() {
-            return Err("A data source needs a name".into());
-        }
-        let folder = self.folder.trim();
-        if name.contains(binsql_core::config::SEPARATOR)
-            || folder.contains(binsql_core::config::SEPARATOR)
-        {
-            return Err(format!(
-                "'{}' separates the folder from the name, so neither may contain it",
-                binsql_core::config::SEPARATOR
-            ));
-        }
-        let dsn = self.dsn.trim();
-        if dsn.is_empty() {
-            return Err("A data source needs a connection string".into());
-        }
-        let backend = self.effective_backend().ok_or_else(|| {
-            "Could not tell the driver from that connection string — pick one".to_string()
-        })?;
-
-        let id = binsql_core::config::qualify(Some(folder).filter(|f| !f.is_empty()), name);
-
-        // Three cases. An untouched reference is re-keyed to the name being
-        // saved under and the store is moved, not rewritten. A typed string
-        // with the toggle on becomes a reference and the string is filed. With
-        // the toggle off it stays in the config as it always did.
-        let (stored_dsn, secret) = if keychain::is_reference(dsn) {
-            if !self.keychain {
-                // Moving it back into the config would mean reading the store
-                // to find what to write, which is not something a form should
-                // do behind a toggle. Retyping the string says it deliberately.
-                return Err(format!(
-                    "To move this out of the {}, clear the connection string and type it again",
-                    keychain::STORE_NAME
-                ));
-            }
-            (keychain::reference(&id), None)
-        } else if self.keychain {
-            (keychain::reference(&id), Some(dsn.to_string()))
-        } else {
-            (dsn.to_string(), None)
-        };
-
-        Ok(Saved {
-            source: DataSource {
-                backend,
-                dsn: stored_dsn,
-                description: String::new(),
-                read_only: self.read_only,
-                open_on_start: self.open_on_start,
-            },
-            id,
-            secret,
+        Draft {
+            folder: &self.folder,
+            name: &self.name,
+            dsn: &self.dsn,
+            backend: self.backend,
+            keychain: self.keychain,
+            read_only: self.read_only,
+            open_on_start: self.open_on_start,
             previous: self.editing.clone(),
             scope: self.scope,
-        })
+        }
+        .build()
     }
 }
 
