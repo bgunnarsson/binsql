@@ -2,7 +2,7 @@
 title: Reserve verb names for new top-level data sources, and open any name with `binsql -- <name>`
 kind: task
 mode: afk
-status: open
+status: resolved
 blocked_by: []
 claimed_by:
 ---
@@ -38,3 +38,17 @@ parses as a target, and `main.rs`'s existing argument tests still pass.
 - Additions only: no existing verb, flag or exit code changes.
 
 ## Answer
+
+Built: a new top-level data source named `query`, `exec` or `inspect` is refused by `Workspace::set` (and before any secret is filed in the TUI), and `binsql -- <name>` opens any saved name.
+
+Plan: [2026-10-07-verb-reservation](../../plans/2026-10-07-verb-reservation.md), done. Reviewed for correctness, security, conventions and simplicity: no findings. Not checked by hand: the TUI paths (`binsql -- query` opening the app, `⌃N` showing the refusal), which need an interactive terminal.
+
+Commits:
+
+- 8c33cb2 Verb reservation plan is done
+- 030e899 README documents binsql -- <name> and the reserved verb names
+- ce97413 binsql -- <name> opens a data source even when the name is a verb
+- 72397e1 Saving a new data source named like a verb files no secret
+- 03b9dcd cli::is_verb answers from the reserved names in core
+- 9492c12 Workspace refuses a new top-level data source named like a verb
+- ba91a6e Plan: verb names are reserved for new top-level data sources

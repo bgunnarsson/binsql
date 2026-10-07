@@ -58,6 +58,7 @@ changes to `query`, `exec` and `inspect`.
 - [13](13-streaming-contract.md): `binsql query` gets one opt-in switch, `--stream`. It is allowed only with `-o jsonl|csv|tsv` and only for a statement that does not write, even when `--allow-write` is given. It writes each row to stdout as the row arrives, through a bounded queue. A run that finishes without error prints exactly the bytes the buffered path prints for the same rows. Exit status stays the only signal that the output is complete. Truncation goes to stderr as a note, never into the stream.
 - [16](16-ddl-output.md): Inspect gets one opt-in switch, `--definitions`, which returns each selected table's and view's own definition text as the server stores or prints it, for an agent to read, not to restore from. Where a backend has no native text for an object, binsql says so in the row and does not build a CREATE statement from the columns. No external dump tool is called.
 
+- [18](18-verb-reservation.md): Built: a new top-level data source named `query`, `exec` or `inspect` is refused by `Workspace::set` (and before any secret is filed in the TUI), and `binsql -- <name>` opens any saved name.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
