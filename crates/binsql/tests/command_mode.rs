@@ -6,7 +6,7 @@
 //! test at this level notices.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 
 /// One directory per test — these run concurrently, and a shared config or
 /// database would have them treading on each other.
@@ -68,7 +68,29 @@ impl Fixture {
 
     /// The same, with `variables` set in its environment.
     fn binsql_with_env(&self, args: &[&str], project: &str, variables: &[(&str, &str)]) -> Run {
-        let output = Command::new(env!("CARGO_BIN_EXE_binsql"))
+        let output = self
+            .command(args, project, variables)
+            .output()
+            .expect("run binsql");
+        Run::new(output)
+    }
+
+    /// The same as [`Fixture::direct`], without waiting for it to finish.
+    fn start(&self, args: &[&str]) -> Child {
+        let database = self.database();
+        let (verb, rest) = args.split_first().expect("a verb");
+        let mut all = vec![*verb, "--dsn", database.to_str().expect("utf-8 path")];
+        all.extend_from_slice(rest);
+        self.command(&all, "", &[])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start binsql")
+    }
+
+    fn command(&self, args: &[&str], project: &str, variables: &[(&str, &str)]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_binsql"));
+        command
             .args(args)
             .env("BINSQL_CONFIG", self.config())
             .env("BINSQL_PROJECT", project)
@@ -79,10 +101,8 @@ impl Fixture {
             .env_remove("BINSQL_DRIVER")
             .env_remove("BINSQL_ERROR_FORMAT")
             .env_remove("BINSQL_CONNECT_TIMEOUT_MS")
-            .envs(variables.iter().copied())
-            .output()
-            .expect("run binsql");
-        Run::new(output)
+            .envs(variables.iter().copied());
+        command
     }
 
     /// The same, with the database named by DSN rather than through the config.
@@ -2223,6 +2243,100 @@ fn a_timed_out_write_does_not_claim_a_rollback() {
     let record = error_record(&run);
     assert_eq!(record["category"], "timeout");
     assert_eq!(record["transaction"], "unknown");
+}
+
+/// A write whose statement runs until the process exits: SQLite's worker
+/// notices a cancel only when it next has a row to hand over, and this
+/// statement yields none, so it keeps the write lock until then.
+fn lock_holder() -> String {
+    format!("INSERT INTO artist (name) SELECT 'x' FROM ({ENDLESS})")
+}
+
+#[test]
+fn a_write_waits_for_a_lock_released_inside_the_busy_timeout() {
+    let fixture = Fixture::new("timeout-lock-released");
+    fixture.seed();
+    let holder = fixture.start(&[
+        "query",
+        &lock_holder(),
+        "--allow-write",
+        "--timeout-ms",
+        "1000",
+    ]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    fixture
+        .direct(&[
+            "query",
+            "INSERT INTO artist (name) VALUES ('y')",
+            "--allow-write",
+        ])
+        .succeeds();
+    let holder = Run::new(holder.wait_with_output().expect("wait for the holder"));
+    holder.failed().stderr_has("timed out after 1000 ms");
+}
+
+#[test]
+fn a_lock_held_past_the_busy_timeout_is_a_database_error() {
+    let fixture = Fixture::new("timeout-lock-held");
+    fixture.seed();
+    // Its own deadline only ends it should the test fail before killing it.
+    let mut holder = fixture.start(&[
+        "query",
+        &lock_holder(),
+        "--allow-write",
+        "--timeout-ms",
+        "20000",
+    ]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let write = "INSERT INTO artist (name) VALUES ('y')";
+
+    // A deadline shorter than the busy timeout ends the wait itself.
+    let started = std::time::Instant::now();
+    let run = fixture
+        .direct(&[
+            "query",
+            write,
+            "--allow-write",
+            "--timeout-ms",
+            "1000",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(error_record(&run)["category"], "timeout");
+
+    // A longer one, or none, meets the driver's five-second busy timeout first.
+    let waiters = [
+        fixture.start(&["query", write, "--allow-write", "--error-format", "json"]),
+        fixture.start(&[
+            "query",
+            write,
+            "--allow-write",
+            "--timeout-ms",
+            "30000",
+            "--error-format",
+            "json",
+        ]),
+    ];
+    for waiter in waiters {
+        let run = Run::new(waiter.wait_with_output().expect("wait for the writer")).failed();
+        let record = error_record(&run);
+        assert_eq!(record["category"], "database");
+        assert_eq!(record["code"], "5");
+    }
+
+    // The lock goes with the process that held it.
+    holder.kill().expect("stop the holder");
+    holder.wait().expect("wait for the holder");
+    fixture
+        .direct(&["query", write, "--allow-write"])
+        .succeeds();
 }
 
 #[test]

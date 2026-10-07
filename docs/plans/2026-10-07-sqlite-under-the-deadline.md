@@ -49,7 +49,7 @@ never name a zsh variable `status`; no `tempfile` crate.
 
 ## Tasks
 
-- [ ] **1. The checks.** `crates/binsql-core/tests/sqlite_steps.rs`: the two
+- [x] **1. The checks.** `crates/binsql-core/tests/sqlite_steps.rs`: the two
   worker tests. `crates/binsql/tests/command_mode.rs`: the lock tests, with a
   helper that starts binsql without waiting for it.
   Verify: `cargo test --workspace`.
