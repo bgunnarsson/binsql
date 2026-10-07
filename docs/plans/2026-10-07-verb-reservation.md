@@ -65,7 +65,7 @@ None found. (No `docs/solutions` in this repo.) Project note: command-mode
     `set("query", .., Scope::Project)` is `Ok` (a move between layers).
   Verify: `cargo test -p binsql-core`.
 
-- [ ] **2. `cli::is_verb` reads the core list.**
+- [x] **2. `cli::is_verb` reads the core list.**
   `crates/binsql/src/cli/mod.rs:46`: delete `const VERBS`; `is_verb` returns
   `binsql_core::RESERVED_NAMES.contains(&name)`. Update the comment at `:65`
   to say "the reserved names in core" rather than "the two lists". Add to

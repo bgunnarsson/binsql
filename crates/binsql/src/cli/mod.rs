@@ -43,14 +43,12 @@ pub fn failed(message: impl Into<String>) -> Failure {
 
 type Result<T> = std::result::Result<T, Failure>;
 
-const VERBS: [&str; 3] = ["query", "exec", "inspect"];
-
 /// Whether the first argument names a command-mode verb.
 ///
 /// Anything else is the TUI's, so `binsql eimskip/prod` still opens a data
 /// source named on the command line rather than being rejected as a bad verb.
 pub fn is_verb(name: &str) -> bool {
-    VERBS.contains(&name)
+    binsql_core::RESERVED_NAMES.contains(&name)
 }
 
 /// Runs a command and returns the process exit code.
@@ -62,8 +60,9 @@ pub async fn main(args: Vec<String>) -> i32 {
         "query" => query::run(rest).await,
         "exec" => exec::run(rest).await,
         "inspect" => inspect::run(rest).await,
-        // Unreachable through `main`, which checks `is_verb` first, but the
-        // two lists have to agree and this is where that would show.
+        // Unreachable through `main`, which checks `is_verb` first, but this
+        // match and the reserved names in core have to agree, and this is
+        // where that would show.
         other => Err(usage(format!("unknown command {other}"))),
     };
 
@@ -354,4 +353,19 @@ pub fn note(options: &Options, message: &str) {
         return;
     }
     eprintln!("{message}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_verbs_are_the_reserved_names() {
+        for verb in ["query", "exec", "inspect"] {
+            assert!(is_verb(verb), "{verb}");
+        }
+        for name in ["source", "eimskip/prod", "--"] {
+            assert!(!is_verb(name), "{name}");
+        }
+    }
 }
