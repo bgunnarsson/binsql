@@ -1,7 +1,7 @@
 ---
 title: "exec under the deadline: whole batch, honest messages"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
