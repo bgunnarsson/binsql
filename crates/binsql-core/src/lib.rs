@@ -25,7 +25,7 @@ pub use adapter::Adapter;
 pub use backend::{Backend, Dialect};
 pub use config::{Config, DataSource};
 pub use error::{Error, Reason, Result, TransactionOutcome};
-pub use schema::{Catalog, ObjectKind, ObjectRef};
+pub use schema::{Catalog, Definition, DefinitionForm, ObjectKind, ObjectRef};
 pub use schema_cache::{Level, SchemaCache, SourceId};
 pub use secrets::{Reference, Resolver};
 pub use session::{ProbeFailure, Session, Stage};

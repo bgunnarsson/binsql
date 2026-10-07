@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::backend::Backend;
 use crate::error::Result;
-use crate::schema::{Catalog, ObjectRef};
+use crate::schema::{Catalog, Definition, DefinitionForm, ObjectRef};
 use crate::sql::{self, Bound};
 use crate::stream::{self, StreamSummary, Streamed};
 use crate::value::{Column, ResultSet};
@@ -36,6 +36,18 @@ pub trait Adapter: Send + Sync {
     async fn objects(&self, catalog: &str, schema: Option<&str>) -> Result<Vec<ObjectRef>>;
 
     async fn columns(&self, object: &ObjectRef) -> Result<Vec<Column>>;
+
+    /// The object's own definition text, as the server stores or prints it.
+    /// binsql never builds one from the columns: a backend that has no text
+    /// for an object says so in the form.
+    ///
+    /// The default is `Unsupported`, for a backend that does not read one yet.
+    async fn definition(&self, _object: &ObjectRef) -> Result<Definition> {
+        Ok(Definition {
+            form: DefinitionForm::Unsupported,
+            text: None,
+        })
+    }
 
     /// Runs one statement, sending its values beside it. `limit` caps the rows
     /// pulled off the wire; the result is flagged truncated when the cap was

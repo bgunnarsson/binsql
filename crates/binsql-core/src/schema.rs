@@ -17,6 +17,28 @@ impl ObjectKind {
     }
 }
 
+/// How a definition's text relates to the object, so a reader knows whether
+/// it holds a whole CREATE statement, only a view's query, or nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DefinitionForm {
+    /// A CREATE statement, as the server stores or prints it.
+    Create,
+    /// Only the query a view selects with.
+    Query,
+    /// binsql does not read a definition for this backend and kind.
+    Unsupported,
+    /// The object exists, but the server gave no text for it.
+    Withheld,
+}
+
+/// One object's own definition text, exactly as the server returned it.
+/// `text` is `None` whenever the form is `Unsupported` or `Withheld`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Definition {
+    pub form: DefinitionForm,
+    pub text: Option<String>,
+}
+
 /// A database, as the tree's second level. `is_current` marks the one the
 /// connection is actually attached to, which is the only one Postgres can read
 /// without reconnecting.

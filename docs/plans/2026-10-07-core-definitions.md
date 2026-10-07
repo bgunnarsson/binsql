@@ -34,16 +34,19 @@ a session used one call at a time never opens a second.
 
 ## Acceptance criteria
 
-- A table and a view each give `Create` with the exact text they were created
-  with, whitespace and case included.
-- An object in an attached catalog gives its own text, not `main`'s.
+- A table and a view each give `Create` with the text SQLite stored: the body
+  exactly as typed, whitespace, case and comments included. SQLite itself
+  rewrites the opening `CREATE TABLE` keywords, and that is passed on as is.
+- An object in an attached catalog gives its own text, not `main`'s. Tested
+  inside the adapter on a one-connection pool, since a session's `ATTACH`
+  can land on a different pooled connection from the next call.
 - After `ALTER TABLE … RENAME`, the text is what SQLite stored, untouched.
 - A missing object is an error, not `Withheld`.
 - All existing tests pass unchanged; clippy is clean.
 
 ## Tasks
 
-- [ ] **1. Definitions in the core.** `schema.rs` types, exported from the
+- [x] **1. Definitions in the core.** `schema.rs` types, exported from the
   crate root; `Adapter::definition` with its default; SQLite's override;
   `Session::definition`; `tests/sqlite_definitions.rs`.
   Verify: `cargo test --workspace`.

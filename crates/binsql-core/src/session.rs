@@ -8,7 +8,7 @@ use crate::adapter::{self, Adapter};
 use crate::backend::{Backend, Dialect};
 use crate::config::{DataSource, mask_dsn};
 use crate::error::{Error, Reason, Result};
-use crate::schema::ObjectRef;
+use crate::schema::{Definition, ObjectRef};
 use crate::secrets::Resolver;
 use crate::sql::{self, Bound};
 use crate::stream::{StreamSummary, Streamed};
@@ -374,6 +374,13 @@ impl Session {
         self.adapter_for(object.catalog.as_deref())
             .await?
             .columns(object)
+            .await
+    }
+
+    pub async fn definition(&self, object: &ObjectRef) -> Result<Definition> {
+        self.adapter_for(object.catalog.as_deref())
+            .await?
+            .definition(object)
             .await
     }
 }

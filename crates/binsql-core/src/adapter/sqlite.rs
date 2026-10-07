@@ -13,7 +13,7 @@ use super::Adapter;
 use super::sqlx_common::{self, Binding, Codec, bind_as_given, decode_as, decode_fallback};
 use crate::backend::Backend;
 use crate::error::{Error, Result};
-use crate::schema::{Catalog, ObjectKind, ObjectRef};
+use crate::schema::{Catalog, Definition, DefinitionForm, ObjectKind, ObjectRef};
 use crate::sql::Bound;
 use crate::stream::{StreamSummary, Streamed};
 use crate::value::{Column, ResultSet, Value};
@@ -154,6 +154,36 @@ impl Adapter for SqliteAdapter {
             .collect()
     }
 
+    async fn definition(&self, object: &ObjectRef) -> Result<Definition> {
+        let catalog = object.catalog.as_deref().unwrap_or("main");
+        let master = Backend::Sqlite
+            .dialect()
+            .quote_qualified(&[catalog, "sqlite_master"]);
+        let sql = format!("SELECT sql FROM {master} WHERE name = ? AND type IN ('table', 'view')");
+
+        let text: Option<String> = sqlx::query_scalar(&sql)
+            .bind(&object.name)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(Error::query)?
+            .ok_or_else(|| {
+                Error::query(anyhow::anyhow!(
+                    "no table or view named {} in {catalog}",
+                    object.name
+                ))
+            })?;
+        Ok(match text {
+            Some(text) => Definition {
+                form: DefinitionForm::Create,
+                text: Some(text),
+            },
+            None => Definition {
+                form: DefinitionForm::Withheld,
+                text: None,
+            },
+        })
+    }
+
     /// There is no server to call off: SQLite runs in this process, so dropping
     /// the stream is the whole of a cancel. The worker thread notices only when
     /// it next hands over a row, so a statement that returns none until it ends
@@ -241,4 +271,43 @@ fn column_type(row: &SqliteRow, idx: usize) -> String {
         .get(idx)
         .map(|c| c.type_info().name().to_ascii_uppercase())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An `ATTACH` holds for one connection only, so the pool has one.
+    #[tokio::test]
+    async fn an_attached_catalog_gives_its_own_text() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open an in-memory database");
+        for sql in [
+            "CREATE TABLE t (main_only INTEGER)",
+            "ATTACH DATABASE ':memory:' AS other",
+            "CREATE TABLE other.t (other_only TEXT)",
+        ] {
+            sqlx::raw_sql(sql).execute(&pool).await.expect("set up");
+        }
+        let adapter = SqliteAdapter {
+            pool,
+            version: None,
+        };
+        let table =
+            |catalog: &str| ObjectRef::new(Some(catalog.to_string()), None, "t", ObjectKind::Table);
+
+        let other = adapter.definition(&table("other")).await.expect("other");
+        assert_eq!(
+            other.text.as_deref(),
+            Some("CREATE TABLE t (other_only TEXT)")
+        );
+        let main = adapter.definition(&table("main")).await.expect("main");
+        assert_eq!(
+            main.text.as_deref(),
+            Some("CREATE TABLE t (main_only INTEGER)")
+        );
+    }
 }
