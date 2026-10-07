@@ -1,5 +1,6 @@
-//! A Key Vault read that runs out of time must not leave `az` behind. This is
-//! the only test here because it puts a stub `az` on the process's `PATH`.
+//! A Key Vault read hands back what `az` printed, and one that runs out of time
+//! must not leave `az` behind. This is the only test here because it puts a
+//! stub `az` on the process's `PATH`.
 #![cfg(unix)]
 
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -36,10 +37,16 @@ fn dropping_a_vault_read_kills_az() {
     std::fs::write(
         &stub,
         format!(
-            // Like the real `az`, the stub starts the process doing the work
-            // without `exec`, so the sleep is a grandchild of the test. The
-            // pid is written whole, so a reader never sees half of it.
-            "#!/bin/sh\nsleep 30 &\necho $! > '{pid}.part'\nmv '{pid}.part' '{pid}'\nwait\n",
+            // Two secrets answer at once. For any other, like the real `az`,
+            // the stub starts the process doing the work without `exec`, so
+            // the sleep is a grandchild of the test. The pid is written whole,
+            // so a reader never sees half of it.
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *' ready '*) echo '{{\"value\": \"sqlite://ready.db\"}}'; exit 0 ;;\n\
+             *' denied '*) echo 'Please run az login to setup account.' >&2; exit 1 ;;\n\
+             esac\n\
+             sleep 30 &\necho $! > '{pid}.part'\nmv '{pid}.part' '{pid}'\nwait\n",
             pid = pidfile.display()
         ),
     )
@@ -56,6 +63,14 @@ fn dropping_a_vault_read_kills_az() {
         .build()
         .expect("build a runtime");
     let resolver = Resolver::new(Cache::new(&dir, Duration::ZERO), None);
+
+    let ready = runtime.block_on(resolver.resolve_fresh("keyvault://kv-demo/ready"));
+    assert_eq!(ready.expect("the stub answers"), "sqlite://ready.db");
+    let denied = runtime
+        .block_on(resolver.resolve_fresh("keyvault://kv-demo/denied"))
+        .expect_err("the stub refuses");
+    assert!(denied.to_string().contains("az login"), "{denied}");
+
     // The read is driven until the stub has recorded its sleep, then dropped.
     let pid = runtime.block_on(async {
         let read = resolver.resolve_fresh("keyvault://kv-demo/app-dsn");
