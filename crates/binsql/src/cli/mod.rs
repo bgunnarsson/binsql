@@ -423,6 +423,13 @@ OUTPUT
         --no-header       leave out the header row
         --no-footer       leave out the trailing row count
 
+ERRORS
+        --error-format NAME
+                          text (default) or json: one JSON line on stderr
+                          with a category and a phase, the message redacted
+
+    BINSQL_ERROR_FORMAT says the same through the environment.
+
 QUERY
     -f, --file FILE       read the SQL from a file, or from stdin for `-`
         --arg VALUE       fill the next ? placeholder; repeat, in order

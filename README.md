@@ -364,6 +364,45 @@ Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".
 `⌃C` cancels the running query the same way it does in the TUI.
 
+### Structured errors
+
+`--error-format json`, or `BINSQL_ERROR_FORMAT=json`, turns a failure into one
+compact JSON line on stderr in place of the `error: …` text, so an agent can
+branch on what went wrong without parsing a sentence. The flag beats the
+variable, and an empty variable counts as unset. Stdout and the exit code are
+the same either way.
+
+```json
+{"type":"error","schema":1,"exit":1,"category":"database","phase":"execute","message":"no such table: artists"}
+```
+
+| Field | |
+| --- | --- |
+| `exit` | the exit code the process ends with |
+| `category` | `usage`, `source`, `config`, `secret`, `connect`, `refused`, `database`, `cancelled`, `io` or `other` |
+| `phase` | `args`, `input`, `config`, `connect`, `prepare`, `execute` or `output` |
+| `message` | what went wrong, in one sentence |
+| `statement` | the 1-based statement that failed or was refused, when there is one |
+| `completed` | how many statements before it were kept, under `exec --no-tx` |
+
+`category` says what kind of thing failed — a missing saved data source is
+`source`, a vault or keychain that would not hand over a secret is `secret`, a
+statement turned away by `query` or by `exec` without `--force` is `refused` —
+and `phase` says how far binsql had got. A note that would have gone to stderr
+comes as `{"type":"notice","schema":1,"message":…}`, and `-o none` still hides
+it. A bad `--error-format` value is reported as text, since there is no
+agreed format yet to report it in.
+
+`schema` is the record's revision. Adding a field or a category keeps it at
+`1`; renaming or removing one, or changing what one means, raises it. Read a
+category you do not know as `other`.
+
+The message is redacted: a stored connection string, the password in
+`scheme://user:pass@`, the value of `password=`, `pwd=` and `accesstoken=`, and
+anything shaped like a JWT become `****`. The SQL is left out — the text form
+names the statement, the record only counts it. A message from the server is
+passed on as it came, though, and can quote a value from the data.
+
 ### Data sources
 
 `binsql source list` prints every saved data source, user and project alike, and
