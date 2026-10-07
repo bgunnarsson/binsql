@@ -14,6 +14,7 @@ mod source;
 
 use std::io::{IsTerminal, Read, Write};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use binsql_core::{Backend, DataSource, Resolver, Session, Value, Workspace};
@@ -993,6 +994,7 @@ pub fn statement_budget(args: &Args) -> Result<Option<u64>> {
 pub struct Stop {
     cancel: CancellationToken,
     deadline: Option<(u64, Instant)>,
+    fired: AtomicBool,
 }
 
 impl Stop {
@@ -1000,6 +1002,7 @@ impl Stop {
         Stop {
             cancel: cancel_on_interrupt(),
             deadline: timeout.map(|ms| (ms, Instant::now() + Duration::from_millis(ms))),
+            fired: AtomicBool::new(false),
         }
     }
 
@@ -1011,10 +1014,10 @@ impl Stop {
     /// that nothing more is started. The token is cancelled with it.
     pub fn overdue(&self, known: &str) -> Option<Failure> {
         let (ms, deadline) = self.deadline?;
-        if Instant::now() < deadline || self.cancel.is_cancelled() {
+        if Instant::now() < deadline || self.interrupted() {
             return None;
         }
-        self.cancel.cancel();
+        self.expire();
         Some(timed_out(ms, known))
     }
 
@@ -1038,10 +1041,10 @@ impl Stop {
             () = tokio::time::sleep_until(deadline) => {}
         }
         // A ⌃C the work has not answered by the deadline is still the ⌃C's.
-        if self.cancel.is_cancelled() {
+        if self.interrupted() {
             return work.await.map_err(core);
         }
-        self.cancel.cancel();
+        self.expire();
         let timed_out = timed_out(ms, known);
         match tokio::time::timeout_at(deadline + grace, work).await {
             Ok(Ok(done)) => Ok(done),
@@ -1059,6 +1062,16 @@ impl Stop {
                 grace.as_millis()
             ))),
         }
+    }
+
+    /// The token was cancelled by a ⌃C, not by the deadline.
+    fn interrupted(&self) -> bool {
+        self.cancel.is_cancelled() && !self.fired.load(Ordering::Relaxed)
+    }
+
+    fn expire(&self) {
+        self.fired.store(true, Ordering::Relaxed);
+        self.cancel.cancel();
     }
 }
 
@@ -1246,6 +1259,7 @@ mod tests {
         let stop = |deadline| Stop {
             cancel: CancellationToken::new(),
             deadline,
+            fired: AtomicBool::new(false),
         };
         assert!(stop(None).overdue("known").is_none());
         let ahead = stop(Some((60_000, Instant::now() + Duration::from_secs(60))));
@@ -1255,6 +1269,10 @@ mod tests {
         let failure = past.overdue("known").expect("overdue");
         assert_eq!(failure.category, Category::Timeout);
         assert!(past.cancel.is_cancelled());
+        assert!(
+            past.overdue("known").is_some(),
+            "the deadline's own cancel is no ⌃C"
+        );
 
         // A ⌃C got there first, so the work answers it as it always has.
         let interrupted = stop(Some((0, Instant::now())));
@@ -1271,6 +1289,7 @@ mod tests {
         let stop = Stop {
             cancel: CancellationToken::new(),
             deadline: Some((10, Instant::now() + Duration::from_millis(10))),
+            fired: AtomicBool::new(false),
         };
         stop.cancel.cancel();
         // The work answers the ⌃C only after the deadline has passed.
@@ -1282,6 +1301,35 @@ mod tests {
             .block_on(stop.run(GRACE, "known", late))
             .expect_err("cancelled");
         assert_ne!(failure.category, Category::Timeout);
+    }
+
+    #[test]
+    fn work_that_ends_in_the_grace_leaves_the_deadline_fired() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build a runtime");
+        let stop = Stop {
+            cancel: CancellationToken::new(),
+            deadline: Some((10, Instant::now() + Duration::from_millis(10))),
+            fired: AtomicBool::new(false),
+        };
+        let finishing = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok::<_, binsql_core::Error>(())
+        };
+        runtime
+            .block_on(stop.run(GRACE, "known", finishing))
+            .expect("done inside the grace");
+
+        // What comes next is not started, and is no ⌃C if it is.
+        let next = stop.overdue("known").expect("overdue");
+        assert_eq!(next.category, Category::Timeout);
+        let hanging = std::future::pending::<std::result::Result<(), binsql_core::Error>>();
+        let failure = runtime
+            .block_on(stop.run(Duration::from_millis(50), "known", hanging))
+            .expect_err("timed out");
+        assert_eq!(failure.category, Category::Timeout);
     }
 
     #[test]
