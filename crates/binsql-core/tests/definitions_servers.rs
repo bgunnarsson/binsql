@@ -7,6 +7,7 @@
 //!
 //! ```sh
 //! BINSQL_TEST_POSTGRES=postgres://… \
+//! BINSQL_TEST_MYSQL=mysql://… \
 //!     cargo test -p binsql-core --test definitions_servers -- --ignored
 //! ```
 
@@ -102,4 +103,42 @@ async fn postgres_views_give_their_query_and_tables_none() {
     .await;
     run(&session, "DROP VIEW public.binsql_definition_v").await;
     run(&session, "DROP TABLE public.binsql_definition").await;
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL server in BINSQL_TEST_MYSQL"]
+async fn mysql_tables_and_views_give_show_create() {
+    let session = open("BINSQL_TEST_MYSQL", Backend::MySql).await;
+    run(&session, "DROP VIEW IF EXISTS binsql_definition_v").await;
+    run(&session, "DROP TABLE IF EXISTS binsql_definition").await;
+    run(
+        &session,
+        "CREATE TABLE binsql_definition (id int PRIMARY KEY)",
+    )
+    .await;
+    run(
+        &session,
+        "CREATE VIEW binsql_definition_v AS SELECT id FROM binsql_definition",
+    )
+    .await;
+
+    for (name, kind, starts) in [
+        ("binsql_definition", ObjectKind::Table, "CREATE TABLE"),
+        ("binsql_definition_v", ObjectKind::View, "CREATE "),
+    ] {
+        let object = ObjectRef::new(None, None, name, kind);
+        let found = session
+            .definition(&object)
+            .await
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(found.form, DefinitionForm::Create, "{name}");
+        let text = found.text.expect("SHOW CREATE text");
+        assert!(text.starts_with(starts), "{name}: {text}");
+        assert!(text.contains("binsql_definition"), "{name}: {text}");
+    }
+    let missing = ObjectRef::new(None, None, "binsql_definition_absent", ObjectKind::Table);
+    assert!(session.definition(&missing).await.is_err());
+
+    run(&session, "DROP VIEW binsql_definition_v").await;
+    run(&session, "DROP TABLE binsql_definition").await;
 }

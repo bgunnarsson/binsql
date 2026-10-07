@@ -16,7 +16,7 @@ use super::sqlx_common::{
 };
 use crate::backend::Backend;
 use crate::error::{Error, Result};
-use crate::schema::{Catalog, ObjectKind, ObjectRef};
+use crate::schema::{Catalog, Definition, DefinitionForm, ObjectKind, ObjectRef};
 use crate::sql::{self, Bound};
 use crate::stream::{StreamSummary, Streamed};
 use crate::value::{Column, ResultSet, Value};
@@ -146,6 +146,16 @@ fn parse_go_dsn(dsn: &str) -> Option<MySqlConnectOptions> {
     Some(options)
 }
 
+/// The `SHOW CREATE` statement for an object and the column its text is in.
+/// The kind picks both: the server names the column after what it was asked.
+fn show_create(object: &ObjectRef) -> (String, &'static str) {
+    let name = object.qualified(&Backend::MySql.dialect());
+    match object.kind {
+        ObjectKind::View => (format!("SHOW CREATE VIEW {name}"), "Create View"),
+        ObjectKind::Table => (format!("SHOW CREATE TABLE {name}"), "Create Table"),
+    }
+}
+
 #[async_trait]
 impl Adapter for MySqlAdapter {
     fn backend(&self) -> Backend {
@@ -259,6 +269,28 @@ impl Adapter for MySqlAdapter {
                 })
             })
             .collect()
+    }
+
+    async fn definition(&self, object: &ObjectRef) -> Result<Definition> {
+        let (statement, column) = show_create(object);
+        let text = sqlx::query(&statement)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(Error::query)?
+            .map(|row| row.try_get::<Option<String>, _>(column))
+            .transpose()
+            .map_err(Error::query)?
+            .flatten();
+        Ok(match text {
+            Some(text) => Definition {
+                form: DefinitionForm::Create,
+                text: Some(text),
+            },
+            None => Definition {
+                form: DefinitionForm::Withheld,
+                text: None,
+            },
+        })
     }
 
     async fn run(
@@ -384,4 +416,32 @@ fn column_type(row: &MySqlRow, idx: usize) -> String {
         .get(idx)
         .map(|c| c.type_info().name().to_ascii_uppercase())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_with_a_backtick_and_a_dot_is_one_identifier() {
+        let object = ObjectRef::new(Some("shop".into()), None, "odd`na.me", ObjectKind::Table);
+        assert_eq!(
+            show_create(&object).0,
+            "SHOW CREATE TABLE `shop`.`odd``na.me`"
+        );
+    }
+
+    #[test]
+    fn the_kind_picks_the_statement_and_its_column() {
+        let view = ObjectRef::new(None, None, "v", ObjectKind::View);
+        assert_eq!(
+            show_create(&view),
+            ("SHOW CREATE VIEW `v`".to_string(), "Create View")
+        );
+        let table = ObjectRef::new(None, None, "t", ObjectKind::Table);
+        assert_eq!(
+            show_create(&table),
+            ("SHOW CREATE TABLE `t`".to_string(), "Create Table")
+        );
+    }
 }

@@ -45,7 +45,7 @@ the `Create View` column of `SHOW CREATE VIEW`.
 
 ## Tasks
 
-- [ ] **1. `MySqlAdapter::definition`.** Override `definition` in
+- [x] **1. `MySqlAdapter::definition`.** Override `definition` in
   `adapter/mysql.rs`; a `show_create(object)` function gives the statement
   and the column. Unit tests of quoting and of the column by kind; an ignored
   live test in `tests/definitions_servers.rs`.
