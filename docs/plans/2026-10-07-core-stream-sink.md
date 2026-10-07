@@ -1,7 +1,7 @@
 ---
 title: "Core streams rows into a bounded sink"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
