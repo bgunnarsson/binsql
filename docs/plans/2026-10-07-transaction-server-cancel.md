@@ -26,10 +26,10 @@ as they are.
   statement running on it from another. SQLite has none.
 - The single-statement path moves onto the same hook, so the two paths cannot
   drift apart; what it sends is unchanged.
-- The connection is named before `BEGIN`, on the connection the transaction
-  then runs on, so a failed lookup cannot abort the transaction. A lookup
-  that fails leaves the batch running without a server stop, as it does for a
-  single statement.
+- The connection is named inside the transaction, after `BEGIN`, so a pooling
+  proxy cannot hand the lookup to another server session (changed in review;
+  the plan first named it before `BEGIN`). A lookup that fails leaves the batch
+  without a server stop, as it does for a single statement.
 - The stop is sent only for a statement the cancel interrupted, and before
   the rollback, since the rollback cannot start until the statement ends. A
   cancel that lands after the last statement has nothing running to stop.
@@ -54,7 +54,7 @@ never name a zsh variable `status`; no `tempfile` crate.
 ## Tasks
 
 - [x] **1. The hook.** `sqlx_common.rs`: `Interrupt`, the transaction named
-  before `BEGIN` and the stop sent before the rollback, the single-statement
+  once it has begun and the stop sent before the rollback, the single-statement
   path shared. `postgres.rs`, `mysql.rs`: their `Interrupt`. `sqlite.rs`:
   none. `tests/cancel_servers.rs`: the live tests.
   Verify: `cargo test --workspace`; the live tests compile.

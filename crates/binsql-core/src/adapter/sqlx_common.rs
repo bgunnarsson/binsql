@@ -122,12 +122,13 @@ where
     for<'q> <DB as Database>::Arguments<'q>: IntoArguments<'q, DB>,
 {
     let mut connection = pool.acquire().await.map_err(Error::query)?;
-    // Named before `BEGIN`: on Postgres a lookup that failed inside the
-    // transaction would abort it.
-    let id = identify(&mut *connection, codec).await;
     let mut transaction = sqlx::Connection::begin(&mut *connection)
         .await
         .map_err(Error::query)?;
+    // Named inside the transaction, because a pooling proxy can hand an
+    // autocommit lookup to a server session other than the batch's. A lookup
+    // that fails here means a connection the batch would fail on anyway.
+    let id = identify(&mut *transaction, codec).await;
     let mut results = Vec::with_capacity(statements.len());
 
     for (index, statement) in statements.iter().enumerate() {

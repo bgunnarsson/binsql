@@ -779,10 +779,10 @@ TDS's attention signal, so the connection is dropped and replaced, which the
 server reads as a disconnect and abandons the batch for. SQLite runs in this
 process and has no server to call off.
 
-The same holds inside a transaction, as `exec` runs a batch. The connection is
-named before `BEGIN`, so a cancelled statement is stopped on the server first and
-the rollback follows once it has let go; otherwise the rollback would queue
-behind a statement still running.
+The same holds inside a transaction, as `exec` runs a batch. The transaction
+names its server session as it begins, so a cancelled statement is stopped on
+the server first and the rollback follows once it has let go; otherwise the
+rollback would queue behind a statement still running.
 
 A `Session` is a data source, not a database. Backends that cannot read across
 their own databases on one connection — Postgres — grow a second connection
