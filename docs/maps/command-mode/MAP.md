@@ -52,6 +52,8 @@ changes to `query`, `exec` and `inspect`.
 
 - [17](17-safe-plan-support.md): All four backends plan without executing, but `EXPLAIN ANALYZE <write>` passes today's guards and runs on PostgreSQL and MySQL; fix the classification (22), then add estimated plans only, as each backend's native payload, shaped in 23.
 
+- [19](19-schema-context-contract.md): Inspect gains one opt-in switch, `--columns`: flat rows of every selected object's columns with catalog, schema, name and kind beside today's five fields, through the existing renderer; keys, relationships, indexes, generated columns and type limits are later additions.
+
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
@@ -70,6 +72,12 @@ changes to `query`, `exec` and `inspect`.
 ## Follow-up tickets from 04
 
 - [19 — Schema context contract](19-schema-context-contract.md): settle additive one-call object/column context and the scope of new metadata acquisition.
+
+## Follow-up tickets from 19
+
+- [24 — Column order and nullability](24-column-order-nullability.md): order column queries, surface decode failures, fix SQL Server nullability.
+- [25 — inspect --columns](25-inspect-columns.md): every object's columns with identity in one call.
+- [26 — Exact name under --columns](26-inspect-columns-exact-name.md): one object by exact name, ambiguity is exit 2.
 
 ## Follow-up tickets from 07
 
