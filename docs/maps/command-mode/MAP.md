@@ -44,18 +44,32 @@ changes to `query`, `exec` and `inspect`.
 
 ## Decisions so far
 
-None yet.
+- [03](03-agent-ergonomics-survey.md): Prioritize data-source discovery, structured errors, bounded waits and richer schema context; add opt-in streaming, capability discovery and row assertions, and decide DDL and safe plans separately while preserving existing defaults and the query/exec/inspect split.
+
+## Follow-up tickets from 03
+
+- [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
+- [11 — Connect budget](11-connect-budget.md): settle the connection deadline after 09.
+- [12 — Statement budget](12-statement-budget.md): settle execution and cleanup deadlines.
+- [13 — Streaming contract](13-streaming-contract.md): settle export and partial-output semantics.
+- [14 — Capability probe](14-capability-probe.md): build an offline JSON manifest.
+- [15 — Require rows](15-require-rows.md): build a narrow opt-in query assertion.
+- [16 — DDL output](16-ddl-output.md): settle definition fidelity after 04.
+- [17 — Safe plan support](17-safe-plan-support.md): research backends and EXPLAIN classification.
 
 ## Not yet specified
 
 - **Building the data-source commands**: these become task tickets once 08
   settles their shape. Some may first need logic moved from the app into the
   core, depending on 07.
-- **Agent-ergonomics features**: each one 03 and 04 rank as worth having
-  becomes a ticket of its own (a grilling where its shape is the person's
-  call, a task where it is not).
-- **Errors a program can parse**: whether failures get a structured form on
-  stderr, and how that sits beside the exit codes. This waits on 03.
+- **Richer schema context**: 03 ranks one-call schema context as worth having;
+  its shape and build tickets wait on 04's per-backend inventory.
+- **Estimated-plan implementation**: 03 identifies value and an existing
+  EXPLAIN safety concern; shape and build tickets wait on 17's backend audit
+  and 05's namespace decision. Runtime-plan policy needs the person's call.
+- **Ergonomics implementation**: build tickets follow the contract decisions
+  in 10 (errors), 11 (connect budget), 12 (statement budget), 13 (streaming)
+  and 16 (DDL). Capability discovery and row assertions are tasks 14 and 15.
 - **Key Vault credentials beyond `az`**: whether an agent ever runs where
   `az login` is not available, and what binsql should do then. This waits on
   09.
@@ -69,3 +83,7 @@ None yet.
 - Basing anything on v2's `binsql conn`. The commands are designed fresh.
 - Breaking changes to existing verbs, flags, exit codes or output formats.
   Scripts already depend on them. Additions only.
+
+- Shell completions for this map: 03 found stronger agent needs in capability
+  discovery and saved-source listing; no interactive shell requirement was
+  established. Revisit in a separate map if requested.
