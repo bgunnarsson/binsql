@@ -59,7 +59,7 @@ the CLI takes `--driver sqlite` with a plain path for a DSN.
 
 ## Tasks
 
-- [ ] **1. The switch and the writer.** `cli/stream.rs`: the writer on
+- [x] **1. The switch and the writer.** `cli/stream.rs`: the writer on
   `spawn_blocking`, 64 KiB `BufWriter`, flushed when the channel is empty.
   `cli/query.rs`: `stream` in `SWITCHES`, the format and write refusals before
   anything is sent, the note, `--require-rows`.

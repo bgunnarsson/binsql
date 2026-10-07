@@ -7,13 +7,14 @@
 use binsql_core::sql;
 
 use super::render;
+use super::stream;
 use super::{
     Category, GRACE, NOTHING_CHANGED, Phase, Result, Stop, Transaction, bind_values, connect,
     failed, output, parse, print, read_sql, statement_budget, usage,
 };
 
 pub(super) const VALUES: &[&str] = &["file", "f", "limit", "arg"];
-pub(super) const SWITCHES: &[&str] = &["allow-write", "plan", "require-rows"];
+pub(super) const SWITCHES: &[&str] = &["allow-write", "plan", "require-rows", "stream"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     let args = parse(args, VALUES, SWITCHES)?;
@@ -31,6 +32,18 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     if require_rows && args.is_set(&["plan"]) {
         return Err(usage(
             "--require-rows checks what a query returns, and a plan always has rows; drop one",
+        ));
+    }
+
+    let streaming = args.is_set(&["stream"]);
+    if streaming && !stream::streams(options.format) {
+        return Err(usage(
+            "--stream writes jsonl, csv or tsv, one record per row; pick one with -o",
+        ));
+    }
+    if streaming && args.is_set(&["plan"]) {
+        return Err(usage(
+            "--stream writes rows, and a plan is one document; drop one",
         ));
     }
 
@@ -86,6 +99,22 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         return print(&render::rows(&result, &options));
     }
 
+    // A write's rows would be on stdout before anyone knew whether it
+    // committed, so streaming refuses it outright.
+    if streaming && statement.kind.mutates() {
+        return Err(usage(format!(
+            "--stream reads only; drop --stream to run a {} statement, or use `binsql exec`",
+            statement.kind.label(),
+        ))
+        .category(Category::Refused)
+        .phase(Phase::Prepare)
+        .statement(1)
+        .context(format!(
+            "statement: {}",
+            sql::summarize(&statement.sql, backend, 80)
+        )));
+    }
+
     if statement.kind.mutates() && !args.is_set(&["allow-write"]) {
         return Err(usage(format!(
             "refusing to run a {} statement with `query`: use `binsql exec`, or --allow-write",
@@ -102,6 +131,11 @@ pub async fn run(args: Vec<String>) -> Result<()> {
 
     let bound = sql::bind(std::slice::from_ref(statement), &params, backend)
         .map_err(|error| usage(format!("{error} — one --arg per ?")).phase(Phase::Prepare))?;
+
+    if streaming {
+        let rows = stream::query(&session, &bound[0], limit, &stop, &options).await?;
+        return require(require_rows, rows);
+    }
 
     // A write let through by --allow-write may have landed before the cancel
     // did, so its timeout cannot promise a rollback, and says so in JSON too.
@@ -124,9 +158,13 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         })?;
 
     print(&render::rows(&result, &options))?;
-    // Checked after printing, so the result reads the same whichever way the
-    // assertion goes.
-    if require_rows && result.rows.is_empty() {
+    require(require_rows, result.rows.len())
+}
+
+/// Checked after printing, so the result reads the same whichever way the
+/// assertion goes.
+fn require(require_rows: bool, rows: usize) -> Result<()> {
+    if require_rows && rows == 0 {
         return Err(failed("the query returned no rows (--require-rows)")
             .category(Category::Assertion)
             .phase(Phase::Output));

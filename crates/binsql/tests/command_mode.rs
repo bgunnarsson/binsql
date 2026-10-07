@@ -2564,3 +2564,175 @@ fn inspect_refuses_a_timeout_that_is_not_a_number() {
         .direct(&["inspect", "--timeout-ms", "abc"])
         .refused();
 }
+
+/// Five rows covering what CSV quotes, what JSON keeps as null, and two
+/// columns with the same name.
+const FIVE: &str = "SELECT n, s AS n FROM (\
+     SELECT 1 AS n, 'plain' AS s UNION ALL SELECT 2, 'a,b' UNION ALL SELECT 3, NULL \
+     UNION ALL SELECT 4, 'say \"hi\"' UNION ALL SELECT 5, 'two\nlines') ORDER BY 1";
+
+#[test]
+fn a_stream_prints_what_the_buffered_query_prints() {
+    let fixture = Fixture::new("stream-identity");
+    for format in ["jsonl", "csv", "tsv"] {
+        for extra in [&[][..], &["--limit", "2"], &["--no-header"]] {
+            let mut buffered = vec![FIVE, "-o", format];
+            buffered.extend_from_slice(extra);
+            let mut streamed = buffered.clone();
+            streamed.push("--stream");
+            let buffered = fixture.direct(&args("query", &buffered)).succeeds();
+            let streamed = fixture.direct(&args("query", &streamed)).succeeds();
+            assert_eq!(streamed.stdout, buffered.stdout, "{format} {extra:?}");
+        }
+
+        let none = "SELECT 1 AS n WHERE 0";
+        let buffered = fixture
+            .direct(&args("query", &[none, "-o", format]))
+            .succeeds();
+        let streamed = fixture
+            .direct(&args("query", &[none, "-o", format, "--stream"]))
+            .succeeds();
+        assert_eq!(buffered.stdout, "", "{format}");
+        assert_eq!(streamed.stdout, "", "{format}");
+    }
+}
+
+#[test]
+fn a_stream_refuses_a_format_it_cannot_write_a_record_at_a_time() {
+    let fixture = Fixture::new("stream-formats");
+    fixture
+        .direct(&args("query", &["SELECT 1", "--stream", "-o", "json"]))
+        .refused()
+        .stderr_has("jsonl, csv or tsv");
+    fixture
+        .direct(&args("query", &["SELECT 1", "--stream"]))
+        .refused()
+        .stderr_has("jsonl, csv or tsv");
+    fixture
+        .direct(&args(
+            "query",
+            &["SELECT 1", "--stream", "-o", "csv", "--plan"],
+        ))
+        .refused();
+}
+
+#[test]
+fn a_stream_refuses_a_write_even_when_writes_are_allowed() {
+    let fixture = Fixture::new("stream-write");
+    fixture.seed();
+    fixture
+        .direct(&args(
+            "query",
+            &[
+                "INSERT INTO artist (name) VALUES ('Plaid') RETURNING id",
+                "--stream",
+                "-o",
+                "csv",
+                "--allow-write",
+            ],
+        ))
+        .refused()
+        .stderr_has("--stream reads only");
+    fixture
+        .direct(&args(
+            "query",
+            &["SELECT count(*) FROM artist", "-o", "raw"],
+        ))
+        .succeeds()
+        .stdout_has("3");
+}
+
+#[test]
+fn a_stream_cut_short_by_its_limit_says_so_on_stderr() {
+    let fixture = Fixture::new("stream-limit");
+    let run = fixture
+        .direct(&args(
+            "query",
+            &[FIVE, "-o", "jsonl", "--stream", "--limit", "2"],
+        ))
+        .succeeds()
+        .stderr_has("stopped at --limit 2; more rows were available");
+    assert_eq!(run.stdout.lines().count(), 2);
+
+    let run = fixture
+        .direct(&args(
+            "query",
+            &[FIVE, "-o", "jsonl", "--stream", "--limit", "5"],
+        ))
+        .succeeds();
+    assert_eq!(run.stdout.lines().count(), 5);
+    assert_eq!(run.stderr, "");
+}
+
+#[test]
+fn a_stream_that_fails_part_way_keeps_the_whole_records_it_wrote() {
+    let fixture = Fixture::new("stream-fails");
+    let run = fixture
+        .direct(&args(
+            "query",
+            &[
+                "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 5) \
+                 SELECT CASE WHEN n = 4 THEN abs(-9223372036854775808) ELSE n END AS v FROM r",
+                "-o",
+                "jsonl",
+                "--stream",
+            ],
+        ))
+        .failed()
+        .stderr_has("error:");
+    assert_eq!(run.stdout, "{\"v\":1}\n{\"v\":2}\n{\"v\":3}\n");
+}
+
+#[test]
+fn a_stream_whose_reader_goes_away_ends_cleanly() {
+    use std::io::BufRead;
+
+    let fixture = Fixture::new("stream-pipe");
+    let mut child = fixture.start(&[
+        "query",
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) SELECT n FROM r",
+        "-o",
+        "csv",
+        "--stream",
+    ]);
+    let mut reader = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("read the header");
+    assert_eq!(line, "n\n");
+    drop(reader);
+
+    let started = std::time::Instant::now();
+    while child.try_wait().expect("look at binsql").is_none() {
+        if started.elapsed() > std::time::Duration::from_secs(10) {
+            let _ = child.kill();
+            panic!("binsql kept running after its reader went away");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    Run::new(child.wait_with_output().expect("wait for binsql")).succeeds();
+}
+
+#[test]
+fn a_stream_still_checks_for_rows() {
+    let fixture = Fixture::new("stream-require-rows");
+    fixture
+        .direct(&args(
+            "query",
+            &[
+                "SELECT 1 AS n WHERE 0",
+                "-o",
+                "csv",
+                "--stream",
+                "--require-rows",
+            ],
+        ))
+        .failed()
+        .stderr_has("--require-rows");
+    fixture
+        .direct(&args(
+            "query",
+            &["SELECT 1 AS n", "-o", "csv", "--stream", "--require-rows"],
+        ))
+        .succeeds()
+        .stdout_has("n\n1\n");
+}

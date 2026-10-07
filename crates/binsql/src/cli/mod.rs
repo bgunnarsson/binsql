@@ -11,6 +11,7 @@ mod inspect;
 mod query;
 mod render;
 mod source;
+mod stream;
 
 use std::io::{IsTerminal, Read, Write};
 use std::sync::OnceLock;
