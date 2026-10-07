@@ -2,9 +2,9 @@
 title: Can the CLI manage data sources through the core as the TUI does, or is that logic locked in the app?
 kind: research
 mode: afk
-status: open
+status: claimed
 blocked_by: []
-claimed_by:
+claimed_by: lead
 ---
 
 ## Question

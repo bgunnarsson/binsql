@@ -2,9 +2,9 @@
 title: Which estimated plans can binsql expose safely?
 kind: research
 mode: afk
-status: open
+status: claimed
 blocked_by: [3]
-claimed_by:
+claimed_by: lead
 ---
 
 ## Question

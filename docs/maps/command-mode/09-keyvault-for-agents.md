@@ -2,9 +2,9 @@
 title: Where does Key Vault resolution get in an agent's way today?
 kind: research
 mode: afk
-status: open
+status: claimed
 blocked_by: []
-claimed_by:
+claimed_by: lead
 ---
 
 ## Question

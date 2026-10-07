@@ -2,9 +2,9 @@
 title: What additive one-call schema context should inspect expose?
 kind: research
 mode: afk
-status: open
+status: claimed
 blocked_by: [3, 4, 5]
-claimed_by:
+claimed_by: lead
 ---
 
 ## Question
