@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use ratatui::layout::Rect;
 
 use binsql_core::schema_cache::{Key, Level};
-use binsql_core::secrets::keychain;
+use binsql_core::secrets::keychain::Keychain;
 use binsql_core::source::Saved;
 use binsql_core::{
     Catalog, Column, Error, ObjectKind, ObjectRef, ResultSet, SchemaCache, Session, SourceId,
@@ -986,47 +986,15 @@ impl App {
     /// Files the secret, writes the config and opens the connection. Errors
     /// come back rather than being reported, so the form can stay up holding
     /// what was typed.
-    ///
-    /// The credential store is written before the config, so a config can never
-    /// end up naming a secret that was never stored.
     pub fn save_data_source(&mut self, saved: Saved) -> Result<(), String> {
-        let Saved {
-            id,
-            source,
-            secret,
-            previous,
-            scope,
-        } = saved;
-        let renamed_from = previous.filter(|previous| *previous != id);
-        // Before the secret, so a refused name files nothing under it.
-        self.config
-            .check_new_id(&id)
-            .map_err(|error| error.to_string())?;
-
-        match &secret {
-            Some(secret) => keychain::set(&id, secret).map_err(|error| error.to_string())?,
-            // Nothing new to file, so a rename carries the existing entry
-            // across rather than leaving the new name pointing at nothing.
-            None if keychain::is_reference(&source.dsn) => {
-                if let Some(from) = &renamed_from {
-                    keychain::rename(from, &id).map_err(|error| error.to_string())?;
-                }
-            }
-            None => {}
-        }
-
+        let id = saved.id.clone();
+        let renamed_from = saved.previous.clone().filter(|previous| *previous != id);
         let is_new = self.config.get(&id).is_none();
         self.config
-            .set(&id, source, scope)
+            .save(saved, &Keychain)
             .map_err(|error| error.to_string())?;
         if let Some(from) = &renamed_from {
-            // Never through `remove_data_source`: the old name's secret has
-            // either been carried across or superseded by the one just filed,
-            // so deleting it would take the live one.
             self.sessions.remove(from);
-            self.config
-                .remove(from)
-                .map_err(|error| error.to_string())?;
             self.tree.remove_source(from);
         }
 
@@ -1043,38 +1011,27 @@ impl App {
 
     pub fn remove_data_source(&mut self, name: &str) {
         self.sessions.remove(name);
-        // Both read before the config drops the entry, since both are derived
-        // from the connection string it is about to take away.
-        let secret = self
-            .config
-            .get(name)
-            .and_then(|source| keychain::account(&source.dsn))
-            .map(str::to_string);
+        // Read before the config drops the entry, since it is derived from the
+        // connection string it is about to take away.
         let source_id = self.source_id(name);
 
-        let removed = match self.config.remove(name) {
-            Ok(removed) => removed,
+        let removed = match self.config.delete(name, &Keychain) {
+            Ok(Some(removed)) => removed,
+            Ok(None) => return,
             Err(error) => {
                 self.error(format!("Saving connections: {error}"));
                 return;
             }
         };
 
-        if removed {
-            // Only after the config is written: a secret left behind by a
-            // failed save is recoverable, one deleted for a connection that is
-            // still listed is not.
-            if let Some(account) = secret
-                && let Err(error) = keychain::delete(&account)
-            {
-                self.warn(format!("Removed {name}, but {error}"));
-            }
-            if let Some(source) = &source_id {
-                self.schema_cache.forget_source(source);
-            }
-            self.tree.remove_source(name);
-            self.warn(format!("Removed {name}"));
+        if let Some(error) = removed.secret_error {
+            self.warn(format!("Removed {name}, but {error}"));
         }
+        if let Some(source) = &source_id {
+            self.schema_cache.forget_source(source);
+        }
+        self.tree.remove_source(name);
+        self.warn(format!("Removed {name}"));
     }
 
     /// The data source the user is currently working in — the selected tree

@@ -137,7 +137,7 @@ None found.
   `delete` returns `Some(Removed { secret_error: Some(_) })` and the config no
   longer lists the id.
   Verify: `cargo test -p binsql-core workspace::tests::delete_`
-- [ ] **The app calls them.** Rewrite `App::save_data_source` and
+- [x] **The app calls them.** Rewrite `App::save_data_source` and
   `App::remove_data_source` (`app/mod.rs:991`–1077) as described in Context,
   importing `keychain::Keychain`; keep the doc comment on save and the
   comment on reading `source_id` before removal.
