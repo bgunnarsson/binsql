@@ -50,5 +50,5 @@ the `Create View` column of `SHOW CREATE VIEW`.
   and the column. Unit tests of quoting and of the column by kind; an ignored
   live test in `tests/definitions_servers.rs`.
   Verify: `cargo test --workspace -q`, `cargo clippy --workspace --all-targets -q`.
-- [ ] **2. README.** MySQL row, caveat and Status bullet.
+- [x] **2. README.** MySQL row, caveat and Status bullet.
   Verify: read the table and the Status section.

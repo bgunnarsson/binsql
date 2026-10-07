@@ -467,7 +467,7 @@ two together exit `2`.
 | --- | --- | --- |
 | SQLite | `create` | `create` |
 | PostgreSQL | `unsupported` | `query` |
-| MySQL | `unsupported` | `unsupported` |
+| MySQL | `create` | `create` |
 | SQL Server | `unsupported` | `unsupported` |
 
 This is context for whoever reads it, not an export to restore from: there is
@@ -478,7 +478,10 @@ rewrote it, with SQLite's own spelling of the opening `CREATE TABLE`.
 PostgreSQL keeps no `CREATE` text for a table, so its tables stay
 `unsupported`; a view's `query` is the server rebuilding the view from its
 parsed form (`pg_get_viewdef`), so its layout is the server's and comments
-written in the view are gone.
+written in the view are gone. MySQL's text is what `SHOW CREATE TABLE` and
+`SHOW CREATE VIEW` print: a table's has its indexes, foreign keys and the
+current `AUTO_INCREMENT=` counter, and a view's has its `DEFINER` and `SQL
+SECURITY`, so it names the account that created the view.
 
 Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".
@@ -895,8 +898,8 @@ v2 yet:
   [Azure Key Vault references](#azure-key-vault-references)).
 - Exporting a result set, editing values in the grid, query history, and
   filtering the tree.
-- **Definitions** on MySQL and SQL Server: `inspect --definitions` marks their
-  tables and views `unsupported` for now.
+- **Definitions** on SQL Server: `inspect --definitions` marks its tables and
+  views `unsupported` for now.
 
 ## Licence
 
