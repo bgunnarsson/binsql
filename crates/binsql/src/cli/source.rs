@@ -25,7 +25,7 @@ use super::{
     print, read_stdin, render, usage,
 };
 
-const VALUES: &[&str] = &[
+pub(super) const VALUES: &[&str] = &[
     "format",
     "o",
     "scope",
@@ -37,7 +37,7 @@ const VALUES: &[&str] = &[
     "rename",
     "error-format",
 ];
-const SWITCHES: &[&str] = &[
+pub(super) const SWITCHES: &[&str] = &[
     "pretty",
     "no-header",
     "no-footer",
@@ -49,6 +49,18 @@ const SWITCHES: &[&str] = &[
     "no-open-on-start",
     "no-keychain",
     "force",
+];
+
+/// What `source` does, in the order its usage message names them.
+pub(super) const OPERATIONS: &[&str] = &[
+    "list",
+    "show",
+    "default",
+    "test",
+    "clear-cache",
+    "add",
+    "edit",
+    "remove",
 ];
 
 /// The flags only `add` and `edit` take, each with the names it goes by.

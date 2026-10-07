@@ -402,6 +402,61 @@ fn report(failure: &Failure, json: bool) -> i32 {
     exit
 }
 
+/// The version of the `--capabilities` manifest, kept the way
+/// [`ERROR_SCHEMA`] is.
+const CAPABILITIES_SCHEMA: u64 = 1;
+
+/// What this build of binsql can do, as one JSON line — for `--capabilities`.
+/// Built from the lists the parsers use, never from config or a server, so it
+/// describes the binary and needs nothing else to answer.
+pub fn capabilities() -> String {
+    let flags = |names: &[&str]| -> Vec<String> {
+        names
+            .iter()
+            .map(|name| match name.len() {
+                1 => format!("-{name}"),
+                _ => format!("--{name}"),
+            })
+            .collect()
+    };
+    let verb = |values: &[&str], switches: &[&str]| {
+        serde_json::json!({
+            "options": flags(&[SHARED_VALUES, values].concat()),
+            "switches": flags(&[SHARED_SWITCHES, switches].concat()),
+        })
+    };
+    let commands = serde_json::json!({
+        "query": verb(query::VALUES, query::SWITCHES),
+        "exec": verb(exec::VALUES, exec::SWITCHES),
+        "inspect": verb(inspect::VALUES, inspect::SWITCHES),
+        "source": {
+            "operations": source::OPERATIONS,
+            "options": flags(source::VALUES),
+            "switches": flags(source::SWITCHES),
+        },
+    });
+    record(&[
+        ("type", "capabilities".into()),
+        ("schema", CAPABILITIES_SCHEMA.into()),
+        ("version", env!("CARGO_PKG_VERSION").into()),
+        (
+            "backends",
+            Backend::ALL.map(Backend::as_str).to_vec().into(),
+        ),
+        ("commands", commands),
+        (
+            "formats",
+            Format::NAMES.split(", ").collect::<Vec<_>>().into(),
+        ),
+        ("error_formats", vec!["text", "json"].into()),
+        ("error_schema", ERROR_SCHEMA.into()),
+        (
+            "exit_codes",
+            serde_json::json!({"0": "success", "1": "failure", "2": "usage"}),
+        ),
+    ])
+}
+
 /// The version of the error and notice records. Adding a field or a value
 /// keeps it; renaming, removing or changing the meaning of one raises it.
 const ERROR_SCHEMA: u64 = 1;
@@ -1146,5 +1201,50 @@ mod tests {
                 && record.contains(r#""reason":"azure-ad-token""#),
             "{record}"
         );
+    }
+
+    #[test]
+    fn every_flag_the_manifest_lists_parses_for_its_command() {
+        let manifest: serde_json::Value = serde_json::from_str(&capabilities()).unwrap();
+        let lists: [(&str, &[&str], &[&str]); 4] = [
+            ("query", query::VALUES, query::SWITCHES),
+            ("exec", exec::VALUES, exec::SWITCHES),
+            ("inspect", inspect::VALUES, inspect::SWITCHES),
+            ("source", source::VALUES, source::SWITCHES),
+        ];
+        for (command, values, switches) in lists {
+            let parse = |args: Vec<String>| match command {
+                "source" => Args::parse(args, values, switches),
+                _ => parse(args, values, switches),
+            };
+            let listed = |kind: &str| -> Vec<String> {
+                manifest["commands"][command][kind]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|flag| flag.as_str().unwrap().to_string())
+                    .collect()
+            };
+            for option in listed("options") {
+                assert!(
+                    parse(vec![option.clone(), "value".into()]).is_ok(),
+                    "{command} {option}"
+                );
+            }
+            for switch in listed("switches") {
+                assert!(parse(vec![switch.clone()]).is_ok(), "{command} {switch}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_format_the_manifest_lists_is_accepted() {
+        let manifest: serde_json::Value = serde_json::from_str(&capabilities()).unwrap();
+        let formats = manifest["formats"].as_array().unwrap();
+        assert!(!formats.is_empty());
+        for format in formats {
+            let format = format.as_str().unwrap();
+            assert!(Format::parse(format).is_some(), "{format}");
+        }
     }
 }

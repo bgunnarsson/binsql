@@ -26,8 +26,8 @@ command keep their output.
 - Each command lists `options` (flags that take a value) and `switches`, each
   spelled as typed: `--conn`, `-c`. Aliases are listed as their own entries,
   not grouped, since the parser's lists do not pair them.
-- `source` also lists its `operations`, from a new constant that the
-  "source needs a command" message is checked against.
+- `source` also lists its `operations`, from a new constant; a test runs
+  each one to show the dispatch knows it.
 - `formats` lists the canonical names from `Format::NAMES`, not the aliases
   (`ndjson`, `md`, …), which stay accepted.
 - Compact JSON on one line, as the error record is; `--capabilities` takes no
@@ -54,7 +54,7 @@ the README.
 
 ## Tasks
 
-- [ ] **1. The manifest.** `cli/mod.rs`: `capabilities()` builds the object
+- [x] **1. The manifest.** `cli/mod.rs`: `capabilities()` builds the object
   from `SHARED_*`, each verb's `VALUES`/`SWITCHES`, `source::OPERATIONS`,
   `Backend::ALL`, `RESERVED_NAMES` and `Format::NAMES`. `main.rs`:
   `--capabilities` prints it and stops.

@@ -254,6 +254,10 @@ fn parse_args(args: Vec<String>) -> Result<Option<Options>> {
                 println!("binsql {}", env!("CARGO_PKG_VERSION"));
                 return Ok(None);
             }
+            (false, "--capabilities") => {
+                println!("{}", cli::capabilities());
+                return Ok(None);
+            }
             (false, "--debug-keys") => {
                 debug_keys()?;
                 return Ok(None);

@@ -1950,3 +1950,54 @@ fn require_rows_keeps_other_failures_their_own() {
         .refused()
         .stderr_has("--require-rows");
 }
+
+#[test]
+fn capabilities_prints_a_manifest_without_reading_the_config() {
+    let fixture = Fixture::new("capabilities");
+    std::fs::write(fixture.config(), "{ not json").expect("write the config");
+
+    let run = fixture.binsql(&["--capabilities"]).succeeds();
+    assert_eq!(run.stdout.lines().count(), 1, "{}", run.stdout);
+    let manifest: serde_json::Value = serde_json::from_str(&run.stdout).expect("valid json");
+    assert_eq!(manifest["type"], "capabilities");
+    assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"));
+    for backend in ["postgres", "sqlite"] {
+        assert!(
+            manifest["backends"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|b| b == backend),
+            "{backend}"
+        );
+    }
+    for verb in ["query", "exec", "inspect", "source"] {
+        assert!(manifest["commands"][verb].is_object(), "{verb}");
+    }
+    assert!(
+        manifest["formats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "json")
+    );
+
+    // Too many names is a usage error each operation has its own words for.
+    std::fs::write(fixture.config(), "{}").expect("write the config");
+    for operation in manifest["commands"]["source"]["operations"]
+        .as_array()
+        .unwrap()
+    {
+        let operation = operation.as_str().unwrap();
+        fixture
+            .binsql(&["source", operation, "a", "b", "c"])
+            .refused()
+            .stderr_has(&format!("source {operation} takes"));
+    }
+
+    let version = fixture.binsql(&["--version"]).succeeds();
+    assert_eq!(
+        version.stdout,
+        format!("binsql {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}

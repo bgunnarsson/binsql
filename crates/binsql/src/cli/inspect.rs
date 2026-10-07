@@ -14,8 +14,11 @@ use binsql_core::{Column, ObjectKind, ObjectRef, ResultSet, Session, Value};
 use super::render;
 use super::{Category, Result, caused, connect, core, failed, note, output, parse, print, usage};
 
+pub(super) const VALUES: &[&str] = &[];
+pub(super) const SWITCHES: &[&str] = &["columns"];
+
 pub async fn run(args: Vec<String>) -> Result<()> {
-    let args = parse(args, &[], &["columns"])?;
+    let args = parse(args, VALUES, SWITCHES)?;
     let options = output(&args)?;
     let every_column = args.is_set(&["columns"]);
 

@@ -13,8 +13,8 @@ use super::{
     output, parse, print, read_sql, usage,
 };
 
-const VALUES: &[&str] = &["file", "f", "arg"];
-const SWITCHES: &[&str] = &["dry-run", "tx", "no-tx", "force"];
+pub(super) const VALUES: &[&str] = &["file", "f", "arg"];
+pub(super) const SWITCHES: &[&str] = &["dry-run", "tx", "no-tx", "force"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     let args = parse(args, VALUES, SWITCHES)?;
