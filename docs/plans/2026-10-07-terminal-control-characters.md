@@ -61,5 +61,5 @@ does the same for everything but the line breaks it is made of.
   `markdown` and `raw` for values and names, and by `report` and `note` in
   `cli/mod.rs` keeping line breaks. Unit tests in both files.
   Verify: `cargo test --workspace -q`, `cargo clippy --workspace --all-targets -q`.
-- [ ] **2. README.** A line under the formats saying what is escaped.
+- [x] **2. README.** A line under the formats saying what is escaped.
   Verify: read it beside the `--format` row.

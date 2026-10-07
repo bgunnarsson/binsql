@@ -266,6 +266,13 @@ straight into something that parses them.
 | `--pretty` | indent JSON |
 | `--no-header` / `--no-footer` | leave out the header row, or the trailing count |
 
+`table`, `vertical`, `markdown` and `raw` are for reading, so they spell out
+the control characters a value or column name can hold — `\n`, `\r`, `\t`, and
+any other as `\u{1b}` — rather than let the terminal act on them. A backslash
+already in the text is not doubled. `json`, `jsonl`, `csv` and `tsv` keep the
+text as stored. Messages on stderr are escaped the same way, keeping their line
+breaks and tabs.
+
 ```sh
 binsql query "SELECT * FROM users LIMIT 20" -o json --pretty
 binsql query -f report.sql --conn eimskip/prod -o csv > report.csv
