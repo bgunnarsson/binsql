@@ -58,9 +58,15 @@ impl Fixture {
     }
 
     fn binsql(&self, args: &[&str]) -> Run {
+        self.binsql_with_project(args, "")
+    }
+
+    /// The same, with `project` as the project config; empty turns it off.
+    fn binsql_with_project(&self, args: &[&str], project: &str) -> Run {
         let output = Command::new(env!("CARGO_BIN_EXE_binsql"))
             .args(args)
             .env("BINSQL_CONFIG", self.config())
+            .env("BINSQL_PROJECT", project)
             // The tests must not read whatever the developer running them has
             // in their own environment.
             .env_remove("BINSQL_CONN")
@@ -852,6 +858,128 @@ fn source_is_a_command_only_with_an_operation_after_it() {
         .binsql(&["source", "frob"])
         .refused()
         .stderr_has("unknown source command frob");
+}
+
+/// A config with every kind of row `source list` has to get right, and a
+/// project config beside it so both scopes show.
+fn write_sources(fixture: &Fixture) -> String {
+    std::fs::write(
+        fixture.config(),
+        r#"{
+          "default": "inspect",
+          "connections": {
+            "pg": { "driver": "postgres", "dsn": "postgres://ann:hunter2@db/app", "description": "app" },
+            "kc": { "driver": "mssql", "dsn": "keychain://kc", "readonly": true },
+            "query": { "driver": "sqlite", "dsn": "/tmp/q.db" },
+            "source": { "driver": "sqlite", "dsn": "/tmp/s.db" },
+            "team": {
+              "inspect": { "driver": "mysql", "dsn": "keyvault://kv-team/dsn", "open_on_start": true }
+            }
+          }
+        }"#,
+    )
+    .expect("write the config");
+    let project = fixture.directory.join(".binsql.json");
+    std::fs::write(
+        &project,
+        r#"{ "connections": { "here": { "driver": "sqlite", "dsn": "/tmp/h.db" } } }"#,
+    )
+    .expect("write the project config");
+    project.display().to_string()
+}
+
+#[test]
+fn source_list_shows_every_data_source_without_its_secret() {
+    let fixture = Fixture::new("source-list");
+    let project = write_sources(&fixture);
+
+    let json = fixture
+        .binsql_with_project(&["source", "list", "-o", "json"], &project)
+        .succeeds();
+    assert!(!json.stdout.contains("hunter2"), "{}", json.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&json.stdout).expect("valid json");
+    let rows = parsed["rows"].as_array().expect("rows");
+    let row = |name: &str| {
+        rows.iter()
+            .find(|row| row["name"] == name)
+            .unwrap_or_else(|| panic!("{name} missing from {}", json.stdout))
+            .clone()
+    };
+    assert_eq!(rows.len(), 6);
+
+    let pg = row("pg");
+    assert_eq!(pg["scope"], "user");
+    assert_eq!(pg["driver"], "postgres");
+    assert!(!pg["dsn"].as_str().unwrap().contains("hunter2"));
+    assert!(pg["dsn"].as_str().unwrap().starts_with("postgres://ann:"));
+    assert_eq!(pg["readonly"], false);
+    assert_eq!(pg["default"], false);
+    assert_eq!(pg["description"], "app");
+    assert_eq!(pg["shadowed"], false);
+
+    let kc = row("kc");
+    assert_eq!(kc["dsn"], "keychain://kc");
+    assert_eq!(kc["readonly"], true);
+
+    let inspect = row("team/inspect");
+    assert_eq!(inspect["dsn"], "keyvault://kv-team/dsn");
+    assert_eq!(inspect["open_on_start"], true);
+    assert_eq!(inspect["default"], true);
+    assert_eq!(inspect["shadowed"], true);
+
+    assert_eq!(row("query")["shadowed"], true);
+    assert_eq!(row("source")["shadowed"], true);
+    assert_eq!(row("here")["scope"], "project");
+
+    json.stderr_has(
+        "note: binsql query runs the command; open it with binsql -- query, binsql query or --conn query",
+    )
+    .stderr_has(
+        "note: binsql inspect runs the command; open it with binsql -- inspect, binsql team/inspect or --conn team/inspect",
+    )
+    .stderr_has("note: binsql source alone still opens source");
+
+    let table = fixture
+        .binsql_with_project(&["source", "list"], &project)
+        .succeeds()
+        .stdout_has("name")
+        .stdout_has("shadowed")
+        .stdout_has("postgres://ann:");
+    assert!(!table.stdout.contains("hunter2"), "{}", table.stdout);
+    assert!(!table.stdout.contains("note:"), "{}", table.stdout);
+
+    let quiet = fixture
+        .binsql_with_project(&["source", "list", "-o", "none"], &project)
+        .succeeds();
+    assert!(quiet.stderr.is_empty(), "{}", quiet.stderr);
+}
+
+#[test]
+fn source_show_finds_one_data_source_as_conn_does() {
+    let fixture = Fixture::new("source-show");
+    let project = write_sources(&fixture);
+
+    let shown = fixture
+        .binsql_with_project(&["source", "show", "inspect", "-o", "json"], &project)
+        .succeeds()
+        .stderr_has("note: binsql inspect runs the command");
+    let parsed: serde_json::Value = serde_json::from_str(&shown.stdout).expect("valid json");
+    assert_eq!(parsed["rows"].as_array().expect("rows").len(), 1);
+    assert_eq!(parsed["rows"][0]["name"], "team/inspect");
+
+    fixture
+        .binsql_with_project(&["source", "show", "nope"], &project)
+        .refused()
+        .stderr_has("no saved data source named nope");
+    fixture
+        .binsql_with_project(&["source", "show"], &project)
+        .refused();
+    fixture
+        .binsql_with_project(&["source", "list", "extra"], &project)
+        .refused();
+    fixture
+        .binsql_with_project(&["source", "list", "--conn", "pg"], &project)
+        .refused();
 }
 
 #[test]

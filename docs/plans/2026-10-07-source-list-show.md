@@ -117,7 +117,7 @@ None found.
   "not a saved data source"; `binsql source --help` → exit 0 and the main
   HELP; `binsql source frob` → `refused()` + "unknown source command frob".
   Verify: `cargo test -p binsql -p binsql-core`, clippy.
-- [ ] **list and show.** In `cli/source.rs`: `row(config, id, source)`
+- [x] **list and show.** In `cli/source.rs`: `row(config, id, source)`
   returning the values and the optional note, `list` and `show` building the
   `ResultSet` and printing notes after the output. Integration tests with a
   user config holding a literal postgres URL with a password, a
