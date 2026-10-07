@@ -62,6 +62,7 @@ changes to `query`, `exec` and `inspect`.
 - [20](20-core-save-delete.md): Built: binsql_core::source::Draft::build validates a data source with the form's rules and messages; Workspace::save and Workspace::delete run the save and delete sequences through a SecretStore trait (Keychain is the real one); the TUI calls them and keeps only its UI work.
 - [21](21-keyvault-ci-docs.md): Built: README's Key Vault section names az login --service-principal (password or --federated-token) and --identity for CI, containers and agents, says fedauth= uses the same login, BINSQL_SECRET_TTL=0 picks up a rotated secret, and that the az call has no deadline yet; Status says those identities are reached through az.
 - [22](22-explain-analyze-guard.md): Resolved: EXPLAIN, DESCRIBE and DESC that run their statement (ANALYZE/ANALYSE, bare or in PostgreSQL's option list, quoted or not) classify as that statement; a plain or ANALYZE-off EXPLAIN stays a read.
+- [23](23-plan-shape.md): `binsql query --plan` returns the backend's estimated plan for one plannable read (SELECT, WITH, VALUES, TABLE), built by binsql and returned as the backend's own result set through `-o`; writes, `--arg` and `--stream` are refused with exit 2, and nothing new runs the statement.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
@@ -146,6 +147,13 @@ changes to `query`, `exec` and `inspect`.
 - [82 — MySQL returns `SHOW CREATE` text](82-mysql-returns-show-create-text.md)
 - [83 — SQL Server views return their module text](83-sql-server-views-return-their-module-text.md)
 - [84 — `inspect --definitions` prints one definition row per selected object](84-inspect-definitions-prints-one-definition-row-per.md)
+
+## Follow-up tickets from 23
+
+- [90 — Core builds an estimated plan for one read](90-core-builds-an-estimated-plan-for-one-read.md)
+- [91 — `query --plan` prints the estimated plan](91-query-plan-prints-the-estimated-plan.md)
+- [92 — Check PostgreSQL `query --plan`](92-check-postgresql-query-plan.md)
+- [93 — Check MySQL and SQL Server `query --plan`](93-check-mysql-and-sql-server-query-plan.md)
 
 ## Not yet specified
 
