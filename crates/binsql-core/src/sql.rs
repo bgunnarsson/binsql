@@ -15,7 +15,7 @@ use crate::value::Value;
 /// What a statement does to the database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    /// `SELECT`, `SHOW`, `EXPLAIN` — reads and nothing else.
+    /// `SELECT`, `SHOW`, a plain `EXPLAIN` — reads and nothing else.
     Read,
     /// `INSERT`, `UPDATE`, `DELETE`, `MERGE` — changes data.
     Write,
@@ -170,7 +170,8 @@ fn placeholders(sql: &str, backend: Backend) -> (String, usize) {
 ///
 /// `WITH` is looked at further: a CTE fronts an `INSERT`, `UPDATE` or `DELETE`
 /// as readily as a `SELECT`, and reading only the first word is how a write
-/// gets past a read-only guard.
+/// gets past a read-only guard. So is an `EXPLAIN ANALYZE`, which runs what it
+/// wraps and so takes that statement's kind.
 pub fn classify(sql: &str, backend: Backend) -> Kind {
     let leading = words(sql, backend, 1);
     let Some(first) = leading.first() else {
@@ -178,7 +179,9 @@ pub fn classify(sql: &str, backend: Backend) -> Kind {
     };
 
     match first.as_str() {
-        "SELECT" | "SHOW" | "EXPLAIN" | "DESCRIBE" | "DESC" | "VALUES" | "TABLE" => Kind::Read,
+        "SELECT" | "SHOW" | "VALUES" | "TABLE" => Kind::Read,
+
+        "EXPLAIN" | "DESCRIBE" | "DESC" => explained(sql, backend),
 
         "WITH" => {
             let writes = ["INSERT", "UPDATE", "DELETE", "MERGE", "REPLACE"];
@@ -217,6 +220,62 @@ pub fn classify(sql: &str, backend: Backend) -> Kind {
 
         _ => Kind::Unknown,
     }
+}
+
+/// What an `EXPLAIN` (or MySQL's `DESCRIBE`) does: a read when it only plans,
+/// and whatever it wraps when `ANALYZE` makes it run the statement.
+///
+/// A keyword reader, not a parser, so where it is unsure it errs towards
+/// running: an option it does not know starts the wrapped statement, which
+/// then classifies as `Unknown` and is refused rather than let through.
+fn explained(sql: &str, backend: Backend) -> Kind {
+    let (text, lexemes) = lexemes(sql, backend);
+    let is_analyze = |lexeme: &Lexeme| matches!(lexeme.text.as_str(), "ANALYZE" | "ANALYSE");
+    let mut rest = lexemes.iter().skip(1).peekable();
+    let mut runs = false;
+
+    if rest.next_if(|lexeme| lexeme.text == "(").is_some() {
+        // PostgreSQL's option list: `ANALYZE` is on unless switched off.
+        while let Some(lexeme) = rest.next() {
+            if lexeme.text == ")" {
+                break;
+            }
+            if is_analyze(lexeme)
+                && !rest
+                    .peek()
+                    .is_some_and(|next| matches!(next.text.as_str(), "FALSE" | "OFF" | "0"))
+            {
+                runs = true;
+            }
+        }
+    } else {
+        let options = [
+            "ANALYZE",
+            "ANALYSE",
+            "VERBOSE",
+            "QUERY",
+            "PLAN",
+            "EXTENDED",
+            "PARTITIONS",
+            "FORMAT",
+            "=",
+            "TRADITIONAL",
+            "JSON",
+            "TREE",
+        ];
+        while let Some(lexeme) = rest.next_if(|lexeme| options.contains(&lexeme.text.as_str())) {
+            runs |= is_analyze(lexeme);
+        }
+    }
+
+    if !runs {
+        return Kind::Read;
+    }
+    let inner: String = match rest.next() {
+        Some(lexeme) => text[lexeme.at..].iter().collect(),
+        None => String::new(),
+    };
+    classify(&inner, backend)
 }
 
 /// Whether a bare keyword appears in the executable text of a statement — not
@@ -297,6 +356,56 @@ fn words(sql: &str, backend: Backend, limit: usize) -> Vec<String> {
     }
 
     out
+}
+
+/// A bare word (letters, digits, `_`) or one punctuation character from the
+/// executable text, and where in the scanned text it starts.
+struct Lexeme {
+    text: String,
+    at: usize,
+}
+
+/// The statement's characters as `scan` gave them, and its lexemes. Words are
+/// upper-cased; comments, literals and whitespace produce nothing.
+fn lexemes(sql: &str, backend: Backend) -> (Vec<char>, Vec<Lexeme>) {
+    let mut text = Vec::new();
+    let mut out: Vec<Lexeme> = Vec::new();
+    let mut in_word = false;
+    let mut done = false;
+
+    scan(sql, backend, &mut |token| {
+        if done {
+            return;
+        }
+        let (class, ch) = match token {
+            Token::Char(class, ch) => (class, ch),
+            Token::BatchSeparator => {
+                done = true;
+                return;
+            }
+        };
+        let at = text.len();
+        text.push(ch);
+        if class != Class::Code || ch.is_whitespace() {
+            in_word = false;
+        } else if ch.is_alphanumeric() || ch == '_' {
+            match out.last_mut() {
+                Some(word) if in_word => word.text.extend(ch.to_uppercase()),
+                _ => out.push(Lexeme {
+                    text: ch.to_uppercase().collect(),
+                    at,
+                }),
+            }
+            in_word = true;
+        } else {
+            out.push(Lexeme {
+                text: ch.to_string(),
+                at,
+            });
+            in_word = false;
+        }
+    });
+    (text, out)
 }
 
 // --- lexer ---------------------------------------------------------------
@@ -633,6 +742,129 @@ mod tests {
         ];
         for (sql, want) in cases {
             assert_eq!(classify(sql, Backend::Sqlite), want, "{sql}");
+        }
+    }
+
+    #[test]
+    fn lexemes_keep_digits_and_punctuation_and_where_they_start() {
+        let (text, lexemes) = lexemes("EXPLAIN (ANALYZE 0) /* x */ DELETE 'a'", Backend::Sqlite);
+        let words: Vec<&str> = lexemes.iter().map(|lexeme| lexeme.text.as_str()).collect();
+        assert_eq!(words, ["EXPLAIN", "(", "ANALYZE", "0", ")", "DELETE"]);
+        let inner: String = text[lexemes[5].at..].iter().collect();
+        assert_eq!(inner, "DELETE 'a'");
+    }
+
+    #[test]
+    fn an_executing_explain_takes_the_kind_of_what_it_runs() {
+        let cases = [
+            (
+                "explain analyze delete from t",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            (
+                "EXPLAIN ANALYSE DELETE FROM t",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            (
+                "explain verbose analyze update t set a = 1",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            (
+                "explain analyze verbose insert into t values (1)",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            (
+                "explain (analyze) delete from t",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            (
+                "explain (analyze true, format json) delete from t",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            (
+                "explain (format json, analyze on) delete from t",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            (
+                "explain (analyze, buffers) drop table t",
+                Backend::Postgres,
+                Kind::Ddl,
+            ),
+            (
+                "explain analyze select * from t",
+                Backend::Postgres,
+                Kind::Read,
+            ),
+            (
+                "explain analyze with x as (delete from t returning *) select * from x",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            (
+                "/* why */ explain analyze delete from t",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            (
+                "explain analyze /* why */ delete from t",
+                Backend::Postgres,
+                Kind::Write,
+            ),
+            ("EXPLAIN ANALYZE DELETE FROM t", Backend::MySql, Kind::Write),
+            (
+                "explain analyze format=tree delete from t",
+                Backend::MySql,
+                Kind::Write,
+            ),
+            (
+                "describe analyze delete from t",
+                Backend::MySql,
+                Kind::Write,
+            ),
+            (
+                "desc analyze update t set a = 1",
+                Backend::MySql,
+                Kind::Write,
+            ),
+            ("explain analyze", Backend::Postgres, Kind::Unknown),
+            (
+                "explain analyze frobnicate t",
+                Backend::Postgres,
+                Kind::Unknown,
+            ),
+        ];
+        for (sql, backend, want) in cases {
+            assert_eq!(classify(sql, backend), want, "{sql}");
+        }
+    }
+
+    #[test]
+    fn a_plain_explain_stays_a_read() {
+        let cases = [
+            ("explain select 1", Backend::Sqlite),
+            ("explain delete from t", Backend::Postgres),
+            ("explain query plan delete from t", Backend::Sqlite),
+            ("explain format=json delete from t", Backend::MySql),
+            ("explain (format json) delete from t", Backend::Postgres),
+            ("explain (analyze false) delete from t", Backend::Postgres),
+            (
+                "explain (analyze off, verbose) delete from t",
+                Backend::Postgres,
+            ),
+            ("explain (analyze 0) delete from t", Backend::Postgres),
+            ("-- plan only\nexplain delete from t", Backend::Postgres),
+            ("describe t", Backend::MySql),
+            ("desc t", Backend::MySql),
+        ];
+        for (sql, backend) in cases {
+            assert_eq!(classify(sql, backend), Kind::Read, "{sql}");
         }
     }
 

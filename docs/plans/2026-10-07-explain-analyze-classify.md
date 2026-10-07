@@ -123,12 +123,12 @@ classification.)
 
 ## Tasks
 
-- [ ] Add `Lexeme` and `lexemes` to `sql.rs` under the `words` helper, with a
+- [x] Add `Lexeme` and `lexemes` to `sql.rs` under the `words` helper, with a
   unit test that `lexemes("EXPLAIN (ANALYZE 0) /* x */ DELETE 'a'", …)`
   yields `EXPLAIN ( ANALYZE 0 ) DELETE` and that the `at` of `DELETE`
   recovers `DELETE 'a'` from the text. Verify:
   `cargo test -p binsql-core sql::tests::lexemes`.
-- [ ] Add `explained` and route `EXPLAIN`/`DESCRIBE`/`DESC` to it in
+- [x] Add `explained` and route `EXPLAIN`/`DESCRIBE`/`DESC` to it in
   `classify`; update `Kind::Read`'s doc comment (:18) and `classify`'s doc
   comment to say an executing `EXPLAIN` takes its statement's kind. Add the
   tests `an_executing_explain_takes_the_kind_of_what_it_runs` and
