@@ -424,7 +424,7 @@ the same either way.
 | `detail` | what the Azure CLI said, or the database's answer to a timeout's cancel, redacted like `message` and cut at 1000 characters |
 | `statement` | the 1-based statement that failed or was refused, when there is one |
 | `completed` | how many statements before it were kept, under `exec --no-tx` |
-| `transaction` | how a transactional `exec` ended: `rolled_back`, `unknown` or `none` |
+| `transaction` | how a transactional `exec` ended: `rolled_back`, `unknown` or `none`; `unknown` too for a write `query --allow-write` ran past `--timeout-ms` |
 
 `category` says what kind of thing failed — a missing saved data source is
 `source`, a vault or keychain that would not hand over a secret is `secret`, a

@@ -2208,6 +2208,21 @@ fn a_timed_out_write_does_not_claim_a_rollback() {
         "{}",
         run.stderr
     );
+
+    let run = fixture
+        .direct(&[
+            "query",
+            &format!("INSERT INTO artist (name) SELECT 'x' FROM ({ENDLESS})"),
+            "--allow-write",
+            "--timeout-ms",
+            "200",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "timeout");
+    assert_eq!(record["transaction"], "unknown");
 }
 
 #[test]

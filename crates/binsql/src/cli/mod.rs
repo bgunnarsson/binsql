@@ -1023,6 +1023,10 @@ impl Stop {
             done = &mut work => return done.map_err(core),
             () = tokio::time::sleep_until(deadline) => {}
         }
+        // A ⌃C the work has not answered by the deadline is still the ⌃C's.
+        if self.cancel.is_cancelled() {
+            return work.await.map_err(core);
+        }
         self.cancel.cancel();
         let timed_out = failed(format!("timed out after {ms} ms"))
             .category(Category::Timeout)
@@ -1034,7 +1038,9 @@ impl Stop {
             Ok(Err(error)) => {
                 let detail = error.to_string();
                 let mut timed_out = timed_out.context(detail.clone());
-                timed_out.parts.get_or_insert_default().detail = Some(detail);
+                let parts = timed_out.parts.get_or_insert_default();
+                parts.code = error.native_code();
+                parts.detail = Some(detail);
                 Err(timed_out)
             }
             Err(_) => Err(timed_out.context(format!(
@@ -1206,6 +1212,28 @@ mod tests {
         assert_eq!(budget(&["--timeout-ms", "2147483648"]), Err(true));
         assert_eq!(budget(&["--timeout-ms", "abc"]), Err(true));
         assert_eq!(budget(&["--timeout-ms", "-1"]), Err(true));
+    }
+
+    #[test]
+    fn a_cancel_before_the_deadline_is_not_a_timeout() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build a runtime");
+        let stop = Stop {
+            cancel: CancellationToken::new(),
+            deadline: Some((10, Instant::now() + Duration::from_millis(10))),
+        };
+        stop.cancel.cancel();
+        // The work answers the ⌃C only after the deadline has passed.
+        let late = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Err::<(), _>(binsql_core::Error::Cancelled)
+        };
+        let failure = runtime
+            .block_on(stop.run(GRACE, "known", late))
+            .expect_err("cancelled");
+        assert_ne!(failure.category, Category::Timeout);
     }
 
     #[test]

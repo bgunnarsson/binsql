@@ -8,8 +8,8 @@ use binsql_core::sql;
 
 use super::render;
 use super::{
-    Category, GRACE, Phase, Result, Stop, bind_values, connect, failed, output, parse, print,
-    read_sql, statement_budget, usage,
+    Category, GRACE, Phase, Result, Stop, Transaction, bind_values, connect, failed, output, parse,
+    print, read_sql, statement_budget, usage,
 };
 
 pub(super) const VALUES: &[&str] = &["file", "f", "limit", "arg", "timeout-ms"];
@@ -107,8 +107,9 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         .map_err(|error| usage(format!("{error} — one --arg per ?")).phase(Phase::Prepare))?;
 
     // A write let through by --allow-write may have landed before the cancel
-    // did, so its timeout cannot promise a rollback.
-    let known = if statement.kind.mutates() {
+    // did, so its timeout cannot promise a rollback, and says so in JSON too.
+    let writes = statement.kind.mutates();
+    let known = if writes {
         "whether the statement took effect is unknown"
     } else {
         NOTHING_CHANGED
@@ -119,7 +120,11 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             known,
             session.run_bound(None, &bound[0], limit, stop.token()),
         )
-        .await?;
+        .await
+        .map_err(|failure| match failure.category {
+            Category::Timeout if writes => failure.transaction(Transaction::Unknown),
+            _ => failure,
+        })?;
 
     print(&render::rows(&result, &options))?;
     // Checked after printing, so the result reads the same whichever way the
