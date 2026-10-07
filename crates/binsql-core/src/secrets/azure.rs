@@ -30,20 +30,12 @@ pub async fn fetch(reference: &Reference) -> Result<String> {
     args.push("--output".to_string());
     args.push("json".to_string());
 
-    let output = tokio::process::Command::new("az")
-        .args(&args)
-        // The Azure CLI's Python warnings go to stderr and have broken output
-        // parsing before; silencing them is the documented workaround.
-        .env("PYTHONWARNINGS", "ignore")
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|e| Error::Secret {
-            reference: reference.to_string(),
-            reason: Some(Reason::AzMissing),
-            hint: Some("install the Azure CLI".to_string()),
-            detail: e.to_string(),
-        })?;
+    let output = crate::az::output(&args).await.map_err(|e| Error::Secret {
+        reference: reference.to_string(),
+        reason: Some(Reason::AzMissing),
+        hint: Some("install the Azure CLI".to_string()),
+        detail: e.to_string(),
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

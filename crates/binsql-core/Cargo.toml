@@ -49,6 +49,9 @@ getrandom = "0.4.3"
 # native one is ever compiled.
 keyring = "4"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tokio-util = { version = "0.7" }

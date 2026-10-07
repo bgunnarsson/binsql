@@ -6,6 +6,7 @@
 //! engine is on the other end.
 
 pub mod adapter;
+mod az;
 pub mod backend;
 pub mod config;
 pub mod dsn;

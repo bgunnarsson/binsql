@@ -824,26 +824,20 @@ fn decode_percent(value: &str) -> String {
 /// (`az login`), and it keeps binsql from carrying an Azure identity stack for
 /// the one auth path that needs it.
 async fn azure_cli_token() -> Result<String> {
-    let output = tokio::process::Command::new("az")
-        .args([
-            "account",
-            "get-access-token",
-            "--resource",
-            "https://database.windows.net/",
-            "--output",
-            "json",
-        ])
-        // The Azure CLI's Python warnings go to stderr and have broken token
-        // reads before; silencing them is the documented workaround.
-        .env("PYTHONWARNINGS", "ignore")
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|e| {
-            Error::token(anyhow::anyhow!(
-                "running `az`: {e}. Is the Azure CLI installed?"
-            ))
-        })?;
+    let output = crate::az::output([
+        "account",
+        "get-access-token",
+        "--resource",
+        "https://database.windows.net/",
+        "--output",
+        "json",
+    ])
+    .await
+    .map_err(|e| {
+        Error::token(anyhow::anyhow!(
+            "running `az`: {e}. Is the Azure CLI installed?"
+        ))
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
