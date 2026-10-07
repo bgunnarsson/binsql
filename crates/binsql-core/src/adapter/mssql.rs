@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -46,6 +47,11 @@ pub struct MsSqlAdapter {
     /// see [`MsSqlAdapter::query`].
     config: Config,
     label: String,
+    /// Set while a plan has SHOWPLAN on, and left set when the plan stopped
+    /// before turning it off — cancelled, dropped, or with `OFF` refused — so
+    /// the next statement replaces the connection rather than come back as its
+    /// own plan. Only read or written under the `client` lock.
+    showplan: AtomicBool,
     version: Option<String>,
     database: Option<String>,
 }
@@ -59,6 +65,7 @@ impl MsSqlAdapter {
             client: Mutex::new(client),
             config,
             label: dsn.to_string(),
+            showplan: AtomicBool::new(false),
             version: None,
             database: None,
         };
@@ -112,6 +119,7 @@ impl MsSqlAdapter {
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
         let mut client = self.client.lock().await;
+        self.settle(&mut client).await?;
         match run_one(&mut client, sql, values, limit, cancel).await? {
             Some(result) => Ok(result),
             None => self.cancelled(&mut client).await,
@@ -124,6 +132,17 @@ impl MsSqlAdapter {
     async fn cancelled<T>(&self, client: &mut Connection) -> Result<T> {
         *client = open(&self.config, &self.label).await?;
         Err(Error::Cancelled)
+    }
+
+    /// Replaces the connection when a plan left SHOWPLAN on it. A failure to
+    /// reconnect leaves the flag set, so every statement after it is refused
+    /// rather than planned in place of running.
+    async fn settle(&self, client: &mut Connection) -> Result<()> {
+        if self.showplan.load(Ordering::Relaxed) {
+            *client = open(&self.config, &self.label).await?;
+            self.showplan.store(false, Ordering::Relaxed);
+        }
+        Ok(())
     }
 }
 
@@ -457,19 +476,21 @@ impl Adapter for MsSqlAdapter {
         }
 
         let mut client = self.client.lock().await;
+        self.settle(&mut client).await?;
+        self.showplan.store(true, Ordering::Relaxed);
         // Each goes through `collect` with no values, so each is a batch of its
         // own: a `SET SHOWPLAN_XML` has to be alone in its batch.
-        match collect(&mut client, "SET SHOWPLAN_XML ON", &[], None, cancel).await {
-            Ok(Some(_)) => {}
-            // A new connection starts with plans off.
-            Ok(None) => return self.cancelled(&mut client).await,
-            Err(error) => return Err(showplan_hint(error)),
-        }
-
         let sql = sql::plan_sql(&statement.sql, Backend::MsSql);
-        let planned = match collect(&mut client, &sql, &[], limit, cancel).await {
+        let planned = match collect(&mut client, "SET SHOWPLAN_XML ON", &[], None, cancel).await {
+            Ok(Some(_)) => collect(&mut client, &sql, &[], limit, cancel).await,
+            other => other,
+        };
+        let planned = match planned {
             Ok(Some(result)) => Ok(result),
-            Ok(None) => return self.cancelled(&mut client).await,
+            Ok(None) => {
+                self.settle(&mut client).await?;
+                return Err(Error::Cancelled);
+            }
             Err(error) => Err(showplan_hint(error)),
         };
 
@@ -481,11 +502,10 @@ impl Adapter for MsSqlAdapter {
             &CancellationToken::new(),
         )
         .await;
-        if let Err(off) = off {
-            *client = open(&self.config, &self.label).await?;
-            if planned.is_ok() {
-                return Err(off);
-            }
+        if off.is_ok() {
+            self.showplan.store(false, Ordering::Relaxed);
+        } else {
+            self.settle(&mut client).await?;
         }
 
         let result = planned?;
@@ -506,6 +526,7 @@ impl Adapter for MsSqlAdapter {
         cancel: &CancellationToken,
     ) -> Result<Vec<ResultSet>> {
         let mut client = self.client.lock().await;
+        self.settle(&mut client).await?;
         if run_one(&mut client, "BEGIN TRANSACTION", &[], None, cancel)
             .await?
             .is_none()

@@ -62,7 +62,7 @@ where
     let mut results = Vec::with_capacity(statements.len());
 
     for statement in statements {
-        let outcome = run::<DB>(&mut transaction, statement, limit, codec, cancel).await;
+        let outcome = run::<DB>(&mut transaction, statement, limit, false, codec, cancel).await;
         match outcome {
             Ok(result) => results.push(result),
             Err(error) => {
@@ -92,6 +92,9 @@ where
 /// A statement with nothing to bind goes through `raw_sql`, which is what lets
 /// the TUI send a whole script as one. One with values is prepared, since that
 /// is the only way to send a value beside the SQL rather than inside it.
+/// `prepare` sends one with nothing to bind as a prepared statement too, which
+/// the server refuses to read as more than one statement whatever its text
+/// hides from [`crate::sql::split`].
 ///
 /// A cancel stops the drain and drops the stream, which is what sqlx asks of a
 /// caller that wants out early: the pool tests the connection as it comes back
@@ -102,6 +105,7 @@ pub async fn run<DB>(
     connection: &mut DB::Connection,
     statement: &Bound,
     limit: Option<usize>,
+    prepare: bool,
     codec: &Codec<DB>,
     cancel: &CancellationToken,
 ) -> Result<ResultSet>
@@ -130,7 +134,7 @@ where
     };
 
     {
-        let mut stream = if statement.params.is_empty() {
+        let mut stream = if statement.params.is_empty() && !prepare {
             sqlx::raw_sql(&statement.sql).fetch_many(connection)
         } else {
             let mut query = sqlx::query::<DB>(&statement.sql);

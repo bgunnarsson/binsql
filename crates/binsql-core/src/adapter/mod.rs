@@ -56,8 +56,9 @@ pub trait Adapter: Send + Sync {
     /// returns the backend's own result set for it unchanged. The statement is
     /// expected to be one [`sql::plannable`] read; that is the caller's check.
     ///
-    /// Prefixing the statement is enough everywhere but SQL Server, whose
-    /// adapter overrides this to turn plans on for the session instead.
+    /// The default prefixes the statement and runs it, which is all SQLite
+    /// needs. PostgreSQL and MySQL override it to send the prefixed statement
+    /// prepared, and SQL Server to turn plans on for the session instead.
     async fn plan(
         &self,
         statement: &Bound,

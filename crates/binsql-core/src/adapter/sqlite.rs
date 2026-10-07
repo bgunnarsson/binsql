@@ -161,7 +161,7 @@ impl Adapter for SqliteAdapter {
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
         let mut connection = self.pool.acquire().await.map_err(Error::query)?;
-        sqlx_common::run::<Sqlite>(&mut connection, statement, limit, &CODEC, cancel).await
+        sqlx_common::run::<Sqlite>(&mut connection, statement, limit, false, &CODEC, cancel).await
     }
 
     async fn run_transaction(

@@ -15,7 +15,7 @@ use super::sqlx_common::{self, Binding, Codec, decode_as, decode_fallback};
 use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
-use crate::sql::Bound;
+use crate::sql::{self, Bound};
 use crate::value::{Column, ResultSet, Value};
 
 const CODEC: Codec<Postgres> = Codec {
@@ -76,6 +76,7 @@ impl PostgresAdapter {
         &self,
         statement: &Bound,
         limit: Option<usize>,
+        prepare: bool,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
         let mut connection = self.pool.acquire().await.map_err(Error::query)?;
@@ -86,8 +87,15 @@ impl PostgresAdapter {
             .await
             .ok();
 
-        let result =
-            sqlx_common::run::<Postgres>(&mut connection, statement, limit, &CODEC, cancel).await;
+        let result = sqlx_common::run::<Postgres>(
+            &mut connection,
+            statement,
+            limit,
+            prepare,
+            &CODEC,
+            cancel,
+        )
+        .await;
 
         if matches!(result, Err(Error::Cancelled))
             && let Some(pid) = pid
@@ -270,7 +278,25 @@ impl Adapter for PostgresAdapter {
         limit: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<ResultSet> {
-        self.run_on_own_connection(statement, limit, cancel).await
+        self.run_on_own_connection(statement, limit, false, cancel)
+            .await
+    }
+
+    /// Prepared, so a second statement the lexer missed — hidden behind a
+    /// comment or a string it reads differently from the server — is refused
+    /// by the server rather than run after the plan.
+    async fn plan(
+        &self,
+        statement: &Bound,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        let planned = Bound {
+            sql: sql::plan_sql(&statement.sql, Backend::Postgres),
+            params: statement.params.clone(),
+        };
+        self.run_on_own_connection(&planned, limit, true, cancel)
+            .await
     }
 
     async fn run_transaction(
