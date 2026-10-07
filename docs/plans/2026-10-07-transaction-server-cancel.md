@@ -59,6 +59,6 @@ never name a zsh variable `status`; no `tempfile` crate.
   none. `tests/cancel_servers.rs`: the live tests.
   Verify: `cargo test --workspace`; the live tests compile.
 
-- [ ] **2. The README.** The Cancelling section says a cancel inside a
+- [x] **2. The README.** The Cancelling section says a cancel inside a
   transaction stops the server statement too.
   Verify: `cargo test -p binsql`.
