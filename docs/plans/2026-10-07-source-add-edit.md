@@ -126,7 +126,7 @@ Decided here:
 
 ## Tasks
 
-- [ ] **CLI: `source add` and `source edit`, with their tests.** In `cli/source.rs`:
+- [x] **CLI: `source add` and `source edit`, with their tests.** In `cli/source.rs`:
   - Extend `VALUES` with `dsn`, `dsn-env`, `driver`, `d`, `description`, `rename`, and
     `SWITCHES` with `dsn-stdin`, `readonly`, `no-readonly`, `open-on-start`,
     `no-open-on-start`, `no-keychain`. Widen the `--scope` guard to `default`, `add`,

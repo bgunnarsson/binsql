@@ -63,8 +63,14 @@ impl Fixture {
 
     /// The same, with `project` as the project config; empty turns it off.
     fn binsql_with_project(&self, args: &[&str], project: &str) -> Run {
+        self.binsql_with_env(args, project, &[])
+    }
+
+    /// The same, with `variables` set in its environment.
+    fn binsql_with_env(&self, args: &[&str], project: &str, variables: &[(&str, &str)]) -> Run {
         let output = Command::new(env!("CARGO_BIN_EXE_binsql"))
             .args(args)
+            .envs(variables.iter().copied())
             .env("BINSQL_CONFIG", self.config())
             .env("BINSQL_PROJECT", project)
             // The tests must not read whatever the developer running them has
@@ -1173,4 +1179,334 @@ fn a_file_and_stdin_are_both_read() {
         ])
         .succeeds()
         .stdout_has("Autechre\nBoards of Canada\nPortishead\n");
+}
+
+/// The user and project files as they stand, to check a refusal wrote neither.
+fn files(fixture: &Fixture, project: &str) -> (String, String) {
+    (
+        std::fs::read_to_string(fixture.config()).expect("read the config"),
+        std::fs::read_to_string(project).expect("read the project config"),
+    )
+}
+
+fn saved_row(run: Run) -> serde_json::Value {
+    let parsed: serde_json::Value = serde_json::from_str(&run.stdout).expect("valid json");
+    assert_eq!(parsed["rows"].as_array().expect("rows").len(), 1);
+    parsed["rows"][0].clone()
+}
+
+#[test]
+fn source_add_refuses_what_it_may_not_save_and_writes_nothing() {
+    let fixture = Fixture::new("source-add-refused");
+    let project = write_sources(&fixture);
+    let before = files(&fixture, &project);
+    let env = [("APP_DSN", "postgres://u:hunter2@h/db"), ("EMPTY", "")];
+    let refused = |args: &[&str], message: &str| {
+        let run = fixture
+            .binsql_with_env(args, &project, &env)
+            .refused()
+            .stderr_has(message);
+        assert!(!run.stderr.contains("hunter2"), "{}", run.stderr);
+        assert_eq!(files(&fixture, &project), before, "{args:?}");
+    };
+
+    refused(
+        &["source", "add", "new", "--dsn", "postgres://u:hunter2@h/db"],
+        "--dsn-stdin or --dsn-env",
+    );
+    refused(
+        &["source", "add", "new", "--dsn", "keychain://kc"],
+        "a keychain:// reference names a secret binsql filed",
+    );
+    refused(
+        &["source", "add", "pg", "--dsn", "./x.db"],
+        "pg already exists; change it with binsql source edit pg",
+    );
+    for name in ["inspect", "exec"] {
+        refused(
+            &["source", "add", name, "--dsn", "./x.db"],
+            &format!("{name} is a binsql command; save it inside a folder"),
+        );
+    }
+    refused(
+        &[
+            "source",
+            "add",
+            "new",
+            "--dsn-env",
+            "APP_DSN",
+            "--no-keychain",
+            "--scope",
+            "project",
+        ],
+        "a connection string is not written into .binsql.json",
+    );
+    refused(
+        &["source", "add", "new", "--dsn-env", "UNSET_VAR"],
+        "--dsn-env UNSET_VAR is not set",
+    );
+    refused(
+        &["source", "add", "new", "--dsn-env", "EMPTY"],
+        "--dsn-env EMPTY is not set",
+    );
+    refused(
+        &["source", "add", "new"],
+        "source add needs a connection string",
+    );
+    refused(
+        &[
+            "source",
+            "add",
+            "new",
+            "--dsn",
+            "./x.db",
+            "--dsn-env",
+            "APP_DSN",
+        ],
+        "give the connection string one way",
+    );
+    refused(
+        &[
+            "source",
+            "add",
+            "new",
+            "--dsn-env",
+            "APP_DSN",
+            "--driver",
+            "nope",
+        ],
+        "nope",
+    );
+    refused(
+        &[
+            "source",
+            "add",
+            "new",
+            "--dsn",
+            "keyvault://kv/s",
+            "--readonly",
+            "--no-readonly",
+        ],
+        "--readonly and --no-readonly cannot both be given",
+    );
+    refused(
+        &[
+            "source", "add", "new", "--dsn", "./x.db", "--rename", "other",
+        ],
+        "--rename applies only to source edit",
+    );
+    refused(
+        &["source", "show", "pg", "--description", "x"],
+        "--description applies only to source add and source edit",
+    );
+    refused(
+        &["source", "list", "-d", "sqlite"],
+        "--driver applies only to source add and source edit",
+    );
+    fixture
+        .binsql_with_env(
+            &["source", "add", "new", "--dsn-env", "NOT_A_DSN"],
+            &project,
+            &[("NOT_A_DSN", "not a dsn")],
+        )
+        .refused()
+        .stderr_has("Could not tell the driver from that connection string — pick one");
+    refused(
+        &["source", "add", "a/b/c", "--dsn", "./x.db"],
+        "'/' separates the folder from the name, so neither may contain it",
+    );
+    refused(
+        &["source", "add", "a", "b", "--dsn", "./x.db"],
+        "source add takes one name",
+    );
+
+    fixture
+        .binsql(&[
+            "source", "add", "new", "--dsn", "./x.db", "--scope", "project",
+        ])
+        .refused()
+        .stderr_has("there is no .binsql.json here to save new in");
+}
+
+#[test]
+fn source_add_saves_a_path_or_a_reference_as_written() {
+    let fixture = Fixture::new("source-add");
+    let project = write_sources(&fixture);
+
+    let added = fixture
+        .binsql_with_project(
+            &[
+                "source",
+                "add",
+                "team/source",
+                "--dsn",
+                "./x.db",
+                "--readonly",
+                "--description",
+                "local copy",
+                "-o",
+                "json",
+            ],
+            &project,
+        )
+        .succeeds();
+    let row = saved_row(added);
+    assert_eq!(row["name"], "team/source");
+    assert_eq!(row["driver"], "sqlite");
+    assert_eq!(row["dsn"], "./x.db");
+    assert_eq!(row["readonly"], true);
+    assert_eq!(row["open_on_start"], false);
+    assert_eq!(row["description"], "local copy");
+    // A project file is in play, so a new source goes into it.
+    assert_eq!(row["scope"], "project");
+    let (_, written) = files(&fixture, &project);
+    assert!(written.contains("./x.db"), "{written}");
+
+    let added = fixture
+        .binsql_with_project(
+            &[
+                "source",
+                "add",
+                "vault",
+                "--dsn",
+                "keyvault://kv/s",
+                "-d",
+                "mssql",
+                "--scope",
+                "project",
+                "-o",
+                "json",
+            ],
+            &project,
+        )
+        .succeeds();
+    let row = saved_row(added);
+    assert_eq!(row["dsn"], "keyvault://kv/s");
+    assert_eq!(row["scope"], "project");
+    let (_, written) = files(&fixture, &project);
+    assert!(written.contains("keyvault://kv/s"), "{written}");
+}
+
+#[test]
+fn source_add_with_no_keychain_keeps_the_string_in_the_user_file_and_masks_it() {
+    let fixture = Fixture::new("source-add-literal");
+    let project = write_sources(&fixture);
+    let added = fixture
+        .binsql_with_env(
+            &[
+                "source",
+                "add",
+                "app",
+                "--dsn-env",
+                "APP_DSN",
+                "--no-keychain",
+                "--scope",
+                "user",
+                "-o",
+                "json",
+            ],
+            &project,
+            &[("APP_DSN", "postgres://u:hunter2@h/db")],
+        )
+        .succeeds();
+    assert!(!added.stdout.contains("hunter2"), "{}", added.stdout);
+    let row = saved_row(added);
+    assert_eq!(row["driver"], "postgres");
+    assert_eq!(row["scope"], "user");
+    let (config, _) = files(&fixture, &project);
+    assert!(config.contains("postgres://u:hunter2@h/db"), "{config}");
+}
+
+#[test]
+fn source_edit_changes_only_what_it_is_given() {
+    let fixture = Fixture::new("source-edit");
+    let project = write_sources(&fixture);
+
+    let edited = fixture
+        .binsql_with_project(
+            &[
+                "source",
+                "edit",
+                "team/inspect",
+                "--description",
+                "x",
+                "-o",
+                "json",
+            ],
+            &project,
+        )
+        .succeeds();
+    let row = saved_row(edited);
+    assert_eq!(row["name"], "team/inspect");
+    assert_eq!(row["driver"], "mysql");
+    assert_eq!(row["dsn"], "keyvault://kv-team/dsn");
+    assert_eq!(row["readonly"], false);
+    assert_eq!(row["open_on_start"], true);
+    assert_eq!(row["scope"], "user");
+    assert_eq!(row["description"], "x");
+
+    let moved = fixture
+        .binsql_with_project(
+            &[
+                "source",
+                "edit",
+                "query",
+                "--scope",
+                "project",
+                "--no-readonly",
+                "-o",
+                "json",
+            ],
+            &project,
+        )
+        .succeeds();
+    assert_eq!(saved_row(moved)["scope"], "project");
+    let (config, written) = files(&fixture, &project);
+    assert!(!config.contains("/tmp/q.db"), "{config}");
+    assert!(written.contains("/tmp/q.db"), "{written}");
+
+    let renamed = fixture
+        .binsql_with_project(
+            &[
+                "source",
+                "edit",
+                "here",
+                "--rename",
+                "team/here",
+                "-o",
+                "json",
+            ],
+            &project,
+        )
+        .succeeds();
+    let row = saved_row(renamed);
+    assert_eq!(row["name"], "team/here");
+    assert_eq!(row["dsn"], "/tmp/h.db");
+    assert_eq!(row["scope"], "project");
+    let (_, written) = files(&fixture, &project);
+    let written: serde_json::Value = serde_json::from_str(&written).expect("valid json");
+    assert!(written["connections"]["here"].is_null(), "{written}");
+    assert_eq!(written["connections"]["team"]["here"]["dsn"], "/tmp/h.db");
+
+    let before = files(&fixture, &project);
+    fixture
+        .binsql_with_project(&["source", "edit", "query", "--rename", "pg"], &project)
+        .refused()
+        .stderr_has("pg already exists");
+    fixture
+        .binsql_with_project(&["source", "edit", "nope", "--description", "x"], &project)
+        .refused()
+        .stderr_has("no saved data source named nope");
+    fixture
+        .binsql_with_project(
+            &["source", "edit", "query", "--dsn", "keychain://kc"],
+            &project,
+        )
+        .refused()
+        .stderr_has("a keychain:// reference names a secret binsql filed");
+    fixture
+        .binsql_with_project(&["source", "edit", "pg", "--scope", "project"], &project)
+        .refused()
+        .stderr_has("a connection string is not written into .binsql.json");
+    assert_eq!(files(&fixture, &project), before);
 }
