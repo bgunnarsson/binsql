@@ -2044,6 +2044,7 @@ fn connect_timeout_stops_a_server_that_never_answers() {
             &[("BINSQL_CONNECT_TIMEOUT_MS", "300")],
         )
         .failed();
+    assert!(!run.stderr.contains("hunter2"), "{}", run.stderr);
     let record = error_record(&run);
     assert_eq!(record["category"], "connect-timeout");
     assert_eq!(record["phase"], "connect");
@@ -2102,7 +2103,8 @@ fn connect_timeout_wants_a_number() {
             "",
             &[("BINSQL_CONNECT_TIMEOUT_MS", "abc")],
         )
-        .refused();
+        .refused()
+        .stderr_has("BINSQL_CONNECT_TIMEOUT_MS wants a number of milliseconds, got abc");
 }
 
 #[test]

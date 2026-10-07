@@ -640,10 +640,10 @@ CONNECTION
     -D, --dsn STRING      a connection string, used instead of a saved one
     -d, --driver NAME     sqlite | postgres | mssql | mysql (default: inferred)
         --connect-timeout-ms N
-                          give up when loading the config, resolving the
-                          connection string and connecting take longer than
-                          N ms; 0, the default, waits as long as the driver
-                          does
+                          give up when resolving the connection string and
+                          connecting have not finished N ms after binsql
+                          began loading the config; 0, the default, waits
+                          as long as the driver does
 
     With none of these, the `default` data source is opened. BINSQL_CONN,
     BINSQL_DSN, BINSQL_DRIVER and BINSQL_CONNECT_TIMEOUT_MS say the same things
@@ -847,7 +847,9 @@ pub async fn connect(args: &Args) -> Result<Session> {
     };
 
     let (backend, dsn) = (source.backend, source.dsn.clone());
-    let failure = |error: binsql_core::Error| {
+    // Masked against what the step was given: the stored DSN while resolving
+    // it, the connection string it resolved to while connecting.
+    let failure = |error: binsql_core::Error, given: &str| {
         // A config error out of opening is a secret that would not resolve.
         let category = match error {
             binsql_core::Error::Config(_) | binsql_core::Error::Secret { .. } => Category::Secret,
@@ -856,7 +858,7 @@ pub async fn connect(args: &Args) -> Result<Session> {
         caused(format!("connecting to {name}: {error}"), &error)
             .category(category)
             .phase(Phase::Connect)
-            .dsn(backend, dsn.clone())
+            .dsn(backend, given.to_string())
     };
     let timed_out = |stage: &str| {
         failed(format!(
@@ -873,21 +875,21 @@ pub async fn connect(args: &Args) -> Result<Session> {
     let resolved = within(deadline, Resolver::from_env().resolve(&source.dsn))
         .await
         .ok_or_else(|| timed_out("resolving the connection string"))?
-        .map_err(&failure)?;
+        .map_err(|error| failure(error, &dsn))?;
     within(deadline, Session::connect(name.clone(), source, &resolved))
         .await
         .ok_or_else(|| timed_out("connecting"))?
-        .map_err(&failure)
+        .map_err(|error| failure(error, &resolved))
 }
 
 /// How long opening a connection may take, in milliseconds: from
 /// `--connect-timeout-ms`, or else `BINSQL_CONNECT_TIMEOUT_MS`. `0` is no
 /// limit, as is neither.
 fn connect_budget(args: &Args) -> Result<Option<u64>> {
-    let value = match args.value(&["connect-timeout-ms"]) {
-        Some(value) => value.to_string(),
+    let (from, value) = match args.value(&["connect-timeout-ms"]) {
+        Some(value) => ("--connect-timeout-ms", value.to_string()),
         None => match std::env::var("BINSQL_CONNECT_TIMEOUT_MS") {
-            Ok(value) => value,
+            Ok(value) => ("BINSQL_CONNECT_TIMEOUT_MS", value.trim().to_string()),
             Err(_) => return Ok(None),
         },
     };
@@ -895,7 +897,7 @@ fn connect_budget(args: &Args) -> Result<Option<u64>> {
         Ok(0) => Ok(None),
         Ok(ms) => Ok(Some(ms)),
         Err(_) => Err(usage(format!(
-            "--connect-timeout-ms wants a number of milliseconds, got {value}"
+            "{from} wants a number of milliseconds, got {value}"
         ))),
     }
 }

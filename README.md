@@ -241,7 +241,7 @@ data source is opened.
 | `-c, --conn NAME` | a saved data source, `folder/name` or a bare name |
 | `-D, --dsn STRING` | a connection string, used instead of a saved one |
 | `-d, --driver NAME` | `sqlite` \| `postgres` \| `mssql` \| `mysql` (default: inferred) |
-| `--connect-timeout-ms N` | give up when loading the config, resolving the connection string and connecting take longer than `N` ms |
+| `--connect-timeout-ms N` | give up when resolving the connection string and connecting have not finished `N` ms after binsql began loading the config |
 
 `BINSQL_CONN`, `BINSQL_DSN`, `BINSQL_DRIVER` and `BINSQL_CONNECT_TIMEOUT_MS`
 say the same things through the environment, and a flag beats the variable.
@@ -250,7 +250,8 @@ The connect budget is off by default, and `0` turns it off: binsql then waits
 as long as the driver, or `az`, does. With one, running out is exit 1 and
 `connect timeout: no connection to NAME within N ms, while …` names the step
 it was on — resolving the connection string, or connecting. The drivers' own
-timeouts are left as they are, so the first to run out wins. The budget ends
+timeouts are left as they are, so the first to run out wins. Loading the
+config counts against the budget but is never cut short. The budget ends
 once connected: running the statements, and any further connection
 `inspect --catalog` opens, are outside it.
 
