@@ -1,7 +1,7 @@
 ---
 title: "binsql --capabilities prints an offline JSON manifest"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
@@ -32,8 +32,9 @@ command keep their output.
   (`ndjson`, `md`, …), which stay accepted.
 - Compact JSON on one line, as the error record is; `--capabilities` takes no
   `--pretty`.
-- `--capabilities` behaves like `--version`: it prints and stops wherever it
-  comes before `--`.
+- `--capabilities` behaves like `--version`: it prints and stops when it
+  comes before any verb and before `--`; after a verb it is that verb's
+  unknown option.
 - `inspect`'s inline flag lists become constants like the other verbs'.
 
 ## Relevant lore

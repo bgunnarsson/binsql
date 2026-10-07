@@ -52,10 +52,10 @@ A first argument that names a verb — `query`, `exec`, `inspect` — is
 [command mode](#command-mode); anything else is a data source to open. Anything
 binsql can neither find among the saved ones nor read as a connection string is
 an error naming both ways out, since a mistyped verb lands there as readily as a
-bad DSN. `-h`, `-V` and `--debug-keys` print and stop. After `--` the next
-argument is always a data source, even one named like a verb. A new top-level
-data source cannot take a verb's name, though one inside a folder can, and one
-saved under it before stays editable.
+bad DSN. `-h`, `-V`, `--capabilities` and `--debug-keys` print and stop. After
+`--` the next argument is always a data source, even one named like a verb. A
+new top-level data source cannot take a verb's name, though one inside a folder
+can, and one saved under it before stays editable.
 
 Data sources live in `~/.config/binsql/connections.json`, honouring
 `BINSQL_CONFIG` and `XDG_CONFIG_HOME`. Add one from inside the app with `⌃N`
