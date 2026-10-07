@@ -90,6 +90,7 @@ changes to `query`, `exec` and `inspect`.
 - [68](68-check-sqlite-behaviour-under-timeout-ms.md): On SQLite a cancelled statement that returns no rows runs on until the process exits, so the deadline is enforced by exiting; a lock wait meets the driver's 5 s busy timeout as `database is locked` first.
 - [71](71-render-encodes-one-record-at-a-time-without-changi.md): CSV, TSV and JSONL each encode one record at a time; the buffered output is built from them, byte for byte as before.
 - [70](70-core-streams-rows-into-a-bounded-sink.md): adapters stream columns, then rows, into a bounded channel as they arrive; a closed receiver is a cancel; `run` collects as before.
+- [72](72-query-stream-writes-jsonl-csv-tsv-as-rows-arrive.md): `query --stream` writes jsonl, csv or tsv as rows arrive, refuses other formats, `--plan` and writes; only exit 0 means complete.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
