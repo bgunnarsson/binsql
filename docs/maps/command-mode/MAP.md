@@ -47,6 +47,8 @@ changes to `query`, `exec` and `inspect`.
 - [03](03-agent-ergonomics-survey.md): Prioritize data-source discovery, structured errors, bounded waits and richer schema context; add opt-in streaming, capability discovery and row assertions, and decide DDL and safe plans separately while preserving existing defaults and the query/exec/inspect split.
 - [04](04-inspect-for-agents.md): Inspect JSON gives an object list or one object's five column fields, not a full schema; the CLI drops identity and catalog context, while relationships, indexes, data row counts and definitions need new core introspection.
 - [05](05-verb-namespace.md): Spend one bare verb, `source`, on all data-source management (`binsql source <op>`); every other addition is a flag or lives under an existing verb; `source` dispatches to command mode only when a non-flag argument follows it, so every `binsql source …` that worked before still opens the TUI; refuse to save a new top-level data source named after a verb; and add `binsql -- <name>` to open any saved name in the TUI.
+- [07](07-tui-data-source-seams.md): The core holds every storage step (Workspace scope, set, remove, keychain, masking, resolution), but validation and the save and delete sequences live in the app; move them into `binsql-core` before the CLI writes, and add the default setter and connection test, which nothing has today.
+- [09](09-keyvault-for-agents.md): Key Vault through `az` never hangs on a prompt, but has no deadline, gives every failure the same exit 1 told apart only by text, cannot be checked without connecting or cleared from the command line, and does not work without `az login`; `az` stays the only mechanism and the README documents its non-interactive logins.
 
 ## Follow-up tickets from 03
 
@@ -67,23 +69,30 @@ changes to `query`, `exec` and `inspect`.
 
 - [19 — Schema context contract](19-schema-context-contract.md): settle additive one-call object/column context and the scope of new metadata acquisition.
 
+## Follow-up tickets from 07
+
+- [20 — Core save and delete](20-core-save-delete.md): move validation and the save and delete sequences into `binsql-core`.
+
+## Follow-up tickets from 09
+
+- [21 — Key Vault for CI](21-keyvault-ci-docs.md): document non-interactive `az login` and forcing a fresh read.
+
 ## Not yet specified
 
 - **Building the data-source commands**: these become task tickets under
   `binsql source <op>` (05) once 08 settles their shape. The one that
   adds the verb carries 05's dispatch rule: `source` is command mode only when a
   non-flag argument follows it, and bare `binsql source` keeps today's
-  message and exit 1 when nothing resolves. Some may first need logic moved from the app into the
-  core, depending on 07.
+  message and exit 1 when nothing resolves. They build on 20, and add the
+  default setter and connection test 07 found missing; 09 asks that a
+  connection test also tell a credential failure from a database one, and
+  that the secret cache can be bypassed or cleared.
 - **Estimated-plan implementation**: 03 identifies value and an existing
   EXPLAIN safety concern; shape and build tickets wait on 17's backend audit;
   05 puts plans under `inspect` or a query flag, not a new verb. Runtime-plan policy needs the person's call.
 - **Ergonomics implementation**: build tickets follow the contract decisions
   in 10 (errors), 11 (connect budget), 12 (statement budget), 13 (streaming)
   and 16 (DDL). Capability discovery and row assertions are tasks 14 and 15.
-- **Key Vault credentials beyond `az`**: whether an agent ever runs where
-  `az login` is not available, and what binsql should do then. This waits on
-  09.
 - **README Status**: rewriting the section once the data-source commands land.
 
 ## Out of scope
