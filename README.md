@@ -383,6 +383,7 @@ the same either way.
 | `phase` | `args`, `input`, `config`, `connect`, `prepare`, `execute` or `output` |
 | `message` | what went wrong, in one sentence |
 | `reason` | why, for a Key Vault or Azure AD failure: `az-missing`, `az-unauthenticated`, `vault-forbidden`, `secret-not-found`, `vault-not-found` or `azure-ad-token` |
+| `code` | the database's own code for the failure, as a string, when its driver gives one |
 | `hint` | the next step to try, when binsql knows one |
 | `detail` | what the Azure CLI said, redacted like `message` and cut at 1000 characters |
 | `statement` | the 1-based statement that failed or was refused, when there is one |
@@ -410,6 +411,19 @@ reference, and puts the rest in fields of its own:
 A `fedauth=` connection whose Azure AD token could not be had is category
 `connect` with reason `azure-ad-token`. A reason you do not know means the
 same as none.
+
+`code` is only there when the driver hands binsql the code as a field of its
+own; it is never read out of the message. What it holds depends on the
+database:
+
+| Backend | `code` | Example |
+| --- | --- | --- |
+| PostgreSQL | the SQLSTATE | `23505`, a unique violation |
+| MySQL | the SQLSTATE, not the server's error number | `23000`, for error 1062 |
+| SQLite | the extended result code, in decimal | `2067`, a UNIQUE constraint |
+| SQL Server | the error number, in decimal | `2627`, a unique key violation |
+
+A failure binsql raises itself, such as a refusal, has no `code`.
 
 The message is redacted: a stored connection string, the password in
 `scheme://user:pass@`, the value of `password=`, `pwd=` and `accesstoken=`, and
