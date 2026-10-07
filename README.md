@@ -278,6 +278,14 @@ statement that has to write from the reading verb. It runs exactly one
 statement: handed a script, it says so and points at `exec` rather than running
 the first and dropping the rest.
 
+`--timeout-ms N` cancels the statement `N` ms after the connection opens, and
+exits `1` with `timed out after N ms`, category `timeout`. Connecting is not
+counted: `--connect-timeout-ms` covers that. A cancel the database has not
+acted on 2 s after the deadline is left behind, and binsql exits all the same.
+A read says nothing was changed by binsql; a write under `--allow-write` says
+whether it took effect is unknown, because a timeout is not proof of a
+rollback. `0`, or no flag, is no limit.
+
 `--require-rows` turns an empty result into a failure: the result prints as it
 would without the flag, and then the query exits `1` with `the query returned no
 rows (--require-rows)`, category `assertion`. A check reads as a predicate
@@ -407,13 +415,13 @@ the same either way.
 | Field | |
 | --- | --- |
 | `exit` | the exit code the process ends with |
-| `category` | `usage`, `source`, `config`, `secret`, `connect`, `connect-timeout`, `refused`, `database`, `assertion`, `cancelled`, `io` or `other` |
+| `category` | `usage`, `source`, `config`, `secret`, `connect`, `connect-timeout`, `timeout`, `refused`, `database`, `assertion`, `cancelled`, `io` or `other` |
 | `phase` | `args`, `input`, `config`, `connect`, `prepare`, `execute` or `output` |
 | `message` | what went wrong, in one sentence |
 | `reason` | why, for a Key Vault or Azure AD failure: `az-missing`, `az-unauthenticated`, `vault-forbidden`, `secret-not-found`, `vault-not-found` or `azure-ad-token` |
 | `code` | the database's own code for the failure, as a string, when its driver gives one |
 | `hint` | the next step to try, when binsql knows one |
-| `detail` | what the Azure CLI said, redacted like `message` and cut at 1000 characters |
+| `detail` | what the Azure CLI said, or the database's answer to a timeout's cancel, redacted like `message` and cut at 1000 characters |
 | `statement` | the 1-based statement that failed or was refused, when there is one |
 | `completed` | how many statements before it were kept, under `exec --no-tx` |
 | `transaction` | how a transactional `exec` ended: `rolled_back`, `unknown` or `none` |
@@ -422,7 +430,7 @@ the same either way.
 `source`, a vault or keychain that would not hand over a secret is `secret`, a
 statement turned away by `query` or by `exec` without `--force` is `refused`,
 an empty result under `--require-rows` is `assertion`, a connect budget run
-out is `connect-timeout` —
+out is `connect-timeout`, a statement past `--timeout-ms` is `timeout` —
 and `phase` says how far binsql had got. A note that would have gone to stderr
 comes as `{"type":"notice","schema":1,"message":…}`, and `-o none` still hides
 it. A bad `--error-format` value is reported as text, since there is no

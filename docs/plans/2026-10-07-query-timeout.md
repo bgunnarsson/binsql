@@ -62,7 +62,7 @@ the README.
   Verify: `cargo test --workspace` — unit tests for the parser, integration
   tests for the CTE, the bad values and the unchanged output.
 
-- [ ] **2. HELP and the README.** The flag under QUERY and in the README's
+- [x] **2. HELP and the README.** The flag under QUERY and in the README's
   command-mode flags: it excludes connecting, the grace is 2 s, a timeout is
   not proof of rollback; the category in Structured errors.
   Verify: `cargo test -p binsql`.

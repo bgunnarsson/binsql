@@ -672,6 +672,9 @@ QUERY
     -f, --file FILE       read the SQL from a file, or from stdin for `-`
         --arg VALUE       fill the next ? placeholder; repeat, in order
         --limit N         stop after N rows (default: all of them)
+        --timeout-ms N    cancel the statement N ms after connecting and exit 1
+                          as a timeout; a cancel not acted on within 2 s is
+                          left behind, and a write's outcome is unknown
         --allow-write     permit a statement that writes (prefer `exec`)
         --plan            print the estimated plan of one read instead of running
                           it; `-o raw` for the bare document
