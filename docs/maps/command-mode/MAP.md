@@ -45,7 +45,7 @@ changes to `query`, `exec` and `inspect`.
 ## Decisions so far
 
 - [03](03-agent-ergonomics-survey.md): Prioritize data-source discovery, structured errors, bounded waits and richer schema context; add opt-in streaming, capability discovery and row assertions, and decide DDL and safe plans separately while preserving existing defaults and the query/exec/inspect split.
-- [05](05-verb-namespace.md): Spend one bare verb, `source`, on all data-source management (`binsql source <op>`); every other addition is a flag or lives under an existing verb; refuse to save a new top-level data source named after a verb; add `binsql -- <name>` to open any saved name in the TUI; and leave existing configs loading and listed, with the verb winning the bare name.
+- [05](05-verb-namespace.md): Spend one bare verb, `source`, on all data-source management (`binsql source <op>`); every other addition is a flag or lives under an existing verb; `source` dispatches to command mode only when a non-flag argument follows it, so every `binsql source …` that worked before still opens the TUI; refuse to save a new top-level data source named after a verb; and add `binsql -- <name>` to open any saved name in the TUI.
 
 ## Follow-up tickets from 03
 
@@ -65,7 +65,9 @@ changes to `query`, `exec` and `inspect`.
 ## Not yet specified
 
 - **Building the data-source commands**: these become task tickets under
-  `binsql source <op>` (05) once 08 settles their shape. Some may first need logic moved from the app into the
+  `binsql source <op>` (05) once 08 settles their shape. The one that
+  adds the verb carries 05's dispatch rule: `source` is command mode only when a
+  non-flag argument follows it. Some may first need logic moved from the app into the
   core, depending on 07.
 - **Richer schema context**: 03 ranks one-call schema context as worth having;
   its shape and build tickets wait on 04's per-backend inventory.

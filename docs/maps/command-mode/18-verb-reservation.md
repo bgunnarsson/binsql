@@ -31,7 +31,9 @@ parses as a target, and `main.rs`'s existing argument tests still pass.
 
 - [05](05-verb-namespace.md) for the decision. The `source` verb itself is
   added by the data-source build tickets after 08, which add it to the
-  reserved list then.
+  reserved list then, with 05's dispatch rule: `source` goes to command mode
+  only when a non-flag argument follows it. This ticket leaves `is_verb`'s
+  meaning for the three existing verbs unchanged.
 - Additions only: no existing verb, flag or exit code changes.
 
 ## Answer
