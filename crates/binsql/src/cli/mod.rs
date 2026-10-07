@@ -392,6 +392,18 @@ fn report(failure: &Failure, json: bool) -> i32 {
         return exit;
     }
 
+    eprintln!("error: {}", error_text(failure));
+    if failure.usage {
+        // A pointer, not the whole help: the message above already says
+        // what was wrong, and forty lines under it hide it.
+        eprintln!("\nrun `binsql --help` for usage");
+    }
+    exit
+}
+
+/// The failure as a person reads it: the message with its context under it,
+/// and the control characters a server's text can carry spelled out.
+fn error_text(failure: &Failure) -> String {
     let mut message = failure
         .parts
         .as_ref()
@@ -401,13 +413,7 @@ fn report(failure: &Failure, json: bool) -> i32 {
         message.push_str("\n  ");
         message.push_str(line);
     }
-    eprintln!("error: {message}");
-    if failure.usage {
-        // A pointer, not the whole help: the message above already says
-        // what was wrong, and forty lines under it hide it.
-        eprintln!("\nrun `binsql --help` for usage");
-    }
-    exit
+    render::printable_lines(&message)
 }
 
 /// The version of the `--capabilities` manifest, kept the way
@@ -1232,12 +1238,24 @@ pub fn note(options: &Options, message: &str) {
         eprintln!("{}", notice_record(message));
         return;
     }
-    eprintln!("{message}");
+    eprintln!("{}", render::printable_lines(message));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_error_keeps_its_lines_and_spells_out_escapes() {
+        let mut failure = failed("relation \"x\u{1b}]0;owned\u{7}\" does not exist\r");
+        failure.context.push("near \u{1b}[2J".into());
+        assert_eq!(
+            error_text(&failure),
+            r#"relation "x\u{1b}]0;owned\u{7}" does not exist\r"#.to_string()
+                + "\n  near "
+                + r"\u{1b}[2J"
+        );
+    }
 
     #[test]
     fn the_verbs_are_the_reserved_names() {

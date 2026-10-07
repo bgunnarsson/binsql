@@ -171,8 +171,9 @@ fn table(result: &ResultSet, options: &Options) -> String {
         return String::new();
     }
 
+    let names: Vec<String> = result.columns.iter().map(|c| printable(&c.name)).collect();
     let cells: Vec<Vec<String>> = result.rows.iter().map(|row| texts(row)).collect();
-    let widths = widths(&result.columns, &cells);
+    let widths = widths(&names, &cells);
 
     let rule = |edge: char| {
         let mut line = String::from("+");
@@ -198,7 +199,6 @@ fn table(result: &ResultSet, options: &Options) -> String {
 
     let mut out = rule('-');
     if options.header {
-        let names: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
         out.push_str(&line(&names));
         out.push_str(&rule('='));
     }
@@ -220,7 +220,7 @@ fn markdown(result: &ResultSet) -> String {
 
     let mut out = String::from("|");
     for column in &result.columns {
-        let _ = write!(out, " {} |", escape_pipes(&column.name));
+        let _ = write!(out, " {} |", escape_pipes(&printable(&column.name)));
     }
     out.push_str("\n|");
     for _ in &result.columns {
@@ -239,12 +239,8 @@ fn markdown(result: &ResultSet) -> String {
 }
 
 fn vertical(result: &ResultSet, options: &Options) -> String {
-    let width = result
-        .columns
-        .iter()
-        .map(|column| column.name.width())
-        .max()
-        .unwrap_or(0);
+    let names: Vec<String> = result.columns.iter().map(|c| printable(&c.name)).collect();
+    let width = names.iter().map(|name| name.width()).max().unwrap_or(0);
 
     let mut out = String::new();
     for (index, row) in result.rows.iter().enumerate() {
@@ -253,9 +249,9 @@ fn vertical(result: &ResultSet, options: &Options) -> String {
             "*************************** {}. row ***************************",
             index + 1
         );
-        for (column, value) in result.columns.iter().zip(texts(row)) {
-            let indent = " ".repeat(width.saturating_sub(column.name.width()));
-            let _ = writeln!(out, "{indent}{}: {value}", column.name);
+        for (name, value) in names.iter().zip(texts(row)) {
+            let indent = " ".repeat(width.saturating_sub(name.width()));
+            let _ = writeln!(out, "{indent}{name}: {value}");
         }
     }
     if options.footer {
@@ -415,22 +411,53 @@ fn encode(value: &Json, pretty: bool) -> String {
     encoded
 }
 
+/// A row as the formats a person reads show it: NULL spelled out and every
+/// control character escaped.
 fn texts(row: &[Value]) -> Vec<String> {
     row.iter()
         .map(|value| {
             if value.is_null() {
                 NULL.to_string()
             } else {
-                value.to_text()
+                printable(&value.to_text())
             }
         })
         .collect()
 }
 
-fn widths(columns: &[Column], rows: &[Vec<String>]) -> Vec<usize> {
-    let mut widths: Vec<usize> = columns
+/// Database text with its control characters spelled out, so a value printed
+/// for a person cannot move the cursor, retitle the window or forge a row.
+/// A backslash is left alone; the faithful formats are for telling `\n` the
+/// two characters from a newline.
+pub fn printable(text: &str) -> String {
+    escape_controls(text, &[])
+}
+
+/// As `printable`, keeping the line breaks and tabs a message is made of.
+pub fn printable_lines(text: &str) -> String {
+    escape_controls(text, &['\n', '\t'])
+}
+
+fn escape_controls(text: &str, keep: &[char]) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            _ if !ch.is_control() || keep.contains(&ch) => out.push(ch),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => {
+                let _ = write!(out, "\\u{{{:x}}}", u32::from(ch));
+            }
+        }
+    }
+    out
+}
+
+fn widths(names: &[String], rows: &[Vec<String>]) -> Vec<usize> {
+    let mut widths: Vec<usize> = names
         .iter()
-        .map(|column| column.name.width().min(MAX_COLUMN_WIDTH))
+        .map(|name| name.width().min(MAX_COLUMN_WIDTH))
         .collect();
 
     for row in rows {
@@ -599,6 +626,68 @@ mod tests {
         let parsed: Json = serde_json::from_str(&out).expect("valid json");
         assert_eq!(parsed["rows"][0]["id"], json!(1));
         assert_eq!(parsed["rows"][0]["id:2"], json!(2));
+    }
+
+    fn hostile() -> ResultSet {
+        ResultSet {
+            columns: vec![Column::new("na\u{1b}]0;me", "text")],
+            rows: vec![vec![Value::Text(
+                "a\u{1b}[2Jb\u{7}c\rd\ne\tf\u{7f}g\u{9b}h".into(),
+            )]],
+            rows_affected: None,
+            elapsed: Duration::ZERO,
+            truncated: false,
+        }
+    }
+
+    const ESCAPED: &str = r"a\u{1b}[2Jb\u{7}c\rd\ne\tf\u{7f}g\u{9b}h";
+
+    #[test]
+    fn the_formats_a_person_reads_escape_control_characters() {
+        for format in [
+            Format::Table,
+            Format::Vertical,
+            Format::Markdown,
+            Format::Raw,
+        ] {
+            let out = rows(&hostile(), &options(format));
+            assert!(out.contains(ESCAPED), "{format:?}: {out}");
+            assert!(
+                !out.chars().any(|ch| ch.is_control() && ch != '\n'),
+                "{format:?}: {out:?}"
+            );
+        }
+        let table = rows(&hostile(), &options(Format::Table));
+        assert!(table.contains(r"na\u{1b}]0;me"), "{table}");
+    }
+
+    #[test]
+    fn the_faithful_formats_keep_control_characters() {
+        let value = "a\u{1b}[2Jb\u{7}c\rd\ne\tf\u{7f}g\u{9b}h";
+        for format in [Format::Json, Format::Jsonl, Format::Csv] {
+            let out = rows(&hostile(), &options(format));
+            assert!(!out.contains(ESCAPED), "{format:?}: {out}");
+        }
+        let csv = rows(&hostile(), &options(Format::Csv));
+        assert!(csv.contains(value), "{csv:?}");
+        let json: Json = serde_json::from_str(&rows(&hostile(), &options(Format::Jsonl))).unwrap();
+        assert_eq!(json["na\u{1b}]0;me"], json!(value));
+    }
+
+    #[test]
+    fn a_table_measures_the_escaped_text() {
+        let out = rows(&hostile(), &options(Format::Table));
+        let widths: Vec<usize> = out.lines().take(4).map(|line| line.width()).collect();
+        assert!(widths.windows(2).all(|pair| pair[0] == pair[1]), "{out}");
+    }
+
+    #[test]
+    fn messages_keep_their_line_breaks() {
+        assert_eq!(
+            printable_lines("no\u{1b}]8;;x\u{7}\n\tdetail\r"),
+            r"no\u{1b}]8;;x\u{7}".to_string() + "\n\tdetail" + r"\r"
+        );
+        assert_eq!(printable(r"C:\temp"), r"C:\temp");
     }
 
     #[test]

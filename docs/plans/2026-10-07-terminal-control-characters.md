@@ -56,7 +56,7 @@ does the same for everything but the line breaks it is made of.
 
 ## Tasks
 
-- [ ] **1. Escape control characters in the terminal formats and on stderr.**
+- [x] **1. Escape control characters in the terminal formats and on stderr.**
   A `printable` function in `cli/render.rs` used by `table`, `vertical`,
   `markdown` and `raw` for values and names, and by `report` and `note` in
   `cli/mod.rs` keeping line breaks. Unit tests in both files.
