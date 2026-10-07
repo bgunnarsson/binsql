@@ -1,7 +1,7 @@
 ---
 title: binsql source default prints the default data source and sets it in the file that decides it
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
