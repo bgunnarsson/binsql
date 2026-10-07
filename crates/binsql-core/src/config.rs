@@ -351,9 +351,12 @@ fn set_owner_only(_path: &Path, _mode: u32) -> Result<()> {
     Ok(())
 }
 
-/// Hides credentials so a DSN can be shown in the UI or a log.
-pub fn mask_dsn(dsn: &str) -> String {
-    let masked = mask_keyword_password(dsn);
+/// Hides credentials so a DSN can be shown in the UI or a log. The driver says
+/// which separators a keyword-form value can hold: PostgreSQL's terms are split
+/// on whitespace, so a `;` is part of a password there, and SQL Server's and
+/// MySQL's on `;`, so a space is.
+pub fn mask_dsn(backend: Backend, dsn: &str) -> String {
+    let masked = mask_keyword_password(backend, dsn);
 
     // URL form: scheme://user:password@host
     if let Some(scheme_end) = masked.find("://") {
@@ -373,11 +376,11 @@ pub fn mask_dsn(dsn: &str) -> String {
     }
 
     // go-sql-driver form: user:password@tcp(...)
-    if let Some(at) = masked.rfind('@') {
+    if backend == Backend::MySql
+        && let Some(at) = masked.rfind('@')
+    {
         let credentials = &masked[..at];
-        if let Some(colon) = credentials.find(':')
-            && !credentials.contains(' ')
-        {
+        if let Some(colon) = credentials.find(':') {
             return format!("{}:****{}", &credentials[..colon], &masked[at..]);
         }
     }
@@ -387,7 +390,7 @@ pub fn mask_dsn(dsn: &str) -> String {
 
 /// Replaces the value of any `password=` / `pwd=` term, in either the
 /// semicolon-separated or space-separated keyword form, or a URL's query.
-fn mask_keyword_password(dsn: &str) -> String {
+fn mask_keyword_password(backend: Backend, dsn: &str) -> String {
     let mut out = String::with_capacity(dsn.len());
     let mut rest = dsn;
 
@@ -395,7 +398,7 @@ fn mask_keyword_password(dsn: &str) -> String {
         out.push_str(&rest[..value_start]);
         out.push_str("****");
         let in_query = key_start > 0 && matches!(rest.as_bytes()[key_start - 1], b'?' | b'&');
-        let value_end = value_start + value_len(&rest[value_start..], in_query);
+        let value_end = value_start + value_len(backend, &rest[value_start..], in_query);
         rest = &rest[value_end..];
     }
 
@@ -403,34 +406,47 @@ fn mask_keyword_password(dsn: &str) -> String {
     out
 }
 
-/// How long a password value is. A value in `{…}`, `'…'` or `"…"` runs to its
-/// closing mark, where a doubled mark is a literal one, because a quoted value
-/// may hold the `;` or space that would otherwise end it. In a URL's query an
-/// `&` ends it too.
-fn value_len(value: &str, in_query: bool) -> usize {
-    let close = match value.as_bytes().first() {
-        Some(b'{') => Some('}'),
+/// How long a password value is, with any whitespace before it. In a URL's
+/// query only `&` or `#` ends it. Otherwise a quoted value runs to its closing
+/// mark — PostgreSQL's `'…'` with `\` escaping the next character, SQL
+/// Server's and MySQL's `{…}`, `'…'` or `"…"` with a doubled mark standing for
+/// one — and an unquoted one to the driver's separator.
+fn value_len(backend: Backend, value: &str, in_query: bool) -> usize {
+    if in_query {
+        return value.find(['&', '#']).unwrap_or(value.len());
+    }
+    let lead = value.len() - value.trim_start().len();
+    let body = &value[lead..];
+    let postgres = backend == Backend::Postgres;
+
+    let close = match body.as_bytes().first() {
         Some(b'\'') => Some('\''),
-        Some(b'"') => Some('"'),
+        Some(b'{') if !postgres => Some('}'),
+        Some(b'"') if !postgres => Some('"'),
         _ => None,
     };
-    if let Some(close) = close {
-        let mut at = 1;
-        while let Some(offset) = value[at..].find(close) {
-            at += offset + 1;
-            if !value[at..].starts_with(close) {
-                return at;
-            }
-            at += 1;
-        }
-        return value.len();
-    }
-    let ends: &[char] = if in_query {
-        &[';', ' ', '&']
-    } else {
-        &[';', ' ']
+    let Some(close) = close else {
+        let end = if postgres {
+            body.find(char::is_whitespace)
+        } else {
+            body.find(';')
+        };
+        return lead + end.unwrap_or(body.len());
     };
-    value.find(ends).unwrap_or(value.len())
+
+    let mut chars = body.char_indices().skip(1).peekable();
+    while let Some((at, c)) = chars.next() {
+        if postgres && c == '\\' {
+            chars.next();
+        } else if c == close {
+            if !postgres && chars.peek().is_some_and(|&(_, next)| next == close) {
+                chars.next();
+            } else {
+                return lead + at + 1;
+            }
+        }
+    }
+    value.len()
 }
 
 /// Finds the next `password=` / `pwd=` term, returning where the key and its
@@ -453,8 +469,9 @@ fn find_password_key(haystack: &str) -> Option<(usize, usize)> {
 
         // Only a term boundary counts, so `old_password` is not mistaken for a
         // separate key and `passwordless=1` is not truncated.
-        let preceded_by_boundary =
-            key_start == 0 || matches!(lower.as_bytes()[key_start - 1], b';' | b' ' | b'&' | b'?');
+        let preceded_by_boundary = key_start == 0
+            || matches!(lower.as_bytes()[key_start - 1], b';' | b'&' | b'?')
+            || lower.as_bytes()[key_start - 1].is_ascii_whitespace();
         let after_key = key_start + key.len();
         let value_start = lower[after_key..]
             .find('=')
@@ -477,7 +494,10 @@ mod tests {
     #[test]
     fn masks_url_credentials() {
         assert_eq!(
-            mask_dsn("postgres://app:hunter2@db.example.com:5432/app"),
+            mask_dsn(
+                Backend::Postgres,
+                "postgres://app:hunter2@db.example.com:5432/app"
+            ),
             "postgres://app:****@db.example.com:5432/app"
         );
     }
@@ -485,48 +505,81 @@ mod tests {
     #[test]
     fn masks_keyword_password() {
         assert_eq!(
-            mask_dsn("server=tcp:h,1433;user id=sa;password=hunter2;database=app"),
+            mask_dsn(
+                Backend::MsSql,
+                "server=tcp:h,1433;user id=sa;password=hunter2;database=app"
+            ),
             "server=tcp:h,1433;user id=sa;password=****;database=app"
         );
     }
 
     #[test]
     fn masks_every_drivers_literal_form() {
-        for (dsn, masked) in [
+        use Backend::{MsSql, MySql, Postgres, Sqlite};
+        for (backend, dsn, masked) in [
             (
+                MsSql,
                 "Server=x;User Id=u;Password=secret",
                 "Server=x;User Id=u;Password=****",
             ),
-            ("Pwd={se;cret};Database=d", "Pwd=****;Database=d"),
-            ("Pwd={a}}b;c};Database=d", "Pwd=****;Database=d"),
-            ("Password='a b';x=1", "Password=****;x=1"),
-            ("Password=\"a b\";x=1", "Password=****;x=1"),
+            (MsSql, "Pwd={se;cret};Database=d", "Pwd=****;Database=d"),
+            (MsSql, "Pwd={a}}b;c};Database=d", "Pwd=****;Database=d"),
+            (MsSql, "Password='a b';x=1", "Password=****;x=1"),
+            (MsSql, "Password=\"a b\";x=1", "Password=****;x=1"),
+            (MsSql, "Password= \"a b\";x=1", "Password=****;x=1"),
+            (MsSql, "Password= a b;x=1", "Password=****;x=1"),
             (
+                Postgres,
                 "host=h user=u password=secret dbname=d",
                 "host=h user=u password=**** dbname=d",
             ),
             (
+                Postgres,
+                "host=h\tpassword=top;secret\ndbname=d",
+                "host=h\tpassword=****\ndbname=d",
+            ),
+            (
+                Postgres,
+                "password='a\\' b' dbname=d",
+                "password=**** dbname=d",
+            ),
+            (
+                Postgres,
                 "postgres://h/db?user=u&password=secret&sslmode=require",
                 "postgres://h/db?user=u&password=****&sslmode=require",
             ),
-            ("mysql://u:secret@h:3306/db", "mysql://u:****@h:3306/db"),
-            ("u:secret@tcp(h:3306)/db", "u:****@tcp(h:3306)/db"),
-            ("/data/app.db", "/data/app.db"),
-            ("keychain://team/prod", "keychain://team/prod"),
             (
+                Postgres,
+                "postgres://h/db?password=se;c ret&sslmode=require",
+                "postgres://h/db?password=****&sslmode=require",
+            ),
+            (
+                MySql,
+                "mysql://u:secret@h:3306/db",
+                "mysql://u:****@h:3306/db",
+            ),
+            (MySql, "u:secret@tcp(h:3306)/db", "u:****@tcp(h:3306)/db"),
+            (MySql, "u:my secret@tcp(h:3306)/db", "u:****@tcp(h:3306)/db"),
+            (Sqlite, "/data/app.db", "/data/app.db"),
+            (MsSql, "keychain://team/prod", "keychain://team/prod"),
+            (
+                Postgres,
                 "keyvault://vault.vault.azure.net/secrets/prod",
                 "keyvault://vault.vault.azure.net/secrets/prod",
             ),
         ] {
-            assert_eq!(mask_dsn(dsn), masked, "{dsn}");
+            assert_eq!(mask_dsn(backend, dsn), masked, "{dsn}");
         }
     }
 
     #[test]
     fn leaves_password_free_dsn_alone() {
-        assert_eq!(mask_dsn("/data/app.db"), "/data/app.db");
+        assert_eq!(mask_dsn(Backend::Sqlite, "/data/app.db"), "/data/app.db");
         assert_eq!(
-            mask_dsn("host=localhost dbname=app sslmode=disable"),
+            mask_dsn(
+                Backend::Postgres,
+                "host=localhost dbname=app sslmode=disable"
+            ),
             "host=localhost dbname=app sslmode=disable"
         );
     }

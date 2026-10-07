@@ -77,7 +77,7 @@ fn row(workspace: &Workspace, id: &str, source: &DataSource) -> (Vec<Value>, Opt
     let dsn = if keychain::is_reference(&source.dsn) || Reference::is_reference(&source.dsn) {
         source.dsn.clone()
     } else {
-        mask_dsn(&source.dsn)
+        mask_dsn(source.backend, &source.dsn)
     };
     let default = workspace
         .default

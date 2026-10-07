@@ -600,8 +600,8 @@ v2 yet:
 
 - **Changing data sources from the command line.** `binsql source list` and
   `source show` read them; v2's `binsql conn add` has no counterpart yet, so a
-  data source is added, edited or removed with `⌃N` in the TUI, or by editing
-  the config by hand — which means knowing whether you meant the user file or
+  data source is added with `⌃N` in the TUI and edited with `e` in its tree, or
+  the config is edited by hand — which means knowing whether you meant the user file or
   a project's.
 - **Managed identity and service-principal credentials** for Key Vault, as
   binsql's own. v2 linked them in; v3 reaches the same identities through
