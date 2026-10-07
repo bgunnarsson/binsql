@@ -1,7 +1,7 @@
 ---
 title: "`--error-format json` prints one structured error record on stderr"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
@@ -93,7 +93,7 @@ variable `status`.
   `BINSQL_ERROR_FORMAT` is removed from the test environment.
   Verify: `cargo test -p binsql --test command_mode`.
 
-- [ ] **4. HELP and the README.** A "Structured errors" section: the switch,
+- [x] **4. HELP and the README.** A "Structured errors" section: the switch,
   the variable, the record, the categories and phases, the revision policy,
   the redaction, and that a server's message can hold data values.
   Verify: `cargo test -p binsql`.

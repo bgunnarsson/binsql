@@ -73,6 +73,7 @@ changes to `query`, `exec` and `inspect`.
 - [32](32-source-test-fresh-and-clear-cache.md): Built: `binsql source test [NAME] [--fresh]` prints `name, ok, stage, elapsed_ms, error` and exits 1 at the failing stage (secret, token, connect); `binsql source clear-cache` deletes the secret cache and its key.
 - [33](33-source-add-and-source-edit.md): binsql source add and source edit save a data source from the command line, filing a connection string in the credential store by default.
 - [34](34-source-remove.md): binsql source remove NAME --force deletes a data source from every file that holds it, then its keychain secret, and prints the row it had.
+- [40](40-error-format-json-gives-one-structured-error-recor.md): `--error-format json`, or `BINSQL_ERROR_FORMAT=json`, prints a failure as one JSON line on stderr — type, schema 1, exit, category, phase, a redacted message without SQL, and statement/completed when set — and notices as notice records.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.

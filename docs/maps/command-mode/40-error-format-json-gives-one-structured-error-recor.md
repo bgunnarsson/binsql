@@ -2,7 +2,7 @@
 title: "`--error-format json` gives one structured error record on stderr"
 kind: task
 mode: afk
-status: open
+status: resolved
 blocked_by: []
 claimed_by:
 ---
@@ -28,3 +28,14 @@ Build what 10 settled for this step; the contract is in 10's answer
   - default text output stays byte-for-byte the same in all of the above.
 
 ## Answer
+
+`--error-format json`, or `BINSQL_ERROR_FORMAT=json`, prints a failure as one JSON line on stderr — type, schema 1, exit, category, phase, a redacted message without SQL, and statement/completed when set — and notices as notice records.
+
+Built in docs/plans/2026-10-07-error-format-json.md (crates/binsql/src/cli/mod.rs: Category, Phase, the Failure builders, error_record, redact and the pre-scan; crates/binsql/src/cli/source.rs; tests/command_mode.rs; README's Structured errors section; HELP's ERRORS). Text mode keeps its bytes and every exit code is unchanged. Review fix: the stored connection string is masked verbatim before the generic patterns rewrite any of it, and a quoted or braced value is masked whole; a read-only or not-plannable refusal no longer quotes the statement in the JSON message; saving, removing or defaulting a source fails in the config phase.
+
+Assumed, not asked: the mask is `****`, the one `mask_dsn` already uses, rather than the contract's `***`.
+Assumed, not asked: `reason`, `code`, `hint`, `detail` and `transaction` wait for 41, 42 and 43, which have values for them.
+Assumed, not asked: the CLI never sees the resolved connection string, so a resolved secret is caught by the generic patterns, not a verbatim match; those miss `Password = x` with spaces, percent-encoded values and a URL password holding `/`. No message but connect's carries a DSN today.
+Assumed, not asked: the pre-scan takes `--error-format` anywhere before the first `--`, so `--arg --error-format` is read as the flag, and a `--` given as a flag's value ends the scan early.
+Assumed, not asked: the transaction sentence is left out of JSON with the SQL until 43 gives it a `transaction` field.
+Assumed, not asked: `inspect`'s "no table or view named …" is category `database`; `source test` takes `secret` or `connect` from the stage that stopped it.
