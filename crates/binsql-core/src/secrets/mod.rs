@@ -71,9 +71,13 @@ impl Resolver {
     async fn resolve_with(&self, dsn: &str, read_cache: bool) -> Result<String> {
         // The credential store is local, so this neither waits on a network nor
         // goes through the cache — writing it to the cache file would put the
-        // secret somewhere the keychain is not.
+        // secret somewhere the keychain is not. The read blocks, so it runs on
+        // a thread of its own where a deadline can leave it behind.
         if let Some(account) = keychain::account(dsn) {
-            return keychain::get(account);
+            let account = account.to_string();
+            return tokio::task::spawn_blocking(move || keychain::get(&account))
+                .await
+                .map_err(|e| Error::config(anyhow::anyhow!("reading the keychain: {e}")))?;
         }
 
         if !Reference::is_reference(dsn) {

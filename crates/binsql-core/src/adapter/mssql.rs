@@ -836,6 +836,7 @@ async fn azure_cli_token() -> Result<String> {
         // The Azure CLI's Python warnings go to stderr and have broken token
         // reads before; silencing them is the documented workaround.
         .env("PYTHONWARNINGS", "ignore")
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|e| {

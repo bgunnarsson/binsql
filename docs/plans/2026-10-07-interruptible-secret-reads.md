@@ -48,7 +48,7 @@ never name a zsh variable `status`.
 
 ## Tasks
 
-- [ ] **1. Kill `az` on drop, read the keychain off the runtime.**
+- [x] **1. Kill `az` on drop, read the keychain off the runtime.**
   `secrets/azure.rs` and `adapter/mssql.rs`: `.kill_on_drop(true)`.
   `secrets/mod.rs`: `keychain::get` in `spawn_blocking`.
   `tests/az_interrupt.rs`: the stub-`az` test.

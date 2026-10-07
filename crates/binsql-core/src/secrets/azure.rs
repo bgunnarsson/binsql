@@ -35,6 +35,7 @@ pub async fn fetch(reference: &Reference) -> Result<String> {
         // The Azure CLI's Python warnings go to stderr and have broken output
         // parsing before; silencing them is the documented workaround.
         .env("PYTHONWARNINGS", "ignore")
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|e| Error::Secret {
