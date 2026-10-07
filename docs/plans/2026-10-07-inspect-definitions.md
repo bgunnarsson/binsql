@@ -46,7 +46,7 @@ keywords it stores.
 
 ## Tasks
 
-- [ ] **1. The switch.** `inspect.rs`: `definitions` switch, refusal with
+- [x] **1. The switch.** `inspect.rs`: `definitions` switch, refusal with
   `--columns`, `definitions_of`, the note; unit tests; integration tests in
   `tests/command_mode.rs`.
   Verify: `cargo test --workspace`.

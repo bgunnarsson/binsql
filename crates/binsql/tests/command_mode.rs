@@ -777,6 +777,113 @@ fn inspect_columns_names_an_object_with_a_dot() {
 }
 
 #[test]
+fn inspect_definitions_gives_each_object_its_stored_text() {
+    let fixture = Fixture::new("inspect-definitions");
+    fixture
+        .direct(&[
+            "exec",
+            "CREATE TABLE track (title TEXT NOT NULL, -- the name\n id INTEGER PRIMARY KEY); \
+             CREATE VIEW long_track AS SELECT title FROM track",
+        ])
+        .succeeds();
+    let table = "CREATE TABLE track (title TEXT NOT NULL, -- the name\n id INTEGER PRIMARY KEY)";
+    let view = "CREATE VIEW long_track AS SELECT title FROM track";
+
+    let run = fixture
+        .direct(&["inspect", "--definitions", "-o", "json"])
+        .succeeds();
+    assert!(!run.stderr.contains("not given"), "{}", run.stderr);
+    let mut parsed: serde_json::Value = serde_json::from_str(&run.stdout).expect("json");
+    parsed
+        .as_object_mut()
+        .expect("an envelope")
+        .remove("duration_ms")
+        .expect("a duration");
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "columns": [
+                {"name": "catalog", "type": "text"},
+                {"name": "schema", "type": "text"},
+                {"name": "object", "type": "text"},
+                {"name": "kind", "type": "text"},
+                {"name": "form", "type": "text"},
+                {"name": "definition", "type": "text"},
+            ],
+            "row_count": 2,
+            "rows": [
+                {"catalog": "main", "schema": null, "object": "long_track", "kind": "view",
+                 "form": "create", "definition": view},
+                {"catalog": "main", "schema": null, "object": "track", "kind": "table",
+                 "form": "create", "definition": table},
+            ],
+            "truncated": false,
+        })
+    );
+
+    let run = fixture
+        .direct(&["inspect", "--definitions", "-o", "jsonl"])
+        .succeeds();
+    let lines: Vec<serde_json::Value> = run
+        .stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a json line"))
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["definition"], view);
+    assert_eq!(lines[1]["definition"], table);
+
+    let run = fixture
+        .direct(&["inspect", "--definitions", "-o", "csv"])
+        .succeeds();
+    assert_eq!(
+        run.stdout,
+        format!(
+            "catalog,schema,object,kind,form,definition\n\
+             main,,long_track,view,create,{view}\n\
+             main,,track,table,create,\"{table}\"\n"
+        )
+    );
+}
+
+#[test]
+fn inspect_definitions_names_one_object_exactly() {
+    let fixture = Fixture::new("inspect-definitions-name");
+    fixture.seed();
+    fixture
+        .direct(&["exec", "CREATE TABLE album (id INTEGER)"])
+        .succeeds();
+
+    let run = fixture
+        .direct(&["inspect", "--definitions", "album", "-o", "csv"])
+        .succeeds();
+    assert_eq!(
+        run.stdout,
+        "catalog,schema,object,kind,form,definition\n\
+         main,,album,table,create,CREATE TABLE album (id INTEGER)\n"
+    );
+
+    let run = fixture
+        .direct(&["inspect", "--definitions", "ALBUM"])
+        .failed()
+        .stderr_has("no table or view named ALBUM in main")
+        .stderr_has("names that differ only in case: album");
+    assert_eq!(run.stdout, "");
+}
+
+#[test]
+fn inspect_definitions_and_columns_together_is_a_usage_mistake() {
+    let fixture = Fixture::new("inspect-definitions-columns");
+    fixture.seed();
+
+    let run = fixture
+        .direct(&["inspect", "--definitions", "--columns"])
+        .refused()
+        .stderr_has("--definitions and --columns");
+    assert_eq!(run.stdout, "");
+}
+
+#[test]
 fn inspect_without_columns_prints_what_it_did_before() {
     let fixture = Fixture::new("inspect-unchanged");
     fixture.seed();

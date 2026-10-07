@@ -5,11 +5,14 @@
 //! format the other verbs have works here for nothing. With `--columns` it
 //! lists every object's columns at once, each row carrying the object it
 //! belongs to, or one object's when it is named — exactly, since a name
-//! under `--columns` is an identity rather than a guess.
+//! under `--columns` is an identity rather than a guess. `--definitions`
+//! selects the same way and gives each object's own definition text instead.
 
 use std::time::Instant;
 
-use binsql_core::{Column, ObjectKind, ObjectRef, ResultSet, Session, Value};
+use binsql_core::{
+    Column, Definition, DefinitionForm, ObjectKind, ObjectRef, ResultSet, Session, Value,
+};
 
 use super::render;
 use super::{
@@ -18,12 +21,18 @@ use super::{
 };
 
 pub(super) const VALUES: &[&str] = &[];
-pub(super) const SWITCHES: &[&str] = &["columns"];
+pub(super) const SWITCHES: &[&str] = &["columns", "definitions"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     let args = parse(args, VALUES, SWITCHES)?;
     let options = output(&args)?;
     let every_column = args.is_set(&["columns"]);
+    let definitions = args.is_set(&["definitions"]);
+    if every_column && definitions {
+        return Err(usage(
+            "--definitions and --columns each have their own rows; pass one",
+        ));
+    }
     let timeout = statement_budget(&args)?;
 
     let target = match args.positional() {
@@ -52,6 +61,20 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         print(&render::rows(&result, &options))?;
         for object in empty {
             note(&options, &format!("{object} has no columns"));
+        }
+        return Ok(());
+    }
+
+    if definitions {
+        let result = cut_off(
+            timeout,
+            NOTHING_CHANGED,
+            definitions_of(&session, &catalog, schema.as_deref(), target.as_deref()),
+        )
+        .await?;
+        print(&render::rows(&result, &options))?;
+        if let Some(line) = without_text(&result) {
+            note(&options, &line);
         }
         return Ok(());
     }
@@ -179,17 +202,8 @@ async fn columns_of(
     name: Option<&str>,
 ) -> Result<(ResultSet, Vec<String>)> {
     let start = Instant::now();
-    let mut found = Vec::new();
-    for schema in &scope(session, catalog, schema).await? {
-        let named = (!schema.is_empty()).then_some(schema.as_str());
-        found.extend(session.objects(catalog, named).await.map_err(core)?);
-    }
-    if let Some(name) = name {
-        found = select(found, catalog, name)?;
-    }
-
     let mut objects = Vec::new();
-    for object in found {
+    for object in selected(session, catalog, schema, name).await? {
         let columns = session
             .columns(&object)
             .await
@@ -203,12 +217,7 @@ async fn columns_of(
         .map(|(object, _)| object.display())
         .collect();
 
-    let mut columns = vec![
-        Column::new("catalog", "text"),
-        Column::new("schema", "text"),
-        Column::new("object", "text"),
-        Column::new("kind", "text"),
-    ];
+    let mut columns = identity_columns();
     columns.extend(describe_columns());
 
     let result = ResultSet {
@@ -219,6 +228,58 @@ async fn columns_of(
         truncated: false,
     };
     Ok((result, empty))
+}
+
+/// Every object definition in the schemas in scope, as one result. Like
+/// `columns_of`, it reads them all before anything is printed.
+async fn definitions_of(
+    session: &Session,
+    catalog: &str,
+    schema: Option<&str>,
+    name: Option<&str>,
+) -> Result<ResultSet> {
+    let start = Instant::now();
+    let mut objects = Vec::new();
+    for object in selected(session, catalog, schema, name).await? {
+        let definition = session.definition(&object).await.map_err(|error| {
+            caused(
+                format!("definition of {}: {error}", object.display()),
+                &error,
+            )
+        })?;
+        objects.push((object, definition));
+    }
+
+    let mut columns = identity_columns();
+    columns.push(Column::new("form", "text"));
+    columns.push(Column::new("definition", "text"));
+
+    Ok(ResultSet {
+        columns,
+        rows: definition_rows(catalog, objects),
+        rows_affected: None,
+        elapsed: start.elapsed(),
+        truncated: false,
+    })
+}
+
+/// The tables and views in the schemas in scope, or only those named exactly
+/// `name` when one was given.
+async fn selected(
+    session: &Session,
+    catalog: &str,
+    schema: Option<&str>,
+    name: Option<&str>,
+) -> Result<Vec<ObjectRef>> {
+    let mut found = Vec::new();
+    for schema in &scope(session, catalog, schema).await? {
+        let named = (!schema.is_empty()).then_some(schema.as_str());
+        found.extend(session.objects(catalog, named).await.map_err(core)?);
+    }
+    match name {
+        Some(name) => select(found, catalog, name),
+        None => Ok(found),
+    }
 }
 
 /// The objects named exactly `name`, case and dots included. Finding none is
@@ -267,18 +328,11 @@ fn select(objects: Vec<ObjectRef>, catalog: &str, name: &str) -> Result<Vec<Obje
 /// they were declared in. An object with no columns still gets a row, with
 /// everything past its identity null, so it is not lost from the list.
 fn column_rows(catalog: &str, mut objects: Vec<(ObjectRef, Vec<Column>)>) -> Vec<Vec<Value>> {
-    objects.sort_by(|(a, _), (b, _)| {
-        (&a.schema, &a.name, kind_label(a.kind)).cmp(&(&b.schema, &b.name, kind_label(b.kind)))
-    });
+    objects.sort_by(|(a, _), (b, _)| order(a).cmp(&order(b)));
 
     let mut rows = Vec::new();
     for (object, columns) in objects {
-        let identity = vec![
-            Value::Text(catalog.to_string()),
-            object.schema.clone().map_or(Value::Null, Value::Text),
-            Value::Text(object.name.clone()),
-            Value::Text(kind_label(object.kind).to_string()),
-        ];
+        let identity = identity(catalog, &object);
         if columns.is_empty() {
             let mut row = identity.clone();
             row.extend(std::iter::repeat_n(Value::Null, 5));
@@ -291,6 +345,74 @@ fn column_rows(catalog: &str, mut objects: Vec<(ObjectRef, Vec<Column>)>) -> Vec
         }
     }
     rows
+}
+
+/// One row per object, in `column_rows`' order, its definition after its
+/// identity. A form with no text has a null definition.
+fn definition_rows(catalog: &str, mut objects: Vec<(ObjectRef, Definition)>) -> Vec<Vec<Value>> {
+    objects.sort_by(|(a, _), (b, _)| order(a).cmp(&order(b)));
+
+    objects
+        .into_iter()
+        .map(|(object, definition)| {
+            let mut row = identity(catalog, &object);
+            row.push(Value::Text(form_label(definition.form).to_string()));
+            row.push(definition.text.map_or(Value::Null, Value::Text));
+            row
+        })
+        .collect()
+}
+
+/// The line for stderr when some rows came back without text, counting them
+/// by form: `2 definitions not given: 1 unsupported, 1 withheld`.
+fn without_text(result: &ResultSet) -> Option<String> {
+    let count = |form: DefinitionForm| {
+        let label = Value::Text(form_label(form).to_string());
+        result.rows.iter().filter(|row| row[4] == label).count()
+    };
+    let counts: Vec<_> = [DefinitionForm::Unsupported, DefinitionForm::Withheld]
+        .into_iter()
+        .map(|form| (count(form), form_label(form)))
+        .filter(|(count, _)| *count > 0)
+        .collect();
+    let total: usize = counts.iter().map(|(count, _)| count).sum();
+    if total == 0 {
+        return None;
+    }
+    let counts: Vec<_> = counts
+        .iter()
+        .map(|(count, label)| format!("{count} {label}"))
+        .collect();
+    let noun = if total == 1 {
+        "definition"
+    } else {
+        "definitions"
+    };
+    Some(format!("{total} {noun} not given: {}", counts.join(", ")))
+}
+
+/// Schema (none first), name and kind, comparing bytes, so every backend
+/// answers in the same order.
+fn order(object: &ObjectRef) -> (&Option<String>, &str, &'static str) {
+    (&object.schema, &object.name, kind_label(object.kind))
+}
+
+fn identity_columns() -> Vec<Column> {
+    vec![
+        Column::new("catalog", "text"),
+        Column::new("schema", "text"),
+        Column::new("object", "text"),
+        Column::new("kind", "text"),
+    ]
+}
+
+fn identity(catalog: &str, object: &ObjectRef) -> Vec<Value> {
+    vec![
+        Value::Text(catalog.to_string()),
+        object.schema.clone().map_or(Value::Null, Value::Text),
+        Value::Text(object.name.clone()),
+        Value::Text(kind_label(object.kind).to_string()),
+    ]
 }
 
 fn describe_columns() -> Vec<Column> {
@@ -323,6 +445,15 @@ fn kind_label(kind: ObjectKind) -> &'static str {
     match kind {
         ObjectKind::Table => "table",
         ObjectKind::View => "view",
+    }
+}
+
+fn form_label(form: DefinitionForm) -> &'static str {
+    match form {
+        DefinitionForm::Create => "create",
+        DefinitionForm::Query => "query",
+        DefinitionForm::Unsupported => "unsupported",
+        DefinitionForm::Withheld => "withheld",
     }
 }
 
@@ -474,5 +605,88 @@ mod tests {
         assert_eq!(text(&rows[0][2]), Some("gone"));
         assert_eq!(text(&rows[0][3]), Some("view"));
         assert!(rows[0][4..].iter().all(|value| *value == Value::Null));
+    }
+
+    fn definition(form: DefinitionForm, text: Option<&str>) -> Definition {
+        Definition {
+            form,
+            text: text.map(str::to_string),
+        }
+    }
+
+    fn definitions(objects: Vec<(ObjectRef, Definition)>) -> ResultSet {
+        let mut columns = identity_columns();
+        columns.push(Column::new("form", "text"));
+        columns.push(Column::new("definition", "text"));
+        ResultSet {
+            columns,
+            rows: definition_rows("main", objects),
+            rows_affected: None,
+            elapsed: std::time::Duration::ZERO,
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn definitions_are_sorted_and_a_missing_text_is_null() {
+        let result = definitions(vec![
+            (
+                object(Some("b"), "t", ObjectKind::Table),
+                definition(DefinitionForm::Unsupported, None),
+            ),
+            (
+                object(Some("a"), "v", ObjectKind::View),
+                definition(DefinitionForm::Query, Some(" SELECT 1;")),
+            ),
+        ]);
+        assert_eq!(text(&result.rows[0][2]), Some("v"));
+        assert_eq!(text(&result.rows[0][4]), Some("query"));
+        assert_eq!(text(&result.rows[0][5]), Some(" SELECT 1;"));
+        assert_eq!(text(&result.rows[1][4]), Some("unsupported"));
+        assert_eq!(result.rows[1][5], Value::Null);
+    }
+
+    #[test]
+    fn unsupported_and_withheld_rows_are_counted() {
+        let result = definitions(vec![
+            (
+                object(None, "a", ObjectKind::Table),
+                definition(DefinitionForm::Unsupported, None),
+            ),
+            (
+                object(None, "b", ObjectKind::Table),
+                definition(DefinitionForm::Unsupported, None),
+            ),
+            (
+                object(None, "c", ObjectKind::View),
+                definition(DefinitionForm::Withheld, None),
+            ),
+            (
+                object(None, "d", ObjectKind::View),
+                definition(DefinitionForm::Create, Some("CREATE VIEW d AS SELECT 1")),
+            ),
+        ]);
+        assert_eq!(
+            without_text(&result).as_deref(),
+            Some("3 definitions not given: 2 unsupported, 1 withheld")
+        );
+
+        let result = definitions(vec![(
+            object(None, "a", ObjectKind::Table),
+            definition(DefinitionForm::Unsupported, None),
+        )]);
+        assert_eq!(
+            without_text(&result).as_deref(),
+            Some("1 definition not given: 1 unsupported")
+        );
+    }
+
+    #[test]
+    fn rows_that_all_have_text_need_no_note() {
+        let result = definitions(vec![(
+            object(None, "a", ObjectKind::Table),
+            definition(DefinitionForm::Create, Some("CREATE TABLE a (n)")),
+        )]);
+        assert_eq!(without_text(&result), None);
     }
 }
