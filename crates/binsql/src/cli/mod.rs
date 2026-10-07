@@ -243,28 +243,34 @@ pub async fn connect(args: &Args) -> Result<Session> {
                 },
             )
         }
-        (None, None) => {
-            let named = config.default.clone().ok_or_else(|| {
-                usage("no data source given, and none is the default — pass --conn or --dsn")
-            })?;
-            // Through `resolve`, so a `default` of `prod` finds `eimskip/prod`
-            // exactly as `--conn prod` does — and says which two it found when
-            // that name has stopped meaning one thing.
-            let id = config.resolve(&named).ok_or_else(|| {
-                failed(config.unresolved_default().unwrap_or_else(|| {
-                    format!("the default data source {named} is not in the config")
-                }))
-            })?;
-            let source = config.get(&id).cloned().ok_or_else(|| {
-                failed(format!("the default data source {id} is not in the config"))
-            })?;
-            (id, source)
-        }
+        (None, None) => default_source(&config)?,
     };
 
     Session::open(name.clone(), source)
         .await
         .map_err(|error| failed(format!("connecting to {name}: {error}")))
+}
+
+/// The data source the config names as its default, and its qualified name.
+pub fn default_source(config: &Workspace) -> Result<(String, DataSource)> {
+    let named = config.default.clone().ok_or_else(|| {
+        usage("no data source given, and none is the default — pass --conn or --dsn")
+    })?;
+    // Through `resolve`, so a `default` of `prod` finds `eimskip/prod`
+    // exactly as `--conn prod` does — and says which two it found when
+    // that name has stopped meaning one thing.
+    let id = config.resolve(&named).ok_or_else(|| {
+        failed(
+            config
+                .unresolved_default()
+                .unwrap_or_else(|| format!("the default data source {named} is not in the config")),
+        )
+    })?;
+    let source = config
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| failed(format!("the default data source {id} is not in the config")))?;
+    Ok((id, source))
 }
 
 /// A token that a ⌃C from the terminal cancels, so a long query stops the way

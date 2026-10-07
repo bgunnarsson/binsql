@@ -1060,6 +1060,97 @@ fn source_default_with_none_set_prints_nothing() {
     }
 }
 
+/// A config of the sources `source test` is tried on, with `default` set.
+fn write_testable(fixture: &Fixture, default: Option<&str>) {
+    let database = fixture.database().display().to_string();
+    let missing = fixture.directory.join("gone").join("app.db");
+    let config = serde_json::json!({
+        "default": default,
+        "connections": {
+            "good": { "driver": "sqlite", "dsn": database },
+            "missing": { "driver": "sqlite", "dsn": missing.display().to_string() },
+            "vault": { "driver": "mssql", "dsn": "https://kv-x.vault.azure.net/" },
+            "pg": { "driver": "postgres", "dsn": "postgres://app:hunter2@127.0.0.1:1/app?sslmode=bogus" }
+        }
+    });
+    std::fs::write(fixture.config(), config.to_string()).expect("write the config");
+}
+
+fn test_row(run: &Run) -> serde_json::Value {
+    let parsed: serde_json::Value = serde_json::from_str(&run.stdout).expect("valid json");
+    parsed["rows"][0].clone()
+}
+
+#[test]
+fn source_test_says_whether_a_source_connects_and_where_it_stopped() {
+    let fixture = Fixture::new("source-test");
+    fixture.seed();
+    write_testable(&fixture, None);
+
+    let good = fixture
+        .binsql(&["source", "test", "good", "-o", "json"])
+        .succeeds();
+    let row = test_row(&good);
+    assert_eq!(row["name"], "good");
+    assert_eq!(row["ok"], true);
+    assert!(row["stage"].is_null() && row["error"].is_null(), "{row}");
+
+    let missing = fixture
+        .binsql(&["source", "test", "missing", "-o", "json"])
+        .failed()
+        .stderr_has("error:");
+    let row = test_row(&missing);
+    assert_eq!(row["ok"], false);
+    assert_eq!(row["stage"], "connect");
+
+    let vault = fixture
+        .binsql(&["source", "test", "vault", "-o", "json"])
+        .failed();
+    assert_eq!(test_row(&vault)["stage"], "secret");
+
+    let pg = fixture
+        .binsql(&["source", "test", "pg", "-o", "json"])
+        .failed();
+    assert_eq!(test_row(&pg)["stage"], "connect");
+    assert!(
+        !pg.stdout.contains("hunter2") && !pg.stderr.contains("hunter2"),
+        "{}{}",
+        pg.stdout,
+        pg.stderr
+    );
+}
+
+#[test]
+fn source_test_alone_tries_the_default() {
+    let fixture = Fixture::new("source-test-default");
+    fixture.seed();
+    write_testable(&fixture, Some("good"));
+    fixture
+        .binsql(&["source", "test"])
+        .succeeds()
+        .stdout_has("good");
+
+    write_testable(&fixture, None);
+    fixture.binsql(&["source", "test"]).refused();
+    fixture.binsql(&["source", "test", "good", "pg"]).refused();
+    fixture.binsql(&["source", "list", "--fresh"]).refused();
+    fixture.binsql(&["source", "clear-cache", "x"]).refused();
+}
+
+#[test]
+fn source_clear_cache_removes_the_cached_secrets_and_their_key() {
+    let fixture = Fixture::new("source-clear-cache");
+    let cache = fixture.directory.join("secret-cache.json");
+    let key = fixture.directory.join("cache.key");
+    std::fs::write(&cache, "{}").expect("write the cache");
+    std::fs::write(&key, "key").expect("write the key");
+
+    let run = fixture.binsql(&["source", "clear-cache"]).succeeds();
+    assert_eq!(run.stdout, "");
+    assert!(!cache.exists() && !key.exists());
+    fixture.binsql(&["source", "clear-cache"]).succeeds();
+}
+
 #[test]
 fn a_file_and_stdin_are_both_read() {
     let fixture = Fixture::new("input");

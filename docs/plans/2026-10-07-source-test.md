@@ -213,7 +213,7 @@ form returns before the TUI.
     once, so no server is needed.
 
   Verify with `cargo test -p binsql-core` and clippy.
-- [ ] **CLI.** Make these changes:
+- [x] **CLI.** Make these changes:
   - `default_source` in `cli/mod.rs`.
   - In `cli/source.rs`: `--fresh`, the `test` and `clear-cache` arms, `test`
     and `test_table`.

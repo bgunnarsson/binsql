@@ -2,29 +2,36 @@
 //! line.
 //!
 //! It takes its own flags rather than the shared ones: `--conn`, `--catalog`
-//! and `--schema` name a database to talk to, and nothing here talks to one.
-//! Nor does it resolve a secret: a reference prints as written, and a
-//! connection string kept in the config prints with its password masked.
+//! and `--schema` name a database to talk to, and only `test` talks to one,
+//! the source it names. It is also the one that resolves a secret: elsewhere
+//! a reference prints as written, and a connection string kept in the config
+//! prints with its password masked.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use binsql_core::config::mask_dsn;
 use binsql_core::secrets::keychain;
 use binsql_core::{
-    Column, DataSource, RESERVED_NAMES, Reference, ResultSet, Scope, Value, Workspace,
+    Column, DataSource, RESERVED_NAMES, Reference, Resolver, ResultSet, Scope, Session, Value,
+    Workspace,
 };
 
 use super::args::Args;
-use super::{Result, failed, note, output, print, render, usage};
+use super::render::Options;
+use super::{Result, default_source, failed, note, output, print, render, usage};
 
 const VALUES: &[&str] = &["format", "o", "scope"];
-const SWITCHES: &[&str] = &["pretty", "no-header", "no-footer"];
+const SWITCHES: &[&str] = &["pretty", "no-header", "no-footer", "fresh"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     let args = Args::parse(args, VALUES, SWITCHES)?;
     let options = output(&args)?;
     let (operation, names) = match args.positional() {
-        [] => return Err(usage("source needs a command: list, show or default")),
+        [] => {
+            return Err(usage(
+                "source needs a command: list, show, default, test or clear-cache",
+            ));
+        }
         [operation, names @ ..] => (operation.as_str(), names),
     };
     let scope = match args.value(&["scope"]) {
@@ -35,6 +42,10 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     };
     if scope.is_some() && operation != "default" {
         return Err(usage("--scope applies only to source default"));
+    }
+    let fresh = args.is_set(&["fresh"]);
+    if fresh && operation != "test" {
+        return Err(usage("--fresh applies only to source test"));
     }
 
     let rows = match (operation, names) {
@@ -82,6 +93,16 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             vec![row(&workspace, &id, source)]
         }
         ("default", _) => return Err(usage("source default takes at most one name")),
+        ("test", [] | [_]) => return test(names.first(), fresh, &options).await,
+        ("test", _) => return Err(usage("source test takes at most one name")),
+        ("clear-cache", []) => {
+            Resolver::from_env()
+                .cache()
+                .clear()
+                .map_err(|error| failed(format!("clearing the secret cache: {error}")))?;
+            return Ok(());
+        }
+        ("clear-cache", _) => return Err(usage("source clear-cache takes no name")),
         (other, _) => return Err(usage(format!("unknown source command {other}"))),
     };
 
@@ -94,6 +115,50 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         note(&options, &message);
     }
     Ok(())
+}
+
+/// Resolves and connects to the named source, or the default, and prints how
+/// far it got.
+async fn test(name: Option<&String>, fresh: bool, options: &Options) -> Result<()> {
+    let workspace = load()?;
+    let (id, source) = match name {
+        Some(name) => {
+            let id = find(&workspace, name)?;
+            let source = workspace.get(&id).expect("resolved").clone();
+            (id, source)
+        }
+        None => default_source(&workspace)?,
+    };
+
+    let started = Instant::now();
+    let outcome = Session::probe(&source, &Resolver::from_env(), fresh).await;
+    let elapsed = Value::Int(started.elapsed().as_millis() as i64);
+
+    let row = match &outcome {
+        Ok(()) => vec![
+            Value::Text(id.clone()),
+            Value::Bool(true),
+            Value::Null,
+            elapsed,
+            Value::Null,
+        ],
+        Err(failure) => vec![
+            Value::Text(id.clone()),
+            Value::Bool(false),
+            Value::Text(failure.stage.as_str().to_string()),
+            elapsed,
+            Value::Text(failure.message.clone()),
+        ],
+    };
+    print(&render::rows(&test_table(vec![row]), options))?;
+
+    outcome.map_err(|failure| {
+        failed(format!(
+            "{id} failed at the {} stage: {}",
+            failure.stage.as_str(),
+            failure.message
+        ))
+    })
 }
 
 fn load() -> Result<Workspace> {
@@ -156,6 +221,22 @@ fn row(workspace: &Workspace, id: &str, source: &DataSource) -> (Vec<Value>, Opt
 
 fn leaf(id: &str) -> &str {
     id.rsplit('/').next().unwrap_or(id)
+}
+
+fn test_table(rows: Vec<Vec<Value>>) -> ResultSet {
+    ResultSet {
+        columns: vec![
+            Column::new("name", "text"),
+            Column::new("ok", "bool"),
+            Column::new("stage", "text"),
+            Column::new("elapsed_ms", "int"),
+            Column::new("error", "text"),
+        ],
+        rows,
+        rows_affected: None,
+        elapsed: Duration::ZERO,
+        truncated: false,
+    }
 }
 
 fn table(rows: Vec<Vec<Value>>) -> ResultSet {
