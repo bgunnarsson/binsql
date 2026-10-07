@@ -1,7 +1,7 @@
 ---
 title: binsql source remove deletes a saved data source and then its keychain secret
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
