@@ -502,10 +502,17 @@ impl Adapter for MsSqlAdapter {
             &CancellationToken::new(),
         )
         .await;
-        if off.is_ok() {
-            self.showplan.store(false, Ordering::Relaxed);
-        } else {
-            self.settle(&mut client).await?;
+        match off {
+            Ok(_) => self.showplan.store(false, Ordering::Relaxed),
+            // The connection is replaced, and what was on it — temporary
+            // tables, session settings — went with it, which is worth hearing
+            // about even when the plan came back.
+            Err(off) => {
+                self.settle(&mut client).await?;
+                if planned.is_ok() {
+                    return Err(off);
+                }
+            }
         }
 
         let result = planned?;
