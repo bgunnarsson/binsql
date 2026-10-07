@@ -273,6 +273,9 @@ would without the flag, and then the query exits `1` with `the query returned no
 rows (--require-rows)`, category `assertion`. A check reads as a predicate
 `SELECT` that returns a row only when the condition holds. An aggregate such as
 `COUNT(*)` always returns a row, a zero included, so it never fails the check.
+A write under `--allow-write` counts the rows it returns with `RETURNING`; on
+SQL Server, rows from `OUTPUT` or `EXEC` are not kept, so such a write always
+fails the check.
 
 ```sh
 binsql query --require-rows -o none \
