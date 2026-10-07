@@ -1,12 +1,12 @@
 ---
 title: "No COMMIT after a cancel"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
 
-Ticket [63](../maps/command-mode/63-no-commit-after-cancel.md) is the core
+Ticket [63](../maps/command-mode/63-no-commit-after-a-cancel.md) is the core
 step of 12's statement budget. Today a cancel that lands after the last
 statement of a transaction is never looked at: `run_transaction` sends
 `COMMIT` with no regard to the token, on every backend. Outcome: a cancelled
