@@ -468,7 +468,7 @@ two together exit `2`.
 | SQLite | `create` | `create` |
 | PostgreSQL | `unsupported` | `query` |
 | MySQL | `create` | `create` |
-| SQL Server | `unsupported` | `unsupported` |
+| SQL Server | `unsupported` | `create` |
 
 This is context for whoever reads it, not an export to restore from: there is
 no dependency order, no grants and no ownership. SQLite's table text has its
@@ -481,7 +481,11 @@ parsed form (`pg_get_viewdef`), so its layout is the server's and comments
 written in the view are gone. MySQL's text is what `SHOW CREATE TABLE` and
 `SHOW CREATE VIEW` print: a table's has its indexes, foreign keys and the
 current `AUTO_INCREMENT=` counter, and a view's has its `DEFINER` and `SQL
-SECURITY`, so it names the account that created the view.
+SECURITY`, so it names the account that created the view. SQL Server keeps no
+text for a table either; a view's is its module as it was written
+(`sys.sql_modules`), so comments before the `CREATE` stay, `CREATE OR ALTER`
+stays as typed, and a view renamed with `sp_rename` still has its old name in
+the text. A view created `WITH ENCRYPTION` gives `withheld`.
 
 Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".
@@ -898,8 +902,6 @@ v2 yet:
   [Azure Key Vault references](#azure-key-vault-references)).
 - Exporting a result set, editing values in the grid, query history, and
   filtering the tree.
-- **Definitions** on SQL Server: `inspect --definitions` marks its tables and
-  views `unsupported` for now.
 
 ## Licence
 

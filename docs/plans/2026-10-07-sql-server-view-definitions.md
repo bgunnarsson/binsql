@@ -50,5 +50,5 @@ comes back null gives `Withheld`, and a table gives `Unsupported`.
   the row. Unit tests of the mapping; an ignored live test in
   `tests/definitions_servers.rs`.
   Verify: `cargo test --workspace -q`, `cargo clippy --workspace --all-targets -q`.
-- [ ] **2. README.** SQL Server row, caveat and Status bullet.
+- [x] **2. README.** SQL Server row, caveat and Status bullet.
   Verify: read the table and the Status section.
