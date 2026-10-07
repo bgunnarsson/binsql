@@ -224,6 +224,7 @@ binsql inspect                                       # what tables are there
 binsql inspect artist                                # what columns has it got
 binsql inspect --columns -o jsonl                    # every column of everything
 binsql inspect --columns artist -o json              # one object, exact name
+binsql inspect --definitions -o jsonl                # how each was defined
 ```
 
 The split between the verbs is a safety boundary rather than a convenience.
@@ -411,6 +412,7 @@ forms, such as `jsonb_exists`.
 | `--catalog NAME` | another database on the same connection |
 | `--schema NAME` | one schema rather than all of them |
 | `--columns` | every table and view's columns in one call |
+| `--definitions` | every table and view's own definition text in one call |
 | `--timeout-ms N` | give up `N` ms after the connection opens; `0`, or no flag, is no limit |
 
 A table may carry its own schema — `binsql inspect dbo.orders` — which wins over
@@ -442,6 +444,37 @@ named and its schema comes from `--schema` alone. No match exits `1`, naming any
 objects that differ only in case; a name found in more than one schema exits
 `2` until `--schema` says which. Plain `inspect NAME` still matches loosely, as
 it always has.
+
+`--definitions` selects objects the way `--columns` does, name and order
+included, and answers with one row per object — `catalog, schema, object, kind,
+form, definition`. `definition` is the text exactly as the server stores or
+prints it, never reformatted and never built from the columns; `form` says what
+that text is:
+
+| `form` | `definition` |
+| --- | --- |
+| `create` | a complete `CREATE` statement |
+| `query` | a view's `SELECT` alone, with no `CREATE` around it |
+| `unsupported` | null: binsql does not read definitions for this backend and kind |
+| `withheld` | null: the server has the object but gave no text |
+
+Rows without text still exit `0`, with one line on stderr counting them by form.
+Any failure to read one prints nothing on stdout and exits `1`, naming the
+object. It cannot be given with `--columns`, since each has its own rows; the
+two together exit `2`.
+
+| Backend | Table | View |
+| --- | --- | --- |
+| SQLite | `create` | `create` |
+| PostgreSQL | `unsupported` | `unsupported` |
+| MySQL | `unsupported` | `unsupported` |
+| SQL Server | `unsupported` | `unsupported` |
+
+This is context for whoever reads it, not an export to restore from: there is
+no dependency order, no grants and no ownership. SQLite's table text has its
+inline constraints but not the indexes or triggers created beside it, and is
+kept as it was written — after an `ALTER TABLE … RENAME` it may read as SQLite
+rewrote it, with SQLite's own spelling of the opening `CREATE TABLE`.
 
 Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".
@@ -858,6 +891,8 @@ v2 yet:
   [Azure Key Vault references](#azure-key-vault-references)).
 - Exporting a result set, editing values in the grid, query history, and
   filtering the tree.
+- **Definitions** on PostgreSQL, MySQL and SQL Server: `inspect --definitions`
+  marks their tables and views `unsupported` for now.
 
 ## Licence
 

@@ -23,6 +23,9 @@ no AI mentions in commits.
   naming only the forms that occur, and is left out when every row has text.
 - An acquisition failure reads `definition of <object>: <error>`, as
   `--columns` reads `columns of <object>: <error>`.
+- The README's MySQL caveat (indexes, foreign keys, `AUTO_INCREMENT=`,
+  `DEFINER`) is left for 82 to add with the text it describes; until then the
+  table says MySQL is `unsupported`, and a caveat about it would read as false.
 - `--definitions --columns` is refused before connecting, so it exits 2 even
   with no data source reachable.
 
@@ -50,6 +53,6 @@ keywords it stores.
   `--columns`, `definitions_of`, the note; unit tests; integration tests in
   `tests/command_mode.rs`.
   Verify: `cargo test --workspace`.
-- [ ] **2. Docs.** README inspect section, coverage table, caveat, Status;
+- [x] **2. Docs.** README inspect section, coverage table, caveat, Status;
   HELP in `cli/mod.rs`.
   Verify: read it back.

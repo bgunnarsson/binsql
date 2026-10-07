@@ -702,6 +702,10 @@ INSPECT
                           the catalog, schema, object and kind they belong to;
                           a NAME after it is matched exactly, never split on
                           dots, with the schema taken from --schema alone
+        --definitions     every table and view's definition text as the server
+                          keeps it, one row each, selected as --columns selects;
+                          form says create, query, unsupported or withheld, and
+                          the last two have no text and are counted on stderr
         --timeout-ms N    give up on the metadata reads N ms after connecting
                           and exit 1 as a timeout; 0 is no limit
 
