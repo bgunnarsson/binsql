@@ -20,8 +20,8 @@ longer make sense.
 
 ## Context
 
-- The v2 Go tree was deleted in b9d4e03. Read it from history:
-  `git show b9d4e03^:_old/internal/cli/cmd_conn.go`, together with `cli.go`,
+- The v2 Go tree was deleted in 4bba8a7. Read it from history:
+  `git show 4bba8a7^:_old/internal/cli/cmd_conn.go`, together with `cli.go`,
   `cli_test.go` and `session.go` in the same directory.
 - v3: `crates/binsql-core/src/workspace.rs` (`set`, `remove`, `scope_of`,
   `default_scope`), `config.rs` (`qualify`, `resolve`, `mask_dsn`, `save_to`),

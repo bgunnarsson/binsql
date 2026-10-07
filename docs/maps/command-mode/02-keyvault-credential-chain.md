@@ -30,8 +30,8 @@ deciding between.
 
 ## Context
 
-- `git show b9d4e03^:_old/` and search it for the Key Vault and credential
-  code, e.g. `git show b9d4e03 --stat | grep -i -E "vault|azure|secret|cred"`.
+- `git show 4bba8a7^:_old/` and search it for the Key Vault and credential
+  code, e.g. `git show 4bba8a7 --stat | grep -i -E "vault|azure|secret|cred"`.
 - `crates/binsql-core/src/secrets/azure.rs`, `secrets/mod.rs`, `Cargo.toml`
   files for HTTP and TLS dependencies.
 - Wherever `fedauth` is handled in `crates/binsql-core/src/adapter`.
