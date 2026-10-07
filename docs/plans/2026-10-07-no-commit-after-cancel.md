@@ -54,7 +54,7 @@ None in `docs/solutions`. From the map: tests never reach `ratatui::init`.
 
 ## Tasks
 
-- [ ] **1. Check the token before COMMIT.** `adapter/sqlx_common.rs`: `end`,
+- [x] **1. Check the token before COMMIT.** `adapter/sqlx_common.rs`: `end`,
   with its tests. `adapter/mssql.rs`: the same check before `COMMIT`.
   `cli/exec.rs`: a failure with no statement counts every statement as run.
   Verify: `cargo test --workspace`, `cargo clippy --workspace --all-targets`.

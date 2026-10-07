@@ -574,6 +574,17 @@ impl Adapter for MsSqlAdapter {
             }
         }
 
+        // A cancel that landed after the last statement still means stop.
+        if commit && cancel.is_cancelled() {
+            let rollback =
+                run_one(&mut client, ROLLBACK, &[], None, &CancellationToken::new()).await;
+            let ended = match rollback {
+                Ok(Some(_)) => TransactionOutcome::RolledBack,
+                _ => TransactionOutcome::Unknown,
+            };
+            return Err(Error::transaction(Error::Cancelled, ended, None));
+        }
+
         let ending = if commit { "COMMIT" } else { ROLLBACK };
         let unknown = |error| Error::transaction(error, TransactionOutcome::Unknown, None);
         if run_one(&mut client, ending, &[], None, &CancellationToken::new())

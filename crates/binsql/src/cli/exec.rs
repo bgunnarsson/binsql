@@ -61,9 +61,10 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             .await
             .map_err(|error| {
                 // Only an error from inside the transaction says how it
-                // ended; any other came before the batch began.
+                // ended; any other came before the batch began. One with no
+                // statement came after every statement ran.
                 let failure = core(error);
-                let ran = &statements[..failure.statement.unwrap_or(0)];
+                let ran = &statements[..failure.statement.unwrap_or(statements.len())];
                 match failure.transaction {
                     Some(Transaction::RolledBack) if commits_on_its_own(ran, backend) => failure
                         .transaction(Transaction::Unknown)

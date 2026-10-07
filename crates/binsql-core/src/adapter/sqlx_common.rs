@@ -78,16 +78,32 @@ where
         }
     }
 
+    end(transaction, commit, cancel).await?;
+    Ok(results)
+}
+
+/// Ends a transaction whose statements all ran. A cancel that landed after the
+/// last of them still means stop, so the batch is rolled back rather than
+/// committed.
+async fn end<DB: Database>(
+    transaction: sqlx::Transaction<'_, DB>,
+    commit: bool,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    if commit && cancel.is_cancelled() {
+        let ended = match transaction.rollback().await {
+            Ok(()) => TransactionOutcome::RolledBack,
+            Err(_) => TransactionOutcome::Unknown,
+        };
+        return Err(Error::transaction(Error::Cancelled, ended, None));
+    }
     let ending = if commit {
         transaction.commit().await
     } else {
         transaction.rollback().await
     };
-    ending.map_err(|error| {
-        Error::transaction(Error::query(error), TransactionOutcome::Unknown, None)
-    })?;
-
-    Ok(results)
+    ending
+        .map_err(|error| Error::transaction(Error::query(error), TransactionOutcome::Unknown, None))
 }
 
 /// Runs one statement and collects at most `limit` rows.
@@ -241,3 +257,85 @@ macro_rules! decode_fallback {
 }
 
 pub(crate) use {bind_as_given, decode_as, decode_fallback};
+
+#[cfg(test)]
+mod tests {
+    use sqlx::Sqlite;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
+
+    /// One connection, so the table outlives each transaction.
+    async fn pool() -> Pool<Sqlite> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open an in-memory database");
+        sqlx::raw_sql("CREATE TABLE t (id INTEGER)")
+            .execute(&pool)
+            .await
+            .expect("create the table");
+        pool
+    }
+
+    /// Inserts one row in a transaction and ends it as `run_transaction` does.
+    async fn insert_and_end(
+        pool: &Pool<Sqlite>,
+        commit: bool,
+        cancel: &CancellationToken,
+    ) -> Result<()> {
+        let mut transaction = pool.begin().await.expect("begin");
+        sqlx::raw_sql("INSERT INTO t VALUES (1)")
+            .execute(&mut *transaction)
+            .await
+            .expect("insert");
+        end(transaction, commit, cancel).await
+    }
+
+    async fn rows(pool: &Pool<Sqlite>) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM t")
+            .fetch_one(pool)
+            .await
+            .expect("count")
+    }
+
+    #[tokio::test]
+    async fn a_cancel_after_the_last_statement_rolls_back() {
+        let pool = pool().await;
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let error = insert_and_end(&pool, true, &cancel)
+            .await
+            .expect_err("a cancelled transaction does not commit");
+        assert!(
+            matches!(
+                &error,
+                Error::Transaction { error, outcome: TransactionOutcome::RolledBack, statement: None }
+                    if matches!(**error, Error::Cancelled)
+            ),
+            "{error:?}"
+        );
+        assert_eq!(rows(&pool).await, 0);
+    }
+
+    #[tokio::test]
+    async fn an_uncancelled_transaction_commits() {
+        let pool = pool().await;
+        insert_and_end(&pool, true, &CancellationToken::new())
+            .await
+            .expect("commit");
+        assert_eq!(rows(&pool).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_dry_run_still_just_rolls_back() {
+        let pool = pool().await;
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        insert_and_end(&pool, false, &cancel)
+            .await
+            .expect("a dry run ends the same either way");
+        assert_eq!(rows(&pool).await, 0);
+    }
+}
