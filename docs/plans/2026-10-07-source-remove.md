@@ -89,7 +89,7 @@ Assumed, not asked:
     - It removes from the project file and prints the row.
     - It removes from the user file and prints the row.
     - `source list --force` exits 2.
-- [ ] Docs.
+- [x] Docs.
   - In HELP (`crates/binsql/src/cli/mod.rs` ~104-180), add the
     `source remove NAME --force` line.
   - In the README Data sources section (~401-420), say what it removes,

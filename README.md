@@ -419,6 +419,13 @@ binsql source add scratch --dsn ./scratch.db --scope user
 binsql source edit eimskip/prod --description "read replica" --rename eimskip/replica
 ```
 
+`binsql source remove NAME --force` deletes a data source from every file that
+holds it, then its keychain secret, and prints the row it had. Without
+`--force` it refuses, since a deleted secret cannot be brought back. The secret
+goes only once the config is written; if it cannot be deleted, the command
+exits 1 with the data source already gone and says what is left in the
+keychain.
+
 ## Databases
 
 | Driver names | Connection string |
@@ -637,9 +644,6 @@ targets, nothing published — and refuses a tag that disagrees with `Cargo.toml
 What works today is everything above. What has **not** been carried across from
 v2 yet:
 
-- **Removing a data source from the command line.** `binsql source add` and
-  `source edit` cover v2's `binsql conn add`, but there is no `source remove`
-  yet: a data source is deleted in the TUI, or the config is edited by hand.
 - **Managed identity and service-principal credentials** for Key Vault, as
   binsql's own. v2 linked them in; v3 reaches the same identities through
   `az login --identity` and `az login --service-principal`, run first (see

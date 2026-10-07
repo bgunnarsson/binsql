@@ -103,6 +103,8 @@ COMMAND MODE
     binsql source clear-cache  delete the cached Key Vault secrets
     binsql source add NAME     save a new data source
     binsql source edit NAME    change a saved one
+    binsql source remove NAME --force
+                               delete it, then its keychain secret
 
 CONNECTION
     -c, --conn NAME       a saved data source, `folder/name` or a bare name
@@ -179,6 +181,11 @@ SOURCE
                            keychain; refused in the project file
     --rename NEW           source edit: save it under a new name
     What edit is not given stays as it was, the connection string included.
+
+    source remove deletes a data source from every file that holds it, then
+    its keychain secret, and prints the row it had. It needs --force, since
+    the secret cannot be brought back; when the secret cannot be deleted it
+    exits 1 with the data source already gone.
 
 BIND VALUES
     An --arg is text unless it says otherwise: int:42, float:1.5, bool:true,
