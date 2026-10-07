@@ -268,6 +268,17 @@ statement that has to write from the reading verb. It runs exactly one
 statement: handed a script, it says so and points at `exec` rather than running
 the first and dropping the rest.
 
+`--require-rows` turns an empty result into a failure: the result prints as it
+would without the flag, and then the query exits `1` with `the query returned no
+rows (--require-rows)`, category `assertion`. A check reads as a predicate
+`SELECT` that returns a row only when the condition holds. An aggregate such as
+`COUNT(*)` always returns a row, a zero included, so it never fails the check.
+
+```sh
+binsql query --require-rows -o none \
+  "SELECT 1 FROM orders WHERE status = 'stuck' LIMIT 1" && echo "stuck orders"
+```
+
 `--plan` prints the plan the database estimates for one `SELECT`, `WITH`,
 `VALUES` or `TABLE` statement, and does not run it. A write is refused even
 with `--allow-write` — drop `--plan` to run it — and so are `--arg` and a
@@ -383,7 +394,7 @@ the same either way.
 | Field | |
 | --- | --- |
 | `exit` | the exit code the process ends with |
-| `category` | `usage`, `source`, `config`, `secret`, `connect`, `refused`, `database`, `cancelled`, `io` or `other` |
+| `category` | `usage`, `source`, `config`, `secret`, `connect`, `refused`, `database`, `assertion`, `cancelled`, `io` or `other` |
 | `phase` | `args`, `input`, `config`, `connect`, `prepare`, `execute` or `output` |
 | `message` | what went wrong, in one sentence |
 | `reason` | why, for a Key Vault or Azure AD failure: `az-missing`, `az-unauthenticated`, `vault-forbidden`, `secret-not-found`, `vault-not-found` or `azure-ad-token` |
@@ -396,7 +407,8 @@ the same either way.
 
 `category` says what kind of thing failed — a missing saved data source is
 `source`, a vault or keychain that would not hand over a secret is `secret`, a
-statement turned away by `query` or by `exec` without `--force` is `refused` —
+statement turned away by `query` or by `exec` without `--force` is `refused`,
+an empty result under `--require-rows` is `assertion` —
 and `phase` says how far binsql had got. A note that would have gone to stderr
 comes as `{"type":"notice","schema":1,"message":…}`, and `-o none` still hides
 it. A bad `--error-format` value is reported as text, since there is no

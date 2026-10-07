@@ -52,7 +52,7 @@ the README.
   Verify: `cargo test -p binsql` — integration tests for empty and nonempty,
   `-o none`, JSON, a database failure and the default.
 
-- [ ] **2. HELP and the README.** The flag in QUERY and in the README's query
+- [x] **2. HELP and the README.** The flag in QUERY and in the README's query
   section, with a predicate `SELECT` example and the `COUNT(*)` warning; the
   category in Structured errors.
   Verify: `cargo test -p binsql`.

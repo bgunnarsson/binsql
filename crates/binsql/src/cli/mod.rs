@@ -608,6 +608,8 @@ QUERY
         --allow-write     permit a statement that writes (prefer `exec`)
         --plan            print the estimated plan of one read instead of running
                           it; `-o raw` for the bare document
+        --require-rows    exit 1 if the query returns no rows, after printing
+                          what it did return
 
 EXEC
     -f, --file FILE       read the script from a file, or from stdin for `-`
