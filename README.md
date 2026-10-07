@@ -372,7 +372,7 @@ is `name, scope, driver, dsn, readonly, open_on_start, default, description,
 shadowed`. A `keychain://` or `keyvault://` reference prints as written, and a
 connection string kept in the config has its password masked: nothing is
 resolved and nothing connects, so of the shared flags only the output ones
-apply.
+apply. `source test`, below, is the one that does connect.
 
 `shadowed` marks a data source a command has taken the bare name of — a
 top-level `query`, or `team/inspect` when it is the only `inspect` — and a note
@@ -386,6 +386,17 @@ into the file that data source is saved in; `--scope user` or `--scope project`
 writes it into that file instead. A project's default wins over yours, so
 setting it in your config while the project file names a different one would
 change nothing, and is refused with a hint to pass `--scope project`.
+
+`binsql source test NAME` resolves the data source's connection string and
+connects, then prints one row: `name, ok, stage, elapsed_ms, error`. With no
+NAME it tries the default, as a command with no `--conn` would. `stage` says
+where it stopped — `secret` (the Key Vault or keychain lookup), `token` (the
+Azure AD token for SQL Server) or `connect` — and is null, as `error` is, when
+it got through. It exits 0 when it connects; otherwise the row is still printed
+and it exits 1, with the password masked in the error. `--fresh` skips the
+cached secret and caches what it fetches, for a secret rotated since it was
+cached. `binsql source clear-cache` deletes every cached secret and the key that
+protects them; `BINSQL_SECRET_TTL=0` keeps them out of the cache altogether.
 
 ## Databases
 
@@ -606,7 +617,8 @@ What works today is everything above. What has **not** been carried across from
 v2 yet:
 
 - **Changing data sources from the command line.** `binsql source list` and
-  `source show` read them and `source default` sets the default; v2's `binsql conn add` has no counterpart yet, so a
+  `source show` read them, `source default` sets the default, and `source test`
+  and `source clear-cache` work; v2's `binsql conn add` has no counterpart yet, so a
   data source is added with `⌃N` in the TUI and edited with `e` in its tree, or
   the config is edited by hand — which means knowing whether you meant the user file or
   a project's.

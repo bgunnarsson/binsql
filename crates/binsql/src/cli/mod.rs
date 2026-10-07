@@ -98,6 +98,9 @@ COMMAND MODE
     binsql source show NAME    show one, found the way --conn finds it
     binsql source default [NAME]
                                show the default, or make NAME the default
+    binsql source test [NAME]  connect to it, or to the default, and say how far
+                               it got
+    binsql source clear-cache  delete the cached Key Vault secrets
 
 CONNECTION
     -c, --conn NAME       a saved data source, `folder/name` or a bare name
@@ -140,14 +143,23 @@ INSPECT
 SOURCE
     One row per data source: name, scope, driver, dsn, readonly, open_on_start,
     default, description, shadowed. A keychain:// or keyvault:// reference
-    prints as written; a connection string has its password masked. Nothing
-    connects, so only the OUTPUT flags apply.
+    prints as written; a connection string has its password masked. Only
+    source test connects, so only the OUTPUT flags apply.
 
     source default alone prints the default's row, or nothing when none is
     set. With a NAME it writes the default into the file that source is in.
     --scope user|project   write it into that file instead
     The project file's default wins over yours, so writing your config while
     the project sets a different default is refused: pass --scope project.
+
+    source test resolves the connection string and connects, then prints one
+    row: name, ok, stage, elapsed_ms, error. stage is where it stopped —
+    secret (the vault or keychain), token (Azure AD) or connect — and is null,
+    as error is, when it got through. It exits 0 when it connects, and 1 with
+    the row still printed when it does not; the error has the password masked.
+    --fresh                skip the cached secret and refresh it
+    source clear-cache deletes every cached secret and the key that protects
+    them. BINSQL_SECRET_TTL=0 keeps secrets out of the cache for every command.
 
 BIND VALUES
     An --arg is text unless it says otherwise: int:42, float:1.5, bool:true,

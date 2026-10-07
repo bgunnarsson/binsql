@@ -241,7 +241,7 @@ form returns before the TUI.
 
   Verify with `cargo test -p binsql --test command_mode` and clippy. Run the
   whole file, so `connect`'s existing default tests cover `default_source`.
-- [ ] **Docs.** Add to the command list and the SOURCE section of HELP in
+- [x] **Docs.** Add to the command list and the SOURCE section of HELP in
   `cli/mod.rs`:
   - `source test [NAME] [--fresh]`.
   - What the row says, the stages, and the exits.
