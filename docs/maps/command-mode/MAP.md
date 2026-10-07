@@ -50,6 +50,8 @@ changes to `query`, `exec` and `inspect`.
 - [07](07-tui-data-source-seams.md): The core holds every storage step (Workspace scope, set, remove, keychain, masking, resolution), but validation and the save and delete sequences live in the app; move them into `binsql-core` before the CLI writes, and add the default setter and connection test, which nothing has today.
 - [09](09-keyvault-for-agents.md): Key Vault through `az` never hangs on a prompt, but has no deadline, gives every failure the same exit 1 told apart only by text, cannot be checked without connecting or cleared from the command line, and does not work without `az login`; `az` stays the only mechanism and the README documents its non-interactive logins.
 
+- [17](17-safe-plan-support.md): All four backends plan without executing, but `EXPLAIN ANALYZE <write>` passes today's guards and runs on PostgreSQL and MySQL; fix the classification (22), then add estimated plans only, as each backend's native payload, shaped in 23.
+
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
@@ -77,6 +79,11 @@ changes to `query`, `exec` and `inspect`.
 
 - [21 — Key Vault for CI](21-keyvault-ci-docs.md): document non-interactive `az login` and forcing a fresh read.
 
+## Follow-up tickets from 17
+
+- [22 — EXPLAIN ANALYZE guard](22-explain-analyze-guard.md): classify an executing EXPLAIN as the statement it runs.
+- [23 — Plan shape](23-plan-shape.md): settle where estimated plans live and what they return.
+
 ## Not yet specified
 
 - **Building the data-source commands**: these become task tickets under
@@ -87,9 +94,6 @@ changes to `query`, `exec` and `inspect`.
   default setter and connection test 07 found missing; 09 asks that a
   connection test also tell a credential failure from a database one, and
   that the secret cache can be bypassed or cleared.
-- **Estimated-plan implementation**: 03 identifies value and an existing
-  EXPLAIN safety concern; shape and build tickets wait on 17's backend audit;
-  05 puts plans under `inspect` or a query flag, not a new verb. Runtime-plan policy needs the person's call.
 - **Ergonomics implementation**: build tickets follow the contract decisions
   in 10 (errors), 11 (connect budget), 12 (statement budget), 13 (streaming)
   and 16 (DDL). Capability discovery and row assertions are tasks 14 and 15.
