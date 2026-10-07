@@ -49,6 +49,10 @@ impl Scope {
 /// working directory.
 pub const PROJECT_FILE: &str = ".binsql.json";
 
+/// The bare names `binsql <verb>` takes. A new top-level data source may not
+/// use one; inside a folder it may.
+pub const RESERVED_NAMES: [&str; 3] = ["query", "exec", "inspect"];
+
 pub struct Workspace {
     user: Config,
     user_path: PathBuf,
@@ -169,12 +173,25 @@ impl Workspace {
         }
     }
 
+    /// Refuses a new top-level connection named like a command, which
+    /// `binsql <name>` would never open. One already saved stays editable, and
+    /// a name inside a folder is never a command.
+    pub fn check_new_id(&self, id: &str) -> Result<()> {
+        if !id.contains('/') && RESERVED_NAMES.contains(&id) && self.scope_of(id).is_none() {
+            return Err(Error::config(anyhow::anyhow!(
+                "{id} is a binsql command; save it inside a folder, such as folder/{id}, or under another name"
+            )));
+        }
+        Ok(())
+    }
+
     /// Adds or replaces a connection in one layer and writes that file.
     ///
     /// Any copy in the other layer goes, so moving a connection between files
     /// is a save rather than a save and a delete — otherwise the one left
     /// behind would shadow or be shadowed by the one just written.
     pub fn set(&mut self, id: &str, source: DataSource, scope: Scope) -> Result<()> {
+        self.check_new_id(id)?;
         let vacated = match scope {
             Scope::Project => {
                 let project = self.project.as_mut().ok_or_else(|| {
@@ -416,5 +433,37 @@ mod tests {
             .set("new", source("/tmp/n.db"), Scope::Project)
             .expect_err("there is no project file");
         assert!(error.to_string().contains(PROJECT_FILE), "{error}");
+    }
+
+    #[test]
+    fn a_new_top_level_verb_name_is_refused() {
+        let mut workspace = workspace("reserved", USER, None);
+        let error = workspace
+            .set("query", source("/tmp/q.db"), Scope::User)
+            .expect_err("query is a command");
+        assert!(error.to_string().contains("folder/query"), "{error}");
+        assert!(workspace.get("query").is_none());
+    }
+
+    #[test]
+    fn a_verb_name_inside_a_folder_is_saved() {
+        let mut workspace = workspace("reserved-folder", USER, None);
+        workspace
+            .set("folder/query", source("/tmp/q.db"), Scope::User)
+            .expect("a folder entry is never a command");
+        assert!(workspace.get("folder/query").is_some());
+    }
+
+    #[test]
+    fn a_saved_top_level_verb_name_stays_editable() {
+        let user = r#"{ "connections": { "query": { "driver": "sqlite", "dsn": "/tmp/q.db" } } }"#;
+        let mut workspace = workspace("reserved-saved", user, Some(PROJECT));
+        workspace
+            .set("query", source("/tmp/q2.db"), Scope::User)
+            .expect("already saved");
+        workspace
+            .set("query", source("/tmp/q3.db"), Scope::Project)
+            .expect("moving it between files");
+        assert_eq!(workspace.scope_of("query"), Some(Scope::Project));
     }
 }

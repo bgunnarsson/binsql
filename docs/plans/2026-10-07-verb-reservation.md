@@ -42,7 +42,7 @@ None found. (No `docs/solutions` in this repo.) Project note: command-mode
 
 ## Tasks
 
-- [ ] **1. Reserved names in core, refused by `Workspace::set`.**
+- [x] **1. Reserved names in core, refused by `Workspace::set`.**
   In `crates/binsql-core/src/workspace.rs` add
   `pub const RESERVED_NAMES: [&str; 3] = ["query", "exec", "inspect"];` with a
   doc comment (the bare names `binsql <verb>` takes; a new top-level data
