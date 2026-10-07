@@ -1,7 +1,7 @@
 ---
 title: "inspect --definitions prints one definition row per selected object"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context

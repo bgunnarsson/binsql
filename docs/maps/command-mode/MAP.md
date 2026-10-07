@@ -92,6 +92,7 @@ changes to `query`, `exec` and `inspect`.
 - [70](70-core-streams-rows-into-a-bounded-sink.md): adapters stream columns, then rows, into a bounded channel as they arrive; a closed receiver is a cancel; `run` collects as before.
 - [72](72-query-stream-writes-jsonl-csv-tsv-as-rows-arrive.md): `query --stream` writes jsonl, csv or tsv as rows arrive, refuses other formats, `--plan` and writes; only exit 0 means complete.
 - [80](80-core-reads-object-definitions-with-sqlite-native-t.md): the core reads an object's own definition text; SQLite returns what `sqlite_master` stores, the other backends `unsupported` until 81–83.
+- [84](84-inspect-definitions-prints-one-definition-row-per.md): `inspect --definitions` prints `catalog, schema, object, kind, form, definition` for each selected object, ordered and selected as `--columns`; rows without text are counted on stderr, and `--columns` with it exits 2.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
@@ -183,6 +184,10 @@ changes to `query`, `exec` and `inspect`.
 - [91 — `query --plan` prints the estimated plan](91-query-plan-prints-the-estimated-plan.md)
 - [92 — Check PostgreSQL `query --plan`](92-check-postgresql-query-plan.md)
 - [93 — Check MySQL and SQL Server `query --plan`](93-check-mysql-and-sql-server-query-plan.md)
+
+## Follow-up tickets from 84
+
+- [94 — Terminal formats escape control characters in database text](94-terminal-formats-escape-control-characters.md)
 
 ## Out of scope
 
