@@ -83,6 +83,7 @@ changes to `query`, `exec` and `inspect`.
 - [51](51-connect-timeout-ms-caps-opening-a-connection.md): `--connect-timeout-ms` (or `BINSQL_CONNECT_TIMEOUT_MS`) caps resolving and connecting, from before the config loads; running out is exit 1, category `connect-timeout`, naming the step.
 - [52](52-readme-says-what-the-connect-budget-promises.md): The README's Azure AD and Key Vault sections say the budget counts the `az` calls and kills `az` when it runs out, and that `--catalog` fetches no second token and reads no vault again.
 - [63](63-no-commit-after-a-cancel.md): A transaction cancelled after its last statement is rolled back rather than committed, on every backend, and `exec` reports it as `cancelled` with how the transaction ended.
+- [60](60-timeout-ms-for-query-with-a-bounded-cancel.md): `query --timeout-ms N` cancels the statement N ms after connecting and exits 1 as category `timeout`, with a 2 s grace for the cancel; a timed-out write's outcome is `unknown`.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
