@@ -43,7 +43,7 @@ table or foreign table gives `Unsupported`, as it does now.
 
 ## Tasks
 
-- [ ] **1. `PostgresAdapter::definition` and its mapping.** Override
+- [x] **1. `PostgresAdapter::definition` and its mapping.** Override
   `definition` in `adapter/postgres.rs`; a `form_of(relkind, text)` function
   maps the row. Unit tests of the mapping; an ignored live test in
   `tests/definitions_servers.rs`.

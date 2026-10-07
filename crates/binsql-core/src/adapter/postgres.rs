@@ -16,7 +16,7 @@ use super::Adapter;
 use super::sqlx_common::{self, Binding, Codec, Interrupt, decode_as, decode_fallback};
 use crate::backend::Backend;
 use crate::error::{Error, Result};
-use crate::schema::{Catalog, ObjectKind, ObjectRef};
+use crate::schema::{Catalog, Definition, DefinitionForm, ObjectKind, ObjectRef};
 use crate::sql::{self, Bound};
 use crate::stream::{StreamSummary, Streamed};
 use crate::value::{Column, ResultSet, Value};
@@ -132,6 +132,25 @@ fn connect_options(dsn: &str) -> Result<PgConnectOptions> {
 /// `SELECT version()` returns a paragraph. The header wants the first clause.
 fn shorten_version(raw: String) -> String {
     raw.split(" on ").next().unwrap_or(&raw).trim().to_string()
+}
+
+/// A view or materialized view has its query; PostgreSQL keeps no CREATE text
+/// for any kind of table.
+fn form_of(relkind: char, text: Option<String>) -> Definition {
+    match (relkind, text) {
+        ('v' | 'm', Some(text)) => Definition {
+            form: DefinitionForm::Query,
+            text: Some(text),
+        },
+        ('v' | 'm', None) => Definition {
+            form: DefinitionForm::Withheld,
+            text: None,
+        },
+        _ => Definition {
+            form: DefinitionForm::Unsupported,
+            text: None,
+        },
+    }
 }
 
 #[async_trait]
@@ -252,6 +271,33 @@ impl Adapter for PostgresAdapter {
                 })
             })
             .collect()
+    }
+
+    async fn definition(&self, object: &ObjectRef) -> Result<Definition> {
+        let schema = object.schema.as_deref().unwrap_or("public");
+        let row = sqlx::query(
+            "SELECT c.relkind, \
+                    CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid, true) END \
+                        AS definition \
+             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 AND c.relname = $2 \
+                    AND c.relkind IN ('r', 'p', 'v', 'm', 'f')",
+        )
+        .bind(schema)
+        .bind(&object.name)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Error::query)?
+        .ok_or_else(|| {
+            Error::query(anyhow::anyhow!(
+                "no table or view named {} in {schema}",
+                object.name
+            ))
+        })?;
+
+        let relkind: i8 = row.try_get("relkind").map_err(Error::query)?;
+        let text: Option<String> = row.try_get("definition").map_err(Error::query)?;
+        Ok(form_of(relkind as u8 as char, text))
     }
 
     async fn run(
@@ -562,4 +608,46 @@ fn column_type(row: &PgRow, idx: usize) -> String {
         .get(idx)
         .map(|c| c.type_info().name().to_ascii_uppercase())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn views_and_materialized_views_give_their_query() {
+        for relkind in ['v', 'm'] {
+            assert_eq!(
+                form_of(relkind, Some(" SELECT 1;".into())),
+                Definition {
+                    form: DefinitionForm::Query,
+                    text: Some(" SELECT 1;".into()),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_view_without_text_is_withheld() {
+        assert_eq!(
+            form_of('v', None),
+            Definition {
+                form: DefinitionForm::Withheld,
+                text: None,
+            }
+        );
+    }
+
+    #[test]
+    fn tables_are_unsupported() {
+        for relkind in ['r', 'p', 'f'] {
+            assert_eq!(
+                form_of(relkind, None),
+                Definition {
+                    form: DefinitionForm::Unsupported,
+                    text: None,
+                }
+            );
+        }
+    }
 }
