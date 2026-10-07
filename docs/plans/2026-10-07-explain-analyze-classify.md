@@ -136,7 +136,7 @@ classification.)
   (:613), covering every case in the acceptance criteria, PostgreSQL and
   MySQL forms with their backend. Verify:
   `cargo test -p binsql-core explain` and `cargo test -p binsql-core classif`.
-- [ ] Add `EXPLAIN ANALYZE DELETE FROM artist WHERE id = 1` to
+- [x] Add `EXPLAIN ANALYZE DELETE FROM artist WHERE id = 1` to
   `query_refuses_to_write_and_refuses_a_script`
   (`crates/binsql/tests/command_mode.rs:213`, `fixture.direct(...).refused()`,
   before the count check that proves nothing was written) and to the

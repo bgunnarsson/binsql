@@ -219,6 +219,15 @@ fn query_refuses_to_write_and_refuses_a_script() {
         .refused()
         .stderr_has("use `binsql exec`");
 
+    // EXPLAIN ANALYZE runs what it explains, so it is the write it wraps.
+    fixture
+        .direct(&args(
+            "query",
+            &["EXPLAIN ANALYZE DELETE FROM artist WHERE id = 1"],
+        ))
+        .refused()
+        .stderr_has("use `binsql exec`");
+
     fixture
         .direct(&args("query", &["SELECT 1; SELECT 2"]))
         .refused()
@@ -334,6 +343,7 @@ fn a_read_only_data_source_refuses_a_write_from_the_command_line() {
     for sql in [
         "/* ticket-421 */ DELETE FROM artist WHERE id = 1",
         "SELECT 1; DELETE FROM artist WHERE id = 1",
+        "EXPLAIN ANALYZE DELETE FROM artist WHERE id = 1",
     ] {
         fixture
             .binsql(&["exec", "--conn", "prod", sql, "--force"])
