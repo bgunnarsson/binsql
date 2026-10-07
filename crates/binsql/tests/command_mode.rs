@@ -2713,6 +2713,33 @@ fn a_stream_whose_reader_goes_away_ends_cleanly() {
 }
 
 #[test]
+fn a_stream_whose_reader_stalls_still_ends_at_its_deadline() {
+    let fixture = Fixture::new("stream-stall");
+    let child = fixture.start(&[
+        "query",
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) SELECT n FROM r",
+        "-o",
+        "csv",
+        "--stream",
+        "--timeout-ms",
+        "200",
+    ]);
+    // stdout stays open and unread, so the pipe fills and the writer blocks.
+    let started = std::time::Instant::now();
+    let mut child = child;
+    while child.try_wait().expect("look at binsql").is_none() {
+        if started.elapsed() > std::time::Duration::from_secs(10) {
+            let _ = child.kill();
+            panic!("binsql kept running behind a reader that stopped reading");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    Run::new(child.wait_with_output().expect("wait for binsql"))
+        .failed()
+        .stderr_has("timed out after 200 ms");
+}
+
+#[test]
 fn a_stream_still_checks_for_rows() {
     let fixture = Fixture::new("stream-require-rows");
     fixture

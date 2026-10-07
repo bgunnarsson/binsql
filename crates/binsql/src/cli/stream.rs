@@ -7,12 +7,12 @@
 
 use std::io::{BufWriter, ErrorKind, Write};
 
-use binsql_core::{Bound, Column, Session, StreamSummary, Streamed};
+use binsql_core::{Bound, Column, Error, Session, StreamSummary, Streamed};
 use tokio::sync::mpsc::{self, Receiver, error::TryRecvError};
 use tokio_util::sync::CancellationToken;
 
 use super::render::{self, Format, Options};
-use super::{Category, GRACE, NOTHING_CHANGED, Phase, Result, Stop, failed, note};
+use super::{Category, GRACE, NOTHING_CHANGED, Phase, Result, Stop, core, failed, note};
 
 /// Rows in flight between the database and the writer.
 const CHANNEL: usize = 256;
@@ -27,19 +27,20 @@ pub fn streams(format: Format) -> bool {
 }
 
 /// Runs `statement` and writes its rows as they arrive. Returns how many rows
-/// were written, for `--require-rows`.
+/// were written, for `--require-rows`, or `None` when the reader went away
+/// before they ran out.
 pub async fn query(
     session: &Session,
     statement: &Bound,
     limit: Option<usize>,
     stop: &Stop,
     options: &Options,
-) -> Result<usize> {
+) -> Result<Option<usize>> {
     // A child of the command's token, so a reader that went away stops the
     // query without reading as a ⌃C or a deadline.
     let cancel = stop.token().child_token();
     let (sender, receiver) = mpsc::channel(CHANNEL);
-    let writer = {
+    let mut writer = {
         let options = options.clone();
         let cancel = cancel.clone();
         tokio::task::spawn_blocking(move || write(receiver, &options, &cancel))
@@ -52,23 +53,43 @@ pub async fn query(
             session.stream_bound(None, statement, limit, sender, &cancel),
         )
         .await;
-    let written = writer
-        .await
-        .map_err(|error| failed(format!("writing output: {error}")).phase(Phase::Output))?;
+    // A reader that stalls holds the writer in a write nothing can interrupt.
+    // Once a ⌃C or the deadline has stopped the query, the writer gets a grace
+    // to finish, and is then left to end with the process.
+    let written = tokio::select! {
+        biased;
+        written = &mut writer => written
+            .map_err(|error| failed(format!("writing output: {error}")).phase(Phase::Output))?,
+        () = async {
+            stop.token().cancelled().await;
+            tokio::time::sleep(GRACE).await;
+        } => return Err(streamed.err().unwrap_or_else(|| core(Error::Cancelled))),
+    };
 
     let Written { rows, closed } = written?;
+    let streamed = match streamed {
+        // `binsql query --stream … | head` is a normal thing to type: the
+        // cancel is the writer's own, and how many rows there were is unknown.
+        Err(failure)
+            if closed
+                && failure.category == Category::Cancelled
+                && !stop.token().is_cancelled() =>
+        {
+            return Ok(None);
+        }
+        streamed => streamed?,
+    };
     if closed {
-        // `binsql query --stream … | head` is a normal thing to type.
-        return Ok(rows);
+        return Ok(None);
     }
-    let StreamSummary { truncated, .. } = streamed?;
+    let StreamSummary { truncated, .. } = streamed;
     if truncated && let Some(limit) = limit {
         note(
             options,
             &format!("stopped at --limit {limit}; more rows were available"),
         );
     }
-    Ok(rows)
+    Ok(Some(rows))
 }
 
 struct Written {

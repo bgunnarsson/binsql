@@ -341,10 +341,14 @@ The records are the same bytes the query prints without the flag, but a
 failure part-way leaves the records already written in place and exits `1`
 after them: only exit `0` means the output is complete. A query cut short by
 `--limit` says `stopped at --limit N; more rows were available` on stderr. A
-reader that goes away — `| head` — stops the query and exits `0`. The limit
-bounds the rows binsql holds, not the work the database does to produce them
-or the size of any one row. `--require-rows` and `--timeout-ms` apply as they
-do without it.
+reader that goes away — `| head` — stops the query and exits `0`, and since
+how many rows there were is then unknown, `--require-rows` is not checked; a
+query that had already failed, or a ⌃C, still exits `1`. The limit bounds the
+rows binsql holds, not the work the database does to produce them or the size
+of any one row. `--require-rows` and `--timeout-ms` otherwise apply as they do
+without it. A reader that stops reading but keeps the pipe open holds the query
+where it is; at the deadline or a ⌃C, binsql waits 2 s for the output to drain
+and then exits without it, and the last record may be cut short.
 
 ```sh
 binsql query --stream -o csv "SELECT * FROM events" | gzip > events.csv.gz

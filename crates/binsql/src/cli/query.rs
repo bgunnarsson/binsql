@@ -133,8 +133,10 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         .map_err(|error| usage(format!("{error} — one --arg per ?")).phase(Phase::Prepare))?;
 
     if streaming {
-        let rows = stream::query(&session, &bound[0], limit, &stop, &options).await?;
-        return require(require_rows, rows);
+        return match stream::query(&session, &bound[0], limit, &stop, &options).await? {
+            Some(rows) => require(require_rows, rows),
+            None => Ok(()),
+        };
     }
 
     // A write let through by --allow-write may have landed before the cancel
