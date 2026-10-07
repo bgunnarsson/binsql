@@ -13,7 +13,7 @@ use super::{
 };
 
 const VALUES: &[&str] = &["file", "f", "limit", "arg"];
-const SWITCHES: &[&str] = &["allow-write"];
+const SWITCHES: &[&str] = &["allow-write", "plan"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     let args = parse(args, VALUES, SWITCHES)?;
@@ -45,6 +45,33 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         });
     };
 
+    let cancel = cancel_on_interrupt();
+    if args.is_set(&["plan"]) {
+        // Checked here as well as in the core, so a refusal is a usage error
+        // and can name the switch.
+        if !params.is_empty() {
+            return Err(usage("--plan plans the statement as written; drop --arg"));
+        }
+        if !sql::plannable(&statement.sql, backend) {
+            let summary = sql::summarize(&statement.sql, backend, 80);
+            return Err(usage(if statement.kind.mutates() {
+                format!(
+                    "--plan plans reads only; drop --plan to run a {} statement\n  statement: {summary}",
+                    statement.kind.label()
+                )
+            } else {
+                format!(
+                    "--plan plans one SELECT, WITH, VALUES or TABLE statement\n  statement: {summary}"
+                )
+            }));
+        }
+        let result = session
+            .plan(None, &statement.sql, limit, &cancel)
+            .await
+            .map_err(|error| failed(error.to_string()))?;
+        return print(&render::rows(&result, &options));
+    }
+
     if statement.kind.mutates() && !args.is_set(&["allow-write"]) {
         return Err(usage(format!(
             "refusing to run a {} statement with `query`: use `binsql exec`, or --allow-write\n  statement: {}",
@@ -56,7 +83,6 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     let bound = sql::bind(std::slice::from_ref(statement), &params, backend)
         .map_err(|error| usage(format!("{error} — one --arg per ?")))?;
 
-    let cancel = cancel_on_interrupt();
     let result = session
         .run_bound(None, &bound[0], limit, &cancel)
         .await

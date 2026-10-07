@@ -324,6 +324,72 @@ fn exec_needs_force_for_the_irreversible() {
 }
 
 #[test]
+fn query_plan_prints_the_estimated_plan_without_running_it() {
+    let fixture = Fixture::new("query-plan");
+    fixture.write_config();
+    fixture.seed();
+    let read = "SELECT * FROM artist WHERE name = 'x'";
+
+    let json = fixture
+        .direct(&args("query", &["--plan", read, "-o", "json"]))
+        .succeeds();
+    let parsed: serde_json::Value = serde_json::from_str(&json.stdout).expect("valid json");
+    assert_eq!(parsed["rows"][0]["detail"], "SCAN artist");
+
+    fixture
+        .direct(&args("query", &["--plan", read, "-o", "csv"]))
+        .succeeds()
+        .stdout_has("id,parent,notused,detail\n")
+        .stdout_has("SCAN artist");
+
+    fixture
+        .direct(&args("query", &["--plan", read, "-o", "raw"]))
+        .succeeds()
+        .stdout_has("\tSCAN artist\n");
+
+    // A read-only source may plan: nothing is run.
+    fixture
+        .binsql(&["query", "--conn", "prod", "--plan", read])
+        .succeeds()
+        .stdout_has("SCAN artist");
+
+    for sql in ["EXPLAIN SELECT 1", "PRAGMA table_info(artist)"] {
+        fixture
+            .direct(&args("query", &["--plan", sql]))
+            .refused()
+            .stderr_has("--plan plans one SELECT");
+    }
+
+    fixture
+        .direct(&args(
+            "query",
+            &[
+                "--plan",
+                "SELECT * FROM artist WHERE id = ?",
+                "--arg",
+                "int:1",
+            ],
+        ))
+        .refused()
+        .stderr_has("drop --arg");
+
+    fixture
+        .direct(&args(
+            "query",
+            &["--plan", "--allow-write", "DELETE FROM artist WHERE id = 1"],
+        ))
+        .refused()
+        .stderr_has("drop --plan");
+    fixture
+        .direct(&args(
+            "query",
+            &["SELECT count(*) FROM artist", "-o", "raw"],
+        ))
+        .succeeds()
+        .stdout_has("3");
+}
+
+#[test]
 fn a_read_only_data_source_refuses_a_write_from_the_command_line() {
     let fixture = Fixture::new("readonly");
     fixture.write_config();

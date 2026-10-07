@@ -54,7 +54,7 @@ None found.
 
 ## Tasks
 
-- [ ] Add the `--plan` switch to `query` and its tests. In `query.rs` add
+- [x] Add the `--plan` switch to `query` and its tests. In `query.rs` add
   `"plan"` to `SWITCHES`; after the `let [statement] = …` check, branch on
   `args.is_set(&["plan"])`: refuse `args.value(&["arg"]).is_some()` (or the
   same test `bind_values` uses for presence — non-empty `params`) with
