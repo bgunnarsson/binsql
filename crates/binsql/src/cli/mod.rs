@@ -96,6 +96,8 @@ COMMAND MODE
     binsql inspect [table]     list tables, or describe one
     binsql source list         list the saved data sources
     binsql source show NAME    show one, found the way --conn finds it
+    binsql source default [NAME]
+                               show the default, or make NAME the default
 
 CONNECTION
     -c, --conn NAME       a saved data source, `folder/name` or a bare name
@@ -140,6 +142,12 @@ SOURCE
     default, description, shadowed. A keychain:// or keyvault:// reference
     prints as written; a connection string has its password masked. Nothing
     connects, so only the OUTPUT flags apply.
+
+    source default alone prints the default's row, or nothing when none is
+    set. With a NAME it writes the default into the file that source is in.
+    --scope user|project   write it into that file instead
+    The project file's default wins over yours, so writing your config while
+    the project sets a different default is refused: pass --scope project.
 
 BIND VALUES
     An --arg is text unless it says otherwise: int:42, float:1.5, bool:true,

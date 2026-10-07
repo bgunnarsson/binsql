@@ -380,6 +380,13 @@ on stderr says how to open it instead. `binsql source` alone, or with only
 options after it, still opens a saved data source named `source`; it is a
 command only with an operation after it.
 
+`binsql source default` prints the default data source's row, or nothing when
+none is set. `binsql source default NAME` makes NAME the default, writing it
+into the file that data source is saved in; `--scope user` or `--scope project`
+writes it into that file instead. A project's default wins over yours, so
+setting it in your config while the project file names a different one would
+change nothing, and is refused with a hint to pass `--scope project`.
+
 ## Databases
 
 | Driver names | Connection string |
@@ -599,7 +606,7 @@ What works today is everything above. What has **not** been carried across from
 v2 yet:
 
 - **Changing data sources from the command line.** `binsql source list` and
-  `source show` read them; v2's `binsql conn add` has no counterpart yet, so a
+  `source show` read them and `source default` sets the default; v2's `binsql conn add` has no counterpart yet, so a
   data source is added with `⌃N` in the TUI and edited with `e` in its tree, or
   the config is edited by hand — which means knowing whether you meant the user file or
   a project's.

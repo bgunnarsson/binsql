@@ -127,7 +127,7 @@ never reach `ratatui::init`; every `source default` form ends before it.
   - `source default nope`, `source default pg kc`, `source default pg
     --scope other` and `source list --scope user` are `refused()`.
   Verify: `cargo test -p binsql --test command_mode source`, clippy.
-- [ ] **Docs.** HELP's SOURCE section (`cli/mod.rs`): `source default
+- [x] **Docs.** HELP's SOURCE section (`cli/mod.rs`): `source default
   [NAME] [--scope user|project]`, that no name prints the current default's
   row (nothing when none is set), that NAME writes the source's own file
   unless `--scope` names one, and that the project file's default wins so a
