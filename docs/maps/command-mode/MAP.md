@@ -86,6 +86,7 @@ changes to `query`, `exec` and `inspect`.
 - [60](60-timeout-ms-for-query-with-a-bounded-cancel.md): `query --timeout-ms N` cancels the statement N ms after connecting and exits 1 as category `timeout`, with a 2 s grace for the cancel; a timed-out write's outcome is `unknown`.
 - [61](61-exec-under-the-deadline-whole-batch-honest-message.md): `exec --timeout-ms N` bounds the whole batch, starts nothing after the deadline, and reports a cut-off transaction or statement as `unknown` rather than rolled back.
 - [62](62-inspect-under-the-deadline.md): `inspect --timeout-ms N` drops its metadata reads at the deadline and exits 1 as category `timeout`; `timeout-ms` is now shared by every verb that runs SQL.
+- [64](64-postgresql-and-mysql-stop-the-server-statement-ins.md): A cancel inside a PostgreSQL or MySQL transaction stops the statement on the server before the rollback, naming the session after `BEGIN` so a pooling proxy cannot misdirect it.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.
