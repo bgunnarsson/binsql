@@ -1,7 +1,7 @@
 ---
 title: "`binsql query --plan` prints the estimated plan of one read"
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context

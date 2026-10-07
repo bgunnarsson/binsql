@@ -2,7 +2,7 @@
 title: "`query --plan` prints the estimated plan"
 kind: task
 mode: afk
-status: open
+status: resolved
 blocked_by: [90]
 claimed_by:
 ---
@@ -26,3 +26,9 @@ Build what 23 settled for this step (see `23-plan-shape.md`, "Settled shape"):
 - 23's answer is the contract; 17's answer has each backend's estimated form and sources.
 
 ## Answer
+
+`query --plan` prints the estimated plan of one read through `-o`, and exits 2 for `--arg`, a statement that cannot be planned, and a write even with `--allow-write`.
+
+Built by docs/plans/2026-10-07-query-plan.md: crates/binsql/src/cli/query.rs checks before calling `Session::plan`, so a refusal is a usage error that names the switch; tests in crates/binsql/tests/command_mode.rs (`query_plan_prints_the_estimated_plan_without_running_it`); the help and README document each backend's form, `-o raw`, the SHOWPLAN grant and that it is an estimate. `--stream` does not exist yet: 72 adds its refusal. Review: four focuses, no findings.
+
+Assumed, not asked: `--plan` with `--arg` is refused outright rather than planning a statement with placeholders — 23 settled that, and planning a parameterised statement differs per backend.
