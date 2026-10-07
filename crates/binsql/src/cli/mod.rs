@@ -699,6 +699,8 @@ INSPECT
                           the catalog, schema, object and kind they belong to;
                           a NAME after it is matched exactly, never split on
                           dots, with the schema taken from --schema alone
+        --timeout-ms N    give up on the metadata reads N ms after connecting
+                          and exit 1 as a timeout; 0 is no limit
 
 SOURCE
     One row per data source: name, scope, driver, dsn, readonly, open_on_start,

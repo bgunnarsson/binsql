@@ -55,6 +55,7 @@ never name a zsh variable `status`; every new flag is in HELP and the README.
   `query.rs`, `exec.rs`: the flag out of their own lists.
   Verify: `cargo test --workspace` — the integration tests above.
 
-- [ ] **2. HELP and the README.** The flag moves to the shared flags in HELP
-  and the README, saying what each verb does when it runs out.
+- [x] **2. HELP and the README.** The flag under INSPECT and in the README's
+  `inspect` table, with what running out prints; HELP keeps it per verb, since
+  each verb says something different when it runs out.
   Verify: `cargo test -p binsql`.

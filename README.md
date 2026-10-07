@@ -379,6 +379,7 @@ forms, such as `jsonb_exists`.
 | `--catalog NAME` | another database on the same connection |
 | `--schema NAME` | one schema rather than all of them |
 | `--columns` | every table and view's columns in one call |
+| `--timeout-ms N` | give up `N` ms after the connection opens; `0`, or no flag, is no limit |
 
 A table may carry its own schema — `binsql inspect dbo.orders` — which wins over
 `--schema`, being the more specific of the two. Either way the name is matched
@@ -397,6 +398,11 @@ stderr. Read it as JSON or JSONL: CSV and TSV print a null and an empty string
 the same way. SQL Server's `type` is the bare type name, without its length or
 precision, and on SQLite generated columns and the hidden columns of a virtual
 table are not listed.
+
+`--timeout-ms` covers every read `inspect` makes after connecting, the
+connection `--catalog` opens included. Running out prints nothing on stdout and
+exits 1 with `timed out after N ms`; `inspect` only reads, so nothing was
+changed. ⌃C stops it as it always has.
 
 A name after `--columns` is an identity rather than a guess: it is matched
 exactly, case included, and never split on dots, so a table called `a.b` can be
@@ -439,7 +445,7 @@ the same either way.
 `source`, a vault or keychain that would not hand over a secret is `secret`, a
 statement turned away by `query` or by `exec` without `--force` is `refused`,
 an empty result under `--require-rows` is `assertion`, a connect budget run
-out is `connect-timeout`, a statement past `--timeout-ms` is `timeout` —
+out is `connect-timeout`, a statement, batch or `inspect` past `--timeout-ms` is `timeout` —
 and `phase` says how far binsql had got. A note that would have gone to stderr
 comes as `{"type":"notice","schema":1,"message":…}`, and `-o none` still hides
 it. A bad `--error-format` value is reported as text, since there is no
