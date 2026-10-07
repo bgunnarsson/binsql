@@ -639,9 +639,15 @@ CONNECTION
     -c, --conn NAME       a saved data source, `folder/name` or a bare name
     -D, --dsn STRING      a connection string, used instead of a saved one
     -d, --driver NAME     sqlite | postgres | mssql | mysql (default: inferred)
+        --connect-timeout-ms N
+                          give up when loading the config, resolving the
+                          connection string and connecting take longer than
+                          N ms; 0, the default, waits as long as the driver
+                          does
 
     With none of these, the `default` data source is opened. BINSQL_CONN,
-    BINSQL_DSN and BINSQL_DRIVER say the same things through the environment.
+    BINSQL_DSN, BINSQL_DRIVER and BINSQL_CONNECT_TIMEOUT_MS say the same things
+    through the environment.
 
 OUTPUT
     -o, --format NAME     table (default), json, jsonl, csv, tsv, vertical,

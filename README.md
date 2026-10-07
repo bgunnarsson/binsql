@@ -241,9 +241,18 @@ data source is opened.
 | `-c, --conn NAME` | a saved data source, `folder/name` or a bare name |
 | `-D, --dsn STRING` | a connection string, used instead of a saved one |
 | `-d, --driver NAME` | `sqlite` \| `postgres` \| `mssql` \| `mysql` (default: inferred) |
+| `--connect-timeout-ms N` | give up when loading the config, resolving the connection string and connecting take longer than `N` ms |
 
-`BINSQL_CONN`, `BINSQL_DSN` and `BINSQL_DRIVER` say the same things through the
-environment, and a flag beats the variable.
+`BINSQL_CONN`, `BINSQL_DSN`, `BINSQL_DRIVER` and `BINSQL_CONNECT_TIMEOUT_MS`
+say the same things through the environment, and a flag beats the variable.
+
+The connect budget is off by default, and `0` turns it off: binsql then waits
+as long as the driver, or `az`, does. With one, running out is exit 1 and
+`connect timeout: no connection to NAME within N ms, while …` names the step
+it was on — resolving the connection string, or connecting. The drivers' own
+timeouts are left as they are, so the first to run out wins. The budget ends
+once connected: running the statements, and any further connection
+`inspect --catalog` opens, are outside it.
 
 And the same output flags. `--format` decides the whole of what lands on
 stdout — nothing else is ever written there, so the structured formats pipe
@@ -397,7 +406,7 @@ the same either way.
 | Field | |
 | --- | --- |
 | `exit` | the exit code the process ends with |
-| `category` | `usage`, `source`, `config`, `secret`, `connect`, `refused`, `database`, `assertion`, `cancelled`, `io` or `other` |
+| `category` | `usage`, `source`, `config`, `secret`, `connect`, `connect-timeout`, `refused`, `database`, `assertion`, `cancelled`, `io` or `other` |
 | `phase` | `args`, `input`, `config`, `connect`, `prepare`, `execute` or `output` |
 | `message` | what went wrong, in one sentence |
 | `reason` | why, for a Key Vault or Azure AD failure: `az-missing`, `az-unauthenticated`, `vault-forbidden`, `secret-not-found`, `vault-not-found` or `azure-ad-token` |
@@ -411,7 +420,8 @@ the same either way.
 `category` says what kind of thing failed — a missing saved data source is
 `source`, a vault or keychain that would not hand over a secret is `secret`, a
 statement turned away by `query` or by `exec` without `--force` is `refused`,
-an empty result under `--require-rows` is `assertion` —
+an empty result under `--require-rows` is `assertion`, a connect budget run
+out is `connect-timeout` —
 and `phase` says how far binsql had got. A note that would have gone to stderr
 comes as `{"type":"notice","schema":1,"message":…}`, and `-o none` still hides
 it. A bad `--error-format` value is reported as text, since there is no

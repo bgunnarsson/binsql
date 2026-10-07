@@ -62,7 +62,7 @@ the README.
   `Category::ConnectTimeout`.
   Verify: `cargo test --workspace` — the four integration tests above.
 
-- [ ] **2. HELP and the README.** The flag and the variable under CONNECTION
+- [x] **2. HELP and the README.** The flag and the variable under CONNECTION
   and in the README's command-mode flags: what `0` means, what is covered,
   that driver timeouts are left alone; the category in Structured errors.
   Verify: `cargo test -p binsql`.
