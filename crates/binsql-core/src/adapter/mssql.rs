@@ -402,7 +402,7 @@ impl Adapter for MsSqlAdapter {
                 Some(Column {
                     name: row.first()?.to_text(),
                     type_name: row.get(1).map(Value::to_text).unwrap_or_default(),
-                    nullable: row.get(2).map(|v| !matches!(v, Value::Int(0))),
+                    nullable: row.get(2).map(nullable),
                     default: row.get(3).filter(|v| !v.is_null()).map(Value::to_text),
                     primary_key: matches!(row.get(4), Some(Value::Int(1))),
                 })
@@ -567,6 +567,12 @@ fn decode(row: &Row, idx: usize, data: &ColumnData<'static>) -> Value {
             })
         }
     }
+}
+
+/// `is_nullable` is a BIT, which `decode` reads as `Bool`; `Int` is kept for a
+/// server that sends it as a number.
+fn nullable(value: &Value) -> bool {
+    !matches!(value, Value::Bool(false) | Value::Int(0))
 }
 
 fn opt(value: Option<Value>) -> Value {
@@ -750,6 +756,14 @@ async fn azure_cli_token() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_nullable_reads_bit_and_int() {
+        assert!(!nullable(&Value::Bool(false)));
+        assert!(nullable(&Value::Bool(true)));
+        assert!(!nullable(&Value::Int(0)));
+        assert!(nullable(&Value::Int(1)));
+    }
 
     #[test]
     fn strips_fedauth_and_reports_it() {

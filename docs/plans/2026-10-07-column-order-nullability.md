@@ -72,7 +72,7 @@ None found.
 
 ## Tasks
 
-- [ ] SQL Server nullability. In `crates/binsql-core/src/adapter/mssql.rs` add a
+- [x] SQL Server nullability. In `crates/binsql-core/src/adapter/mssql.rs` add a
   private free function near `decode`:
   `fn nullable(value: &Value) -> bool { !matches!(value, Value::Bool(false) | Value::Int(0)) }`
   with a one-line doc comment saying `is_nullable` is BIT, which `decode` reads
