@@ -45,6 +45,7 @@ changes to `query`, `exec` and `inspect`.
 ## Decisions so far
 
 - [03](03-agent-ergonomics-survey.md): Prioritize data-source discovery, structured errors, bounded waits and richer schema context; add opt-in streaming, capability discovery and row assertions, and decide DDL and safe plans separately while preserving existing defaults and the query/exec/inspect split.
+- [04](04-inspect-for-agents.md): Inspect JSON gives an object list or one object's five column fields, not a full schema; the CLI drops identity and catalog context, while relationships, indexes, data row counts and definitions need new core introspection.
 - [05](05-verb-namespace.md): Spend one bare verb, `source`, on all data-source management (`binsql source <op>`); every other addition is a flag or lives under an existing verb; `source` dispatches to command mode only when a non-flag argument follows it, so every `binsql source …` that worked before still opens the TUI; refuse to save a new top-level data source named after a verb; and add `binsql -- <name>` to open any saved name in the TUI.
 
 ## Follow-up tickets from 03
@@ -62,6 +63,10 @@ changes to `query`, `exec` and `inspect`.
 
 - [18 — Verb reservation](18-verb-reservation.md): build the reserved names and `binsql -- <name>`.
 
+## Follow-up tickets from 04
+
+- [19 — Schema context contract](19-schema-context-contract.md): settle additive one-call object/column context and the scope of new metadata acquisition.
+
 ## Not yet specified
 
 - **Building the data-source commands**: these become task tickets under
@@ -70,8 +75,6 @@ changes to `query`, `exec` and `inspect`.
   non-flag argument follows it, and bare `binsql source` keeps today's
   message and exit 1 when nothing resolves. Some may first need logic moved from the app into the
   core, depending on 07.
-- **Richer schema context**: 03 ranks one-call schema context as worth having;
-  its shape and build tickets wait on 04's per-backend inventory.
 - **Estimated-plan implementation**: 03 identifies value and an existing
   EXPLAIN safety concern; shape and build tickets wait on 17's backend audit;
   05 puts plans under `inspect` or a query flag, not a new verb. Runtime-plan policy needs the person's call.
