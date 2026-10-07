@@ -2,7 +2,7 @@
 title: Classify an executing EXPLAIN as the statement it runs
 kind: task
 mode: afk
-status: open
+status: resolved
 blocked_by: []
 claimed_by:
 ---
@@ -36,3 +36,9 @@ No output format, flag or exit changes beyond refusing these statements.
 - 17's answer (`17-safe-plan-support.md`) has the backend forms and links.
 
 ## Answer
+
+Resolved: EXPLAIN, DESCRIBE and DESC that run their statement (ANALYZE/ANALYSE, bare or in PostgreSQL's option list, quoted or not) classify as that statement; a plain or ANALYZE-off EXPLAIN stays a read.
+
+classify routes EXPLAIN/DESCRIBE/DESC to `explained` (crates/binsql-core/src/sql.rs), which walks the options with a new `lexemes` helper over `scan`; an option it does not know starts the wrapped statement, which then classifies as Unknown and is refused. Plan: docs/plans/2026-10-07-explain-analyze-classify.md. Tests: sql::tests an_executing_explain_takes_the_kind_of_what_it_runs, a_plain_explain_stays_a_read, lexemes_keep_digits_and_punctuation_and_where_they_start; command_mode query_refuses_to_write_and_refuses_a_script and a_read_only_data_source_refuses_a_write_from_the_command_line.
+
+Review: two reviewers found, each on their own, that a quoted option name (`EXPLAIN ("analyze") DELETE ...`) read as a plain EXPLAIN; fixed in d4e27cf (lexemes now keep a quote's contents). They also found two defects in `scan` that were there before this change and fool every classification, not only EXPLAIN: PostgreSQL nested block comments end at the first `*/` (`/* a /* b */ SELECT */ DELETE FROM t` reads as a SELECT), and MySQL executable comments `/*! ... */` are treated as comments though MySQL runs them (`EXPLAIN /*!80018 ANALYZE */ DELETE ...`). Pre-existing, unfixed: the user decides.

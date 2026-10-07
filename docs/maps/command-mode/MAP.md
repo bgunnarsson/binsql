@@ -61,6 +61,7 @@ changes to `query`, `exec` and `inspect`.
 - [18](18-verb-reservation.md): Built: a new top-level data source named `query`, `exec` or `inspect` is refused by `Workspace::set` (and before any secret is filed in the TUI), and `binsql -- <name>` opens any saved name.
 - [20](20-core-save-delete.md): Built: binsql_core::source::Draft::build validates a data source with the form's rules and messages; Workspace::save and Workspace::delete run the save and delete sequences through a SecretStore trait (Keychain is the real one); the TUI calls them and keeps only its UI work.
 - [21](21-keyvault-ci-docs.md): Built: README's Key Vault section names az login --service-principal (password or --federated-token) and --identity for CI, containers and agents, says fedauth= uses the same login, BINSQL_SECRET_TTL=0 picks up a rotated secret, and that the az call has no deadline yet; Status says those identities are reached through az.
+- [22](22-explain-analyze-guard.md): Resolved: EXPLAIN, DESCRIBE and DESC that run their statement (ANALYZE/ANALYSE, bare or in PostgreSQL's option list, quoted or not) classify as that statement; a plain or ANALYZE-off EXPLAIN stays a read.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.

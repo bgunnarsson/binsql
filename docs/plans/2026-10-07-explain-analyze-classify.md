@@ -1,7 +1,7 @@
 ---
 title: An EXPLAIN that runs its statement is classified as that statement
 date: 2026-10-07
-status: in-progress
+status: done
 ---
 
 ## Context
@@ -143,7 +143,7 @@ classification.)
   disguises loop in
   `a_read_only_data_source_refuses_a_write_from_the_command_line` (:334).
   Verify: `cargo test -p binsql --test command_mode refuse`.
-- [ ] Resolve ticket 22: fill its Answer with what changed and the
+- [x] Resolve ticket 22: fill its Answer with what changed and the
   fail-towards-refusal limits above, status `resolved`.
 
 ## Files
