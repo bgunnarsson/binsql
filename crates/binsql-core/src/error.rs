@@ -61,6 +61,18 @@ pub enum Error {
 
     #[error("{0}")]
     Io(#[from] std::io::Error),
+
+    /// A batch failed after its transaction began. The text is the failure's
+    /// own; `outcome` says what became of the transaction. An error from a
+    /// batch that is not this one came before anything in it ran.
+    #[error("{error}")]
+    Transaction {
+        error: Box<Error>,
+        outcome: TransactionOutcome,
+        /// The 1-based position of the statement that failed, or `None` when
+        /// the batch ran and its commit or rollback did not.
+        statement: Option<usize>,
+    },
 }
 
 impl Error {
@@ -89,6 +101,18 @@ impl Error {
         Error::Config(err.into())
     }
 
+    pub fn transaction(
+        error: Error,
+        outcome: TransactionOutcome,
+        statement: Option<usize>,
+    ) -> Self {
+        Error::Transaction {
+            error: Box::new(error),
+            outcome,
+            statement,
+        }
+    }
+
     /// The database's own code for a failure, when the driver gives it as a
     /// typed field: the SQLSTATE on PostgreSQL and MySQL, the extended result
     /// code on SQLite and the error number on SQL Server. Never read from the
@@ -96,6 +120,7 @@ impl Error {
     pub fn native_code(&self) -> Option<String> {
         let source = match self {
             Error::Query(source) | Error::Connect { source, .. } => source,
+            Error::Transaction { error, .. } => return error.native_code(),
             _ => return None,
         };
         source.chain().find_map(|cause| {
@@ -134,6 +159,25 @@ impl Reason {
             Reason::SecretNotFound => "secret-not-found",
             Reason::VaultNotFound => "vault-not-found",
             Reason::AzureAdToken => "azure-ad-token",
+        }
+    }
+}
+
+/// What became of a transaction whose batch failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionOutcome {
+    /// The rollback was confirmed: nothing was kept.
+    RolledBack,
+    /// The commit or the rollback failed, or the connection went with the
+    /// transaction, so what was kept cannot be said.
+    Unknown,
+}
+
+impl TransactionOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TransactionOutcome::RolledBack => "rolled_back",
+            TransactionOutcome::Unknown => "unknown",
         }
     }
 }

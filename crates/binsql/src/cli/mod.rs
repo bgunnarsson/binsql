@@ -36,6 +36,8 @@ pub struct Failure {
     pub statement: Option<usize>,
     /// How many statements had already run, with no transaction to undo them.
     pub completed: Option<usize>,
+    /// What became of the transaction a batch ran in.
+    pub transaction: Option<Transaction>,
     /// Lines text mode prints indented under the message. JSON leaves them
     /// out: they quote the SQL, which `statement` stands in for.
     pub context: Vec<String>,
@@ -75,13 +77,27 @@ pub fn failed(message: impl Into<String>) -> Failure {
 /// A core error as a failure, with `message` in place of its own text.
 /// `message` ends with the error's text, if it quotes it at all.
 pub fn caused(message: impl Into<String>, error: &binsql_core::Error) -> Failure {
-    use binsql_core::Error;
+    use binsql_core::{Error, TransactionOutcome};
     let message = message.into();
+    if let Error::Transaction {
+        error,
+        outcome,
+        statement,
+    } = error
+    {
+        let mut failure = caused(message, error);
+        failure.statement = *statement;
+        failure.transaction = Some(match outcome {
+            TransactionOutcome::RolledBack => Transaction::RolledBack,
+            TransactionOutcome::Unknown => Transaction::Unknown,
+        });
+        return failure;
+    }
     let (category, phase) = match error {
         Error::UnknownBackend(_) | Error::Placeholders { .. } => (Category::Usage, Phase::Prepare),
         Error::Connect { .. } => (Category::Connect, Phase::Connect),
         Error::Secret { .. } => (Category::Secret, Phase::Connect),
-        Error::Query(_) => (Category::Database, Phase::Execute),
+        Error::Query(_) | Error::Transaction { .. } => (Category::Database, Phase::Execute),
         Error::ReadOnly { .. } | Error::NotPlannable { .. } => (Category::Refused, Phase::Prepare),
         Error::Cancelled => (Category::Cancelled, Phase::Execute),
         Error::Config(_) => (Category::Config, Phase::Execute),
@@ -153,6 +169,7 @@ impl Failure {
             phase,
             statement: None,
             completed: None,
+            transaction: None,
             context: Vec::new(),
             reason: None,
             parts: None,
@@ -177,6 +194,11 @@ impl Failure {
 
     pub fn completed(mut self, count: usize) -> Failure {
         self.completed = Some(count);
+        self
+    }
+
+    pub fn transaction(mut self, transaction: Transaction) -> Failure {
+        self.transaction = Some(transaction);
         self
     }
 
@@ -220,6 +242,27 @@ impl Category {
             Category::Cancelled => "cancelled",
             Category::Io => "io",
             Category::Other => "other",
+        }
+    }
+}
+
+/// What became of a batch's transaction when the batch failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transaction {
+    /// None was opened: nothing in the batch ran.
+    None,
+    /// The rollback was confirmed: nothing was kept.
+    RolledBack,
+    /// The commit or the rollback failed, or the connection was lost.
+    Unknown,
+}
+
+impl Transaction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Transaction::None => "none",
+            Transaction::RolledBack => "rolled_back",
+            Transaction::Unknown => "unknown",
         }
     }
 }
@@ -394,6 +437,9 @@ fn error_record(failure: &Failure, exit: i32) -> String {
     }
     if let Some(count) = failure.completed {
         fields.push(("completed", count.into()));
+    }
+    if let Some(transaction) = failure.transaction {
+        fields.push(("transaction", transaction.as_str().into()));
     }
     record(&fields)
 }

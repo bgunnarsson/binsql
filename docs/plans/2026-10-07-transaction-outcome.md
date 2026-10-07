@@ -59,14 +59,14 @@ never name a zsh variable `status`; clippy's `result_large_err` holds
 
 ## Tasks
 
-- [ ] **1. The core says how the transaction ended.**
+- [x] **1. The core says how the transaction ended.**
   `error.rs`: `TransactionOutcome` with `as_str`, `Error::Transaction`,
   `native_code` looks through it. `adapter/sqlx_common.rs` and
   `adapter/mssql.rs` wrap statement, commit and rollback failures with the
   outcome they saw.
   Verify: `cargo test -p binsql-core`.
 
-- [ ] **2. exec reports it.**
+- [x] **2. exec reports it.**
   `cli/mod.rs`: `Transaction` on `Failure`, filled by `caused` from the core
   error, written by `error_record`. `cli/exec.rs` picks the sentence by the
   outcome. Integration tests per the criteria.

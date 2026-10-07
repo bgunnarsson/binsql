@@ -3,7 +3,9 @@
 
 use std::time::Duration;
 
-use binsql_core::{Backend, DataSource, Error, ObjectKind, Session, Value};
+use binsql_core::{
+    Backend, Bound, DataSource, Error, ObjectKind, Session, TransactionOutcome, Value,
+};
 use tokio_util::sync::CancellationToken;
 
 fn temp_database(name: &str) -> std::path::PathBuf {
@@ -293,6 +295,73 @@ async fn plans_a_read_without_running_it() {
         .plan(None, "SELECT * FROM widget", None, &token)
         .await
         .expect("plans are allowed on a read-only source");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A batch that fails says what became of its transaction: rolled back when
+/// the rollback is confirmed, unknown when the commit itself fails.
+#[tokio::test]
+async fn a_failed_batch_says_how_its_transaction_ended() {
+    let path = temp_database("transaction");
+    let session = Session::open("test", source(&path, false))
+        .await
+        .expect("open session");
+    session
+        .run(
+            None,
+            "CREATE TABLE parent (id INTEGER PRIMARY KEY); \
+             CREATE TABLE child (parent INTEGER REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED)",
+            None,
+        )
+        .await
+        .expect("create tables");
+    let cancel = CancellationToken::new();
+
+    let batch = [
+        Bound::plain("INSERT INTO parent VALUES (1)"),
+        Bound::plain("INSERT INTO nowhere VALUES (1)"),
+    ];
+    let error = session
+        .run_transaction(None, &batch, None, true, &cancel)
+        .await
+        .expect_err("the second statement fails");
+    assert!(
+        matches!(
+            error,
+            Error::Transaction {
+                outcome: TransactionOutcome::RolledBack,
+                statement: Some(2),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("nowhere"), "{error}");
+    let kept = session
+        .run(None, "SELECT * FROM parent", None)
+        .await
+        .expect("read parent");
+    assert!(kept.rows.is_empty(), "the rollback kept nothing");
+
+    // A deferred foreign key is checked at the commit, so the batch runs and
+    // the commit fails.
+    let batch = [Bound::plain("INSERT INTO child VALUES (99)")];
+    let error = session
+        .run_transaction(None, &batch, None, true, &cancel)
+        .await
+        .expect_err("the commit fails");
+    assert!(
+        matches!(
+            error,
+            Error::Transaction {
+                outcome: TransactionOutcome::Unknown,
+                statement: None,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
 
     let _ = std::fs::remove_file(&path);
 }

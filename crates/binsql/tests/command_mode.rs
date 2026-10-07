@@ -1663,6 +1663,89 @@ fn error_format_json_counts_what_ran_before_a_failure_with_no_transaction() {
     assert_eq!(record["category"], "database");
     assert_eq!(record["statement"], 2);
     assert_eq!(record["completed"], 1);
+    assert!(record.get("transaction").is_none(), "{record}");
+}
+
+#[test]
+fn error_format_json_says_a_failed_batch_was_rolled_back() {
+    let fixture = Fixture::new("error-json-rolled-back");
+    fixture.seed();
+    let run = fixture
+        .direct(&[
+            "exec",
+            "INSERT INTO artist (name) VALUES ('Plaid'); SELECT * FROM nowhere",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "database");
+    assert_eq!(record["statement"], 2);
+    assert_eq!(record["transaction"], "rolled_back");
+    assert!(record.get("completed").is_none(), "{record}");
+
+    fixture
+        .direct(&args(
+            "query",
+            &["SELECT count(*) FROM artist", "-o", "raw"],
+        ))
+        .succeeds()
+        .stdout_has("3");
+}
+
+#[test]
+fn a_refused_batch_does_not_claim_a_rollback() {
+    let fixture = Fixture::new("error-json-refused-batch");
+    fixture.write_config();
+    fixture.seed();
+    let batch = "SELECT 1; UPDATE artist SET founded = 0 WHERE id = 1";
+
+    let run = fixture
+        .binsql(&["exec", "--conn", "prod", batch, "--error-format", "json"])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "refused");
+    assert_eq!(record["transaction"], "none");
+
+    let run = fixture.binsql(&["exec", "--conn", "prod", batch]).failed();
+    assert!(!run.stderr.contains("rolled back"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("no statement was run"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn a_failed_commit_leaves_the_outcome_unknown() {
+    let fixture = Fixture::new("error-json-commit");
+    fixture.seed();
+    // A deferred foreign key is checked at the commit, so the batch runs and
+    // the commit fails.
+    fixture
+        .direct(&[
+            "exec",
+            "CREATE TABLE album (artist INTEGER REFERENCES artist (id) DEFERRABLE INITIALLY DEFERRED)",
+        ])
+        .succeeds();
+    let batch = "INSERT INTO album VALUES (99); SELECT 1";
+
+    let run = fixture
+        .direct(&["exec", batch, "--error-format", "json"])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "database");
+    assert_eq!(record["transaction"], "unknown");
+    assert!(record.get("statement").is_none(), "{record}");
+
+    let run = fixture.direct(&["exec", batch]).failed();
+    assert!(!run.stderr.contains("rolled back;"), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("whether the transaction was committed or rolled back is unknown"),
+        "{}",
+        run.stderr
+    );
 }
 
 #[test]

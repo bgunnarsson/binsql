@@ -9,8 +9,8 @@ use binsql_core::{Backend, Statement, sql};
 
 use super::render::{self, Outcome};
 use super::{
-    Category, Phase, Result, bind_values, cancel_on_interrupt, connect, core, note, output, parse,
-    print, read_sql, usage,
+    Category, Phase, Result, Transaction, bind_values, cancel_on_interrupt, connect, core, note,
+    output, parse, print, read_sql, usage,
 };
 
 const VALUES: &[&str] = &["file", "f", "arg"];
@@ -60,7 +60,19 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             .run_transaction(None, &bound, None, !dry_run, &cancel)
             .await
             .map_err(|error| {
-                core(error).context("the transaction was rolled back; nothing was kept")
+                // Only an error from inside the transaction says how it
+                // ended; any other came before the batch began.
+                let failure = core(error);
+                match failure.transaction {
+                    Some(Transaction::RolledBack) => {
+                        failure.context("the transaction was rolled back; nothing was kept")
+                    }
+                    Some(Transaction::Unknown) => failure
+                        .context("whether the transaction was committed or rolled back is unknown"),
+                    _ => failure
+                        .transaction(Transaction::None)
+                        .context("no statement was run"),
+                }
             })?
     } else {
         let mut results = Vec::with_capacity(bound.len());

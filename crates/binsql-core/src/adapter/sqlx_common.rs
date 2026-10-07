@@ -11,7 +11,7 @@ use sqlx::query::Query;
 use sqlx::{Column as _, Database, Either, Executor, IntoArguments, Pool, Row, TypeInfo as _};
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, TransactionOutcome};
 use crate::sql::Bound;
 use crate::value::{Column, ResultSet, Value};
 
@@ -61,24 +61,31 @@ where
     let mut transaction = pool.begin().await.map_err(Error::query)?;
     let mut results = Vec::with_capacity(statements.len());
 
-    for statement in statements {
+    for (index, statement) in statements.iter().enumerate() {
         let outcome = run::<DB>(&mut transaction, statement, limit, false, codec, cancel).await;
         match outcome {
             Ok(result) => results.push(result),
             Err(error) => {
                 // The statement's own error is the one worth reporting; a
-                // rollback that also fails only says the connection is gone.
-                let _ = transaction.rollback().await;
-                return Err(error);
+                // rollback that also fails only says the connection is gone,
+                // and that nothing can be said about what was kept.
+                let ended = match transaction.rollback().await {
+                    Ok(()) => TransactionOutcome::RolledBack,
+                    Err(_) => TransactionOutcome::Unknown,
+                };
+                return Err(Error::transaction(error, ended, Some(index + 1)));
             }
         }
     }
 
-    if commit {
-        transaction.commit().await.map_err(Error::query)?;
+    let ending = if commit {
+        transaction.commit().await
     } else {
-        transaction.rollback().await.map_err(Error::query)?;
-    }
+        transaction.rollback().await
+    };
+    ending.map_err(|error| {
+        Error::transaction(Error::query(error), TransactionOutcome::Unknown, None)
+    })?;
 
     Ok(results)
 }

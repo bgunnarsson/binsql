@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Adapter, returns_rows};
 use crate::backend::Backend;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, TransactionOutcome};
 use crate::schema::{Catalog, ObjectKind, ObjectRef};
 use crate::sql::{self, Bound};
 use crate::value::{Column, ResultSet, Value};
@@ -543,7 +543,8 @@ impl Adapter for MsSqlAdapter {
         }
 
         let mut results = Vec::with_capacity(statements.len());
-        for statement in statements {
+        for (index, statement) in statements.iter().enumerate() {
+            let position = Some(index + 1);
             match run_one(
                 &mut client,
                 &statement.sql,
@@ -555,22 +556,32 @@ impl Adapter for MsSqlAdapter {
             {
                 Ok(Some(result)) => results.push(result),
                 // A cancel takes the connection with it, and with the
-                // connection goes the transaction.
-                Ok(None) => return self.cancelled(&mut client).await,
+                // connection goes the transaction, unconfirmed.
+                Ok(None) => {
+                    return self.cancelled(&mut client).await.map_err(|error| {
+                        Error::transaction(error, TransactionOutcome::Unknown, position)
+                    });
+                }
                 Err(error) => {
-                    let _ =
+                    let rollback =
                         run_one(&mut client, ROLLBACK, &[], None, &CancellationToken::new()).await;
-                    return Err(error);
+                    let ended = match rollback {
+                        Ok(Some(_)) => TransactionOutcome::RolledBack,
+                        _ => TransactionOutcome::Unknown,
+                    };
+                    return Err(Error::transaction(error, ended, position));
                 }
             }
         }
 
         let ending = if commit { "COMMIT" } else { ROLLBACK };
+        let unknown = |error| Error::transaction(error, TransactionOutcome::Unknown, None);
         if run_one(&mut client, ending, &[], None, &CancellationToken::new())
-            .await?
+            .await
+            .map_err(unknown)?
             .is_none()
         {
-            return self.cancelled(&mut client).await;
+            return self.cancelled(&mut client).await.map_err(unknown);
         }
 
         Ok(results)
