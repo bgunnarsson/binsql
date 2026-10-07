@@ -95,6 +95,7 @@ changes to `query`, `exec` and `inspect`.
 - [84](84-inspect-definitions-prints-one-definition-row-per.md): `inspect --definitions` prints `catalog, schema, object, kind, form, definition` for each selected object, ordered and selected as `--columns`; rows without text are counted on stderr, and `--columns` with it exits 2.
 - [81](81-postgresql-views-return-their-query.md): PostgreSQL views and materialized views give `query` from `pg_get_viewdef(oid, true)`; tables stay `unsupported`.
 - [82](82-mysql-returns-show-create-text.md): MySQL tables and views give `create` from `SHOW CREATE TABLE` / `SHOW CREATE VIEW`.
+- [83](83-sql-server-views-return-their-module-text.md): SQL Server views give `create` from `sys.sql_modules`; tables stay `unsupported`.
 ## Follow-up tickets from 03
 
 - [10 — Structured errors](10-structured-errors.md): settle opt-in stderr records.

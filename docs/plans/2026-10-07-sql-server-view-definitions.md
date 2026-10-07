@@ -1,7 +1,7 @@
 ---
 title: "SQL Server views return their module text"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
