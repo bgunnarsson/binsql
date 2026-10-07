@@ -1,7 +1,7 @@
 ---
 title: "Key Vault and Azure AD failures carry a reason"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
