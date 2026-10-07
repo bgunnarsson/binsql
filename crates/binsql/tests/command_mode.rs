@@ -2141,3 +2141,104 @@ fn connect_timeout_of_zero_changes_nothing() {
     assert_eq!(plain.stderr, zero.stderr);
     assert_eq!(plain.stdout, roomy.stdout);
 }
+
+/// A query SQLite never finishes on its own.
+const ENDLESS: &str =
+    "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT count(*) FROM r";
+
+#[test]
+fn a_query_past_its_timeout_is_cancelled() {
+    let fixture = Fixture::new("timeout-endless");
+    fixture.seed();
+    let started = std::time::Instant::now();
+    let run = fixture
+        .direct(&["query", ENDLESS, "--timeout-ms", "200"])
+        .failed();
+    // The deadline, the grace, and room for a slow machine to start.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(run.stdout, "");
+    assert!(
+        run.stderr
+            .starts_with("error: timed out after 200 ms\n  nothing was changed by binsql"),
+        "{}",
+        run.stderr
+    );
+
+    let run = fixture
+        .direct(&[
+            "query",
+            ENDLESS,
+            "--timeout-ms",
+            "200",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "timeout");
+    assert_eq!(record["phase"], "execute");
+    assert_eq!(record["message"], "timed out after 200 ms");
+}
+
+#[test]
+fn a_timed_out_write_does_not_claim_a_rollback() {
+    let fixture = Fixture::new("timeout-write");
+    fixture.seed();
+    let run = fixture
+        .direct(&[
+            "query",
+            &format!("INSERT INTO artist (name) SELECT 'x' FROM ({ENDLESS})"),
+            "--allow-write",
+            "--timeout-ms",
+            "200",
+        ])
+        .failed();
+    assert!(
+        run.stderr
+            .contains("whether the statement took effect is unknown"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        !run.stderr.contains("nothing was changed"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn a_bad_timeout_is_a_usage_error() {
+    let fixture = Fixture::new("timeout-bad");
+    fixture.seed();
+    for value in ["abc", "2147483648"] {
+        fixture
+            .direct(&["query", "SELECT 1", "--timeout-ms", value])
+            .refused()
+            .stderr_has("--timeout-ms wants a number of milliseconds");
+    }
+}
+
+#[test]
+fn a_timeout_the_query_beats_changes_nothing() {
+    let fixture = Fixture::new("timeout-roomy");
+    fixture.seed();
+    let query = |extra: &[&str]| {
+        let mut args = vec![
+            "query",
+            "SELECT name FROM artist ORDER BY id",
+            "--no-footer",
+        ];
+        args.extend_from_slice(extra);
+        fixture.direct(&args).succeeds()
+    };
+    let plain = query(&[]);
+    for extra in [&["--timeout-ms", "0"], &["--timeout-ms", "60000"]] {
+        let run = query(extra);
+        assert_eq!(plain.stdout, run.stdout);
+        assert_eq!(plain.stderr, run.stderr);
+    }
+}

@@ -8,12 +8,15 @@ use binsql_core::sql;
 
 use super::render;
 use super::{
-    Category, Phase, Result, bind_values, cancel_on_interrupt, connect, core, failed, output,
-    parse, print, read_sql, usage,
+    Category, GRACE, Phase, Result, Stop, bind_values, connect, failed, output, parse, print,
+    read_sql, statement_budget, usage,
 };
 
-pub(super) const VALUES: &[&str] = &["file", "f", "limit", "arg"];
+pub(super) const VALUES: &[&str] = &["file", "f", "limit", "arg", "timeout-ms"];
 pub(super) const SWITCHES: &[&str] = &["allow-write", "plan", "require-rows"];
+
+/// What a timed-out read leaves behind.
+const NOTHING_CHANGED: &str = "nothing was changed by binsql";
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     let args = parse(args, VALUES, SWITCHES)?;
@@ -34,6 +37,7 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         ));
     }
 
+    let timeout = statement_budget(&args)?;
     let params = bind_values(&args)?;
     let script = read_sql(&args)?;
     let session = connect(&args).await?;
@@ -53,7 +57,9 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         .phase(Phase::Prepare));
     };
 
-    let cancel = cancel_on_interrupt();
+    // The clock starts once connected: --connect-timeout-ms is the budget
+    // for getting this far.
+    let stop = Stop::start(timeout);
     if args.is_set(&["plan"]) {
         // Checked here as well as in the core, so a refusal is a usage error
         // and can name the switch.
@@ -73,10 +79,13 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             .phase(Phase::Prepare)
             .context(format!("statement: {summary}")));
         }
-        let result = session
-            .plan(None, &statement.sql, limit, &cancel)
-            .await
-            .map_err(core)?;
+        let result = stop
+            .run(
+                GRACE,
+                NOTHING_CHANGED,
+                session.plan(None, &statement.sql, limit, stop.token()),
+            )
+            .await?;
         return print(&render::rows(&result, &options));
     }
 
@@ -97,10 +106,20 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     let bound = sql::bind(std::slice::from_ref(statement), &params, backend)
         .map_err(|error| usage(format!("{error} — one --arg per ?")).phase(Phase::Prepare))?;
 
-    let result = session
-        .run_bound(None, &bound[0], limit, &cancel)
-        .await
-        .map_err(core)?;
+    // A write let through by --allow-write may have landed before the cancel
+    // did, so its timeout cannot promise a rollback.
+    let known = if statement.kind.mutates() {
+        "whether the statement took effect is unknown"
+    } else {
+        NOTHING_CHANGED
+    };
+    let result = stop
+        .run(
+            GRACE,
+            known,
+            session.run_bound(None, &bound[0], limit, stop.token()),
+        )
+        .await?;
 
     print(&render::rows(&result, &options))?;
     // Checked after printing, so the result reads the same whichever way the

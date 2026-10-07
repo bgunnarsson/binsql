@@ -56,7 +56,7 @@ the README.
 
 ## Tasks
 
-- [ ] **1. The deadline.** `cli/mod.rs`: the `timeout-ms` parser, `Stop`
+- [x] **1. The deadline.** `cli/mod.rs`: the `timeout-ms` parser, `Stop`
   replacing `cancel_on_interrupt` for `query`, `Category::Timeout`.
   `cli/query.rs`: run and plan through it.
   Verify: `cargo test --workspace` — unit tests for the parser, integration

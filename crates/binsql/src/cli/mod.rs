@@ -225,6 +225,7 @@ pub enum Category {
     Secret,
     Connect,
     ConnectTimeout,
+    Timeout,
     Refused,
     Database,
     Assertion,
@@ -242,6 +243,7 @@ impl Category {
             Category::Secret => "secret",
             Category::Connect => "connect",
             Category::ConnectTimeout => "connect-timeout",
+            Category::Timeout => "timeout",
             Category::Refused => "refused",
             Category::Database => "database",
             Category::Assertion => "assertion",
@@ -960,6 +962,86 @@ pub fn cancel_on_interrupt() -> CancellationToken {
     cancel
 }
 
+/// How long a cancelled statement has to stop once the deadline has passed.
+pub const GRACE: Duration = Duration::from_millis(2000);
+
+/// `--timeout-ms`: how long the work after connecting may take. `0` is no
+/// limit, as is no flag. Capped where every backend's own timeout still
+/// holds it.
+pub fn statement_budget(args: &Args) -> Result<Option<u64>> {
+    let Some(value) = args.value(&["timeout-ms"]) else {
+        return Ok(None);
+    };
+    match value.parse::<u64>() {
+        Ok(0) => Ok(None),
+        Ok(ms) if ms <= i32::MAX as u64 => Ok(Some(ms)),
+        _ => Err(usage(format!(
+            "--timeout-ms wants a number of milliseconds up to {}, got {value}",
+            i32::MAX
+        ))),
+    }
+}
+
+/// What stops a command's work: a ⌃C from the terminal, or the deadline
+/// `--timeout-ms` set, counted from when it is built.
+pub struct Stop {
+    cancel: CancellationToken,
+    deadline: Option<(u64, Instant)>,
+}
+
+impl Stop {
+    pub fn start(timeout: Option<u64>) -> Stop {
+        Stop {
+            cancel: cancel_on_interrupt(),
+            deadline: timeout.map(|ms| (ms, Instant::now() + Duration::from_millis(ms))),
+        }
+    }
+
+    pub fn token(&self) -> &CancellationToken {
+        &self.cancel
+    }
+
+    /// Runs `work` to its end. Past the deadline the token is cancelled and
+    /// `work` has `grace` more to stop; whatever it says then, the deadline
+    /// fired, and the failure says `known` about what the work left behind.
+    /// A ⌃C before the deadline reads as it always has.
+    pub async fn run<T>(
+        &self,
+        grace: Duration,
+        known: &str,
+        work: impl Future<Output = std::result::Result<T, binsql_core::Error>>,
+    ) -> Result<T> {
+        let Some((ms, deadline)) = self.deadline else {
+            return work.await.map_err(core);
+        };
+        tokio::pin!(work);
+        tokio::select! {
+            biased;
+            done = &mut work => return done.map_err(core),
+            () = tokio::time::sleep_until(deadline) => {}
+        }
+        self.cancel.cancel();
+        let timed_out = failed(format!("timed out after {ms} ms"))
+            .category(Category::Timeout)
+            .phase(Phase::Execute)
+            .context(known);
+        match tokio::time::timeout_at(deadline + grace, work).await {
+            Ok(Ok(done)) => Ok(done),
+            Ok(Err(binsql_core::Error::Cancelled)) => Err(timed_out),
+            Ok(Err(error)) => {
+                let detail = error.to_string();
+                let mut timed_out = timed_out.context(detail.clone());
+                timed_out.parts.get_or_insert_default().detail = Some(detail);
+                Err(timed_out)
+            }
+            Err(_) => Err(timed_out.context(format!(
+                "the statement did not stop within {} ms of the cancel",
+                grace.as_millis()
+            ))),
+        }
+    }
+}
+
 /// The SQL a command was given: an argument, a file, or stdin.
 ///
 /// Reading stdin when it is a pipe and there is no argument is what makes
@@ -1103,6 +1185,24 @@ mod tests {
 
     fn strings(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_statement_budget_is_milliseconds_up_to_i32_max() {
+        let budget = |list: &[&str]| {
+            let args = parse(strings(list), &["timeout-ms"], &[]).expect("parses");
+            statement_budget(&args).map_err(|failure| failure.usage)
+        };
+        assert_eq!(budget(&[]), Ok(None));
+        assert_eq!(budget(&["--timeout-ms", "0"]), Ok(None));
+        assert_eq!(budget(&["--timeout-ms", "250"]), Ok(Some(250)));
+        assert_eq!(
+            budget(&["--timeout-ms", "2147483647"]),
+            Ok(Some(2147483647))
+        );
+        assert_eq!(budget(&["--timeout-ms", "2147483648"]), Err(true));
+        assert_eq!(budget(&["--timeout-ms", "abc"]), Err(true));
+        assert_eq!(budget(&["--timeout-ms", "-1"]), Err(true));
     }
 
     #[test]
