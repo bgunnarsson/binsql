@@ -8,6 +8,7 @@
 //! ```sh
 //! BINSQL_TEST_POSTGRES=postgres://… \
 //! BINSQL_TEST_MYSQL=mysql://… \
+//! BINSQL_TEST_MSSQL="server=tcp:localhost,1433;…" \
 //!     cargo test -p binsql-core --test definitions_servers -- --ignored
 //! ```
 
@@ -141,4 +142,52 @@ async fn mysql_tables_and_views_give_show_create() {
 
     run(&session, "DROP VIEW binsql_definition_v").await;
     run(&session, "DROP TABLE binsql_definition").await;
+}
+
+#[tokio::test]
+#[ignore = "needs a SQL Server in BINSQL_TEST_MSSQL"]
+async fn mssql_views_give_their_module_text_and_tables_none() {
+    let session = open("BINSQL_TEST_MSSQL", Backend::MsSql).await;
+    run(&session, "DROP VIEW IF EXISTS dbo.binsql_definition_v").await;
+    run(&session, "DROP TABLE IF EXISTS dbo.binsql_definition").await;
+    run(
+        &session,
+        "CREATE TABLE dbo.binsql_definition (id int PRIMARY KEY)",
+    )
+    .await;
+    run(
+        &session,
+        "CREATE VIEW dbo.binsql_definition_v AS SELECT id FROM dbo.binsql_definition",
+    )
+    .await;
+
+    let view = definition(&session, "dbo", "binsql_definition_v", ObjectKind::View).await;
+    assert_eq!(
+        view,
+        Definition {
+            form: DefinitionForm::Create,
+            text: Some(
+                "CREATE VIEW dbo.binsql_definition_v AS SELECT id FROM dbo.binsql_definition"
+                    .into()
+            ),
+        }
+    );
+    let table = definition(&session, "dbo", "binsql_definition", ObjectKind::Table).await;
+    assert_eq!(
+        table,
+        Definition {
+            form: DefinitionForm::Unsupported,
+            text: None,
+        }
+    );
+    let missing = ObjectRef::new(
+        None,
+        Some("dbo".into()),
+        "binsql_definition_absent",
+        ObjectKind::Table,
+    );
+    assert!(session.definition(&missing).await.is_err());
+
+    run(&session, "DROP VIEW dbo.binsql_definition_v").await;
+    run(&session, "DROP TABLE dbo.binsql_definition").await;
 }

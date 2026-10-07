@@ -45,7 +45,7 @@ comes back null gives `Withheld`, and a table gives `Unsupported`.
 
 ## Tasks
 
-- [ ] **1. `MsSqlAdapter::definition` and its mapping.** Override
+- [x] **1. `MsSqlAdapter::definition` and its mapping.** Override
   `definition` in `adapter/mssql.rs`; a `form_of(kind, text)` function maps
   the row. Unit tests of the mapping; an ignored live test in
   `tests/definitions_servers.rs`.

@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use super::{Adapter, returns_rows};
 use crate::backend::Backend;
 use crate::error::{Error, Result, TransactionOutcome};
-use crate::schema::{Catalog, ObjectKind, ObjectRef};
+use crate::schema::{Catalog, Definition, DefinitionForm, ObjectKind, ObjectRef};
 use crate::sql::{self, Bound};
 use crate::stream::{Drained, Sink, StreamSummary, Streamed};
 use crate::value::{Column, ResultSet, Value};
@@ -335,6 +335,24 @@ fn shorten_version(raw: String) -> String {
     raw.lines().next().unwrap_or_default().trim().to_string()
 }
 
+/// A view has its module text; SQL Server keeps none for a table.
+fn form_of(kind: &str, text: Option<String>) -> Definition {
+    match (kind, text) {
+        ("V", Some(text)) => Definition {
+            form: DefinitionForm::Create,
+            text: Some(text),
+        },
+        ("V", None) => Definition {
+            form: DefinitionForm::Withheld,
+            text: None,
+        },
+        _ => Definition {
+            form: DefinitionForm::Unsupported,
+            text: None,
+        },
+    }
+}
+
 #[async_trait]
 impl Adapter for MsSqlAdapter {
     fn backend(&self) -> Backend {
@@ -485,6 +503,42 @@ impl Adapter for MsSqlAdapter {
                 })
             })
             .collect()
+    }
+
+    async fn definition(&self, object: &ObjectRef) -> Result<Definition> {
+        let catalog = object
+            .catalog
+            .as_deref()
+            .or(self.database.as_deref())
+            .unwrap_or("master");
+        let schema = object.schema.as_deref().unwrap_or("dbo");
+
+        let objects = qualify(catalog, "sys.objects");
+        let schemas = qualify(catalog, "sys.schemas");
+        let modules = qualify(catalog, "sys.sql_modules");
+        let result = self
+            .ask(
+                &format!(
+                    "SELECT o.type, m.definition FROM {objects} o \
+                     JOIN {schemas} s ON s.schema_id = o.schema_id \
+                     LEFT JOIN {modules} m ON m.object_id = o.object_id \
+                     WHERE s.name = {} AND o.name = {} AND o.type IN ('U', 'V')",
+                    quote_literal(schema),
+                    quote_literal(&object.name),
+                ),
+                Some(1),
+            )
+            .await?;
+
+        let row = result.rows.first().ok_or_else(|| {
+            Error::query(anyhow::anyhow!(
+                "no table or view named {} in {schema}",
+                object.name
+            ))
+        })?;
+        let kind = row.first().map(Value::to_text).unwrap_or_default();
+        let text = row.get(1).filter(|v| !v.is_null()).map(Value::to_text);
+        Ok(form_of(kind.trim(), text))
     }
 
     async fn run(
@@ -925,6 +979,40 @@ async fn azure_cli_token() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_view_gives_its_module_text() {
+        let text = "-- totals\nCREATE VIEW dbo.v AS SELECT 1 AS one";
+        assert_eq!(
+            form_of("V", Some(text.into())),
+            Definition {
+                form: DefinitionForm::Create,
+                text: Some(text.into()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_view_without_module_text_is_withheld() {
+        assert_eq!(
+            form_of("V", None),
+            Definition {
+                form: DefinitionForm::Withheld,
+                text: None,
+            }
+        );
+    }
+
+    #[test]
+    fn tables_are_unsupported() {
+        assert_eq!(
+            form_of("U", None),
+            Definition {
+                form: DefinitionForm::Unsupported,
+                text: None,
+            }
+        );
+    }
 
     #[test]
     fn the_showplan_hint_keeps_the_servers_error() {
