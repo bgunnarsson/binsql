@@ -52,6 +52,25 @@ pub trait Adapter: Send + Sync {
         cancel: &CancellationToken,
     ) -> Result<ResultSet>;
 
+    /// Asks for the estimated plan of one statement without running it, and
+    /// returns the backend's own result set for it unchanged. The statement is
+    /// expected to be one [`sql::plannable`] read; that is the caller's check.
+    ///
+    /// Prefixing the statement is enough everywhere but SQL Server, whose
+    /// adapter overrides this to turn plans on for the session instead.
+    async fn plan(
+        &self,
+        statement: &Bound,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        let planned = Bound {
+            sql: sql::plan_sql(&statement.sql, self.backend()),
+            params: statement.params.clone(),
+        };
+        self.run(&planned, limit, cancel).await
+    }
+
     /// Runs several statements as one transaction on one connection, ending it
     /// with a commit or, for a dry run, a rollback. A statement that fails
     /// takes the batch down with it and nothing is kept.

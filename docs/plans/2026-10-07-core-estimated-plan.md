@@ -107,7 +107,7 @@ below were made by the architect, picking what changes least:
   `/* c */ SELECT 1`; plan_sql for all four backends.
   Verify: `cargo test -p binsql-core sql::tests`, then
   `cargo clippy --workspace --all-targets`. Commit.
-- [ ] **`Adapter::plan` default, `Error::NotPlannable`, `Session::plan`, and the
+- [x] **`Adapter::plan` default, `Error::NotPlannable`, `Session::plan`, and the
   SQLite round trip.** In `adapter/mod.rs`, after `run` (:48-53), add a default
   method. `#[async_trait]` (:19) allows default async bodies:
   `async fn plan(&self, statement: &Bound, limit, cancel) -> Result<ResultSet>`

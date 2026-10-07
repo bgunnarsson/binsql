@@ -145,6 +145,36 @@ impl Session {
             .await
     }
 
+    /// Asks for the estimated plan of one read without running it. Anything
+    /// else — a write, a `SHOW`, a second statement after the first — is
+    /// refused before a connection is chosen: a prefix in front of a script
+    /// would plan its first statement and run the rest.
+    pub async fn plan(
+        &self,
+        catalog: Option<&str>,
+        sql: &str,
+        limit: Option<usize>,
+        cancel: &CancellationToken,
+    ) -> Result<ResultSet> {
+        let backend = self.backend();
+        let mut statements = sql::split(sql, backend);
+        let statement = match statements.pop() {
+            Some(statement) if statements.is_empty() && sql::plannable(&statement.sql, backend) => {
+                statement
+            }
+            _ => {
+                return Err(Error::NotPlannable {
+                    statement: sql::summarize(sql, backend, 80),
+                });
+            }
+        };
+        self.guard_read_only(&statement.sql)?;
+        self.adapter_for(catalog)
+            .await?
+            .plan(&Bound::plain(statement.sql), limit, cancel)
+            .await
+    }
+
     /// Runs several statements as one transaction, committing at the end — or
     /// rolling back, which is what makes a dry run a dry run: the statements
     /// really execute, and then nothing is kept.

@@ -225,3 +225,74 @@ async fn a_write_cannot_be_disguised_from_the_read_only_guard() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+/// A plan is asked for and comes back as SQLite's own rows, and nothing runs:
+/// the table is counted before and after, and what is not one plannable read
+/// is refused.
+#[tokio::test]
+async fn plans_a_read_without_running_it() {
+    let path = temp_database("plan");
+    let session = Session::open("test", source(&path, false))
+        .await
+        .expect("open session");
+    session
+        .run(
+            None,
+            "CREATE TABLE widget (id INTEGER PRIMARY KEY, name TEXT)",
+            None,
+        )
+        .await
+        .expect("create table");
+    session
+        .run(
+            None,
+            "INSERT INTO widget (name) VALUES ('bolt'), ('nut')",
+            None,
+        )
+        .await
+        .expect("seed rows");
+
+    let token = CancellationToken::new();
+    let plan = session
+        .plan(None, "SELECT * FROM widget WHERE id = 1", None, &token)
+        .await
+        .expect("plan the select");
+    let names: Vec<&str> = plan
+        .columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
+    assert_eq!(names, ["id", "parent", "notused", "detail"]);
+    assert!(!plan.rows.is_empty());
+
+    for sql in [
+        "DELETE FROM widget",
+        "PRAGMA table_info(widget)",
+        "SELECT 1; DELETE FROM widget",
+    ] {
+        let error = session
+            .plan(None, sql, None, &token)
+            .await
+            .expect_err("not plannable");
+        assert!(
+            matches!(error, Error::NotPlannable { .. }),
+            "{sql}: {error}"
+        );
+    }
+
+    let count = session
+        .run(None, "SELECT count(*) FROM widget", None)
+        .await
+        .expect("count rows");
+    assert_eq!(count.rows[0][0], Value::Int(2));
+
+    let guarded = Session::open("prod", source(&path, true))
+        .await
+        .expect("open read-only session");
+    guarded
+        .plan(None, "SELECT * FROM widget", None, &token)
+        .await
+        .expect("plans are allowed on a read-only source");
+
+    let _ = std::fs::remove_file(&path);
+}

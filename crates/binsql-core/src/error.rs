@@ -26,6 +26,13 @@ pub enum Error {
         statement: String,
     },
 
+    /// A plan asked for something other than one statement that reads. Like
+    /// [`Error::ReadOnly`] this is a refusal: nothing was sent to the server.
+    #[error(
+        "only one SELECT, WITH, VALUES or TABLE statement can be planned; refusing to plan {statement}"
+    )]
+    NotPlannable { statement: String },
+
     /// The values given do not fill the placeholders one for one. Found before
     /// anything is sent, like [`Error::ReadOnly`].
     #[error("{} in the SQL, but {} to bind", plural(.found, "placeholder"), plural(.given, "value"))]
