@@ -72,6 +72,6 @@ never name a zsh variable `status`; clippy's `result_large_err` holds
   outcome. Integration tests per the criteria.
   Verify: `cargo test -p binsql`.
 
-- [ ] **3. HELP and the README.** The Structured errors section lists
+- [x] **3. HELP and the README.** The Structured errors section lists
   `transaction` and its values.
   Verify: `cargo test -p binsql`.

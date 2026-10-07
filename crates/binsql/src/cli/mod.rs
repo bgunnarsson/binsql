@@ -594,7 +594,8 @@ ERRORS
                           text (default) or json: one JSON line on stderr
                           with a category and a phase, the message redacted;
                           a Key Vault or Azure AD failure adds a reason,
-                          a database failure the database's own code
+                          a database failure the database's own code, and a
+                          failed exec batch how its transaction ended
 
     BINSQL_ERROR_FORMAT says the same through the environment.
 
