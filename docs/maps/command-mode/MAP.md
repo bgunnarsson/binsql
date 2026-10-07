@@ -45,6 +45,7 @@ changes to `query`, `exec` and `inspect`.
 ## Decisions so far
 
 - [03](03-agent-ergonomics-survey.md): Prioritize data-source discovery, structured errors, bounded waits and richer schema context; add opt-in streaming, capability discovery and row assertions, and decide DDL and safe plans separately while preserving existing defaults and the query/exec/inspect split.
+- [05](05-verb-namespace.md): Spend one bare verb, `source`, on all data-source management (`binsql source <op>`); every other addition is a flag or lives under an existing verb; refuse to save a new top-level data source named after a verb; add `binsql -- <name>` to open any saved name in the TUI; and leave existing configs loading and listed, with the verb winning the bare name.
 
 ## Follow-up tickets from 03
 
@@ -57,16 +58,20 @@ changes to `query`, `exec` and `inspect`.
 - [16 — DDL output](16-ddl-output.md): settle definition fidelity after 04.
 - [17 — Safe plan support](17-safe-plan-support.md): research backends and EXPLAIN classification.
 
+## Follow-up tickets from 05
+
+- [18 — Verb reservation](18-verb-reservation.md): build the reserved names and `binsql -- <name>`.
+
 ## Not yet specified
 
-- **Building the data-source commands**: these become task tickets once 08
-  settles their shape. Some may first need logic moved from the app into the
+- **Building the data-source commands**: these become task tickets under
+  `binsql source <op>` (05) once 08 settles their shape. Some may first need logic moved from the app into the
   core, depending on 07.
 - **Richer schema context**: 03 ranks one-call schema context as worth having;
   its shape and build tickets wait on 04's per-backend inventory.
 - **Estimated-plan implementation**: 03 identifies value and an existing
-  EXPLAIN safety concern; shape and build tickets wait on 17's backend audit
-  and 05's namespace decision. Runtime-plan policy needs the person's call.
+  EXPLAIN safety concern; shape and build tickets wait on 17's backend audit;
+  05 puts plans under `inspect` or a query flag, not a new verb. Runtime-plan policy needs the person's call.
 - **Ergonomics implementation**: build tickets follow the contract decisions
   in 10 (errors), 11 (connect budget), 12 (statement budget), 13 (streaming)
   and 16 (DDL). Capability discovery and row assertions are tasks 14 and 15.
