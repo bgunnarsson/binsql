@@ -2,7 +2,7 @@
 title: "`--connect-timeout-ms` caps opening a connection"
 kind: task
 mode: afk
-status: open
+status: resolved
 blocked_by: [50]
 claimed_by:
 ---
@@ -23,3 +23,25 @@ Build what 11 settled for this step; the contract is in 11's answer
 - Update HELP under CONNECTION (`cli/mod.rs:91-97`) and README.md's command-mode flags with the flag, the variable, the meaning of `0`, what is covered, and that timeouts from driver settings are left alone.
 
 ## Answer
+
+`--connect-timeout-ms N`, or `BINSQL_CONNECT_TIMEOUT_MS`, gives resolving and
+connecting one deadline counted from before the config loads; running out is
+exit 1, `connect timeout: … while <step>`, category `connect-timeout`.
+
+Built in docs/plans/2026-10-07-connect-timeout.md (session.rs, cli/mod.rs,
+tests/command_mode.rs, README.md). The correctness review found that a bad
+`BINSQL_CONNECT_TIMEOUT_MS` was blamed on the flag (fixed: the message names
+the variable, which is trimmed as `BINSQL_SECRET_TTL` is) and that HELP and
+the README promised to cut config loading short (fixed: it counts against the
+budget, and the docs say nothing interrupts it). The security review found
+connect errors masked against the stored reference rather than the connection
+string it resolved to, an older gap the split made easy to close (fixed), and
+that the JSON run did not check for the password (fixed). A budget too large
+to add to the clock is no limit; accepted.
+
+Assumed, not asked:
+- The timeout is its own category, `connect-timeout`, phase `connect`.
+- The core constructor is `Session::connect(name, source, resolved)`.
+- A step already finished when first polled succeeds past the deadline; config loading cannot be interrupted.
+- The flag is parsed before the config loads, so a bad value is exit 2 even with a broken config.
+- `source test` does not take the budget.

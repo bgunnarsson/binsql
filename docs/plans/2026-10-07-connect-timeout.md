@@ -1,7 +1,7 @@
 ---
 title: "`--connect-timeout-ms` caps opening a connection"
 date: 2026-10-07
-status: active
+status: done
 ---
 
 ## Context
@@ -30,6 +30,8 @@ output and exit codes stay as they are.
   and a plain connection string resolves without waiting.
 - The flag is parsed before the config loads, so a bad value is exit 2 even
   when the config is broken.
+- A bad `BINSQL_CONNECT_TIMEOUT_MS` is trimmed first, and its message names
+  the variable rather than the flag.
 - `source test` keeps its own flag list and does not take the budget: it
   reports how long each stage took rather than stopping one.
 - A secret or connect failure that arrives before the deadline keeps today's
