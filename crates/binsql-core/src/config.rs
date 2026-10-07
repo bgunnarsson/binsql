@@ -356,8 +356,9 @@ fn set_owner_only(_path: &Path, _mode: u32) -> Result<()> {
 /// takes as the password is what gets hidden: PostgreSQL's keyword form splits
 /// on whitespace and nothing else, SQL Server's on `;` outside a quoted value.
 pub fn mask_dsn(backend: Backend, dsn: &str) -> String {
-    if let Some(scheme_end) = url_scheme_end(dsn) {
-        return mask_url(dsn, scheme_end + 3);
+    let lead = dsn.len() - dsn.trim_start().len();
+    if let Some(scheme_end) = url_scheme_end(&dsn[lead..]) {
+        return mask_url(dsn, lead + scheme_end + 3);
     }
     match backend {
         Backend::Postgres => mask_libpq(dsn),
@@ -380,21 +381,25 @@ fn url_scheme_end(dsn: &str) -> Option<usize> {
 
 /// `scheme://user:password@host/db?password=…`: the password after the user,
 /// and any query parameter whose decoded name is a password or whose decoded
-/// value holds one, as SQL Server's URL, rewritten to ADO, can.
+/// value holds one.
 fn mask_url(dsn: &str, authority: usize) -> String {
     let (head, rest) = dsn.split_at(authority);
     let rest = mask_userinfo(rest);
-    let Some(question) = rest.find('?') else {
-        return format!("{head}{rest}");
+    let question = rest.find('?').unwrap_or(rest.len());
+    let host = rest[..question].rfind('@').map_or(0, |at| at + 1);
+    let user = &rest[..host];
+    let location = match &rest[host..question] {
+        location if holds_password(location) => "****",
+        location => location,
     };
+    if question == rest.len() {
+        return format!("{head}{user}{location}");
+    }
     let query = rest[question + 1..]
         .split('&')
         .map(|pair| match pair.split_once('=') {
             Some((key, value))
-                if is_password_key(&decode_percent(key)) || {
-                    let value = decode_percent(value);
-                    mask_ado(&value) != value
-                } =>
+                if is_password_key(&decode_percent(key)) || holds_password(value) =>
             {
                 format!("{key}=****")
             }
@@ -402,19 +407,29 @@ fn mask_url(dsn: &str, authority: usize) -> String {
         })
         .collect::<Vec<_>>()
         .join("&");
-    format!("{head}{}?{query}", &rest[..question])
+    format!("{head}{user}{location}?{query}")
 }
 
 /// `user:password@rest`, split at the last `@` as the drivers split it, which
-/// hides more than the password when a later part holds an `@` too.
+/// hides more than the password when a later part holds an `@` too. A user
+/// that decodes to an ADO password term is hidden whole.
 fn mask_userinfo(dsn: &str) -> String {
-    match dsn.rfind('@') {
-        Some(at) => match dsn[..at].split_once(':') {
-            Some((user, _)) => format!("{user}:****{}", &dsn[at..]),
-            None => dsn.to_string(),
-        },
-        None => dsn.to_string(),
-    }
+    let Some(at) = dsn.rfind('@') else {
+        return dsn.to_string();
+    };
+    let (user, password) = match dsn[..at].split_once(':') {
+        Some((user, _)) => (user, ":****"),
+        None => (&dsn[..at], ""),
+    };
+    let user = if holds_password(user) { "****" } else { user };
+    format!("{user}{password}{}", &dsn[at..])
+}
+
+/// Whether percent-encoded text decodes to an ADO string with a password in
+/// it, as SQL Server's URL, rewritten to ADO, would read it.
+fn holds_password(encoded: &str) -> bool {
+    let decoded = decode_percent(encoded);
+    mask_ado(&decoded) != decoded
 }
 
 /// libpq's keyword form, as `connect_options` reads it: terms split on any
@@ -602,6 +617,21 @@ mod tests {
                 MsSql,
                 "sqlserver://h?database=app%3Bpassword%3Dsecret",
                 "sqlserver://h?database=****",
+            ),
+            (
+                Postgres,
+                " postgres://ann:secret@db/app",
+                " postgres://ann:****@db/app",
+            ),
+            (
+                MsSql,
+                "sqlserver://ann%3Bpassword%3Dsecret@db?database=app",
+                "sqlserver://****@db?database=app",
+            ),
+            (
+                MsSql,
+                "sqlserver://u:p@h;password=secret?database=app",
+                "sqlserver://u:****@****?database=app",
             ),
             (
                 MySql,
