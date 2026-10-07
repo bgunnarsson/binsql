@@ -40,7 +40,7 @@ None in `docs/solutions`.
 
 ## Tasks
 
-- [ ] **1. The encoders.** `cli/render.rs`: `header_line`, `separated_line`,
+- [x] **1. The encoders.** `cli/render.rs`: `header_line`, `separated_line`,
   `jsonl_line`, `row_object`; `separated`, `jsonl` and `row_objects` on top of
   them; the identity test.
   Verify: `cargo test --workspace`.

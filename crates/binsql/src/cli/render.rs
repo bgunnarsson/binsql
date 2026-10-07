@@ -276,26 +276,34 @@ fn separated(result: &ResultSet, delimiter: char, options: &Options) -> String {
     let mut out = String::new();
 
     if options.header && !result.columns.is_empty() {
-        let names: Vec<String> = result
-            .columns
-            .iter()
-            .map(|column| quote(&column.name, delimiter))
-            .collect();
-        let _ = writeln!(out, "{}", names.join(&delimiter.to_string()));
+        out.push_str(&header_line(&result.columns, delimiter));
     }
-
     for row in &result.rows {
-        // A NULL is an empty field here rather than the word: the file formats
-        // have no way to tell one from the other, and inventing "NULL" would
-        // make a string that reads NULL indistinguishable from the real thing.
-        let fields: Vec<String> = row
-            .iter()
-            .map(|value| quote(&value.to_text(), delimiter))
-            .collect();
-        let _ = writeln!(out, "{}", fields.join(&delimiter.to_string()));
+        out.push_str(&separated_line(row, delimiter));
     }
 
     out
+}
+
+/// The CSV or TSV header, newline included.
+pub fn header_line(columns: &[Column], delimiter: char) -> String {
+    let names: Vec<String> = columns
+        .iter()
+        .map(|column| quote(&column.name, delimiter))
+        .collect();
+    format!("{}\n", names.join(&delimiter.to_string()))
+}
+
+/// One CSV or TSV row, newline included.
+pub fn separated_line(row: &[Value], delimiter: char) -> String {
+    // A NULL is an empty field here rather than the word: the file formats
+    // have no way to tell one from the other, and inventing "NULL" would
+    // make a string that reads NULL indistinguishable from the real thing.
+    let fields: Vec<String> = row
+        .iter()
+        .map(|value| quote(&value.to_text(), delimiter))
+        .collect();
+    format!("{}\n", fields.join(&delimiter.to_string()))
 }
 
 fn json_object(result: &ResultSet, options: &Options) -> String {
@@ -327,11 +335,16 @@ fn json_object(result: &ResultSet, options: &Options) -> String {
 }
 
 fn jsonl(result: &ResultSet) -> String {
-    let mut out = String::new();
-    for row in row_objects(result) {
-        let _ = writeln!(out, "{}", encode(&row, false).trim_end());
-    }
-    out
+    result
+        .rows
+        .iter()
+        .map(|row| jsonl_line(&result.columns, row))
+        .collect()
+}
+
+/// One JSONL row object, newline included.
+pub fn jsonl_line(columns: &[Column], row: &[Value]) -> String {
+    encode(&row_object(columns, row), false)
 }
 
 // --- helpers -------------------------------------------------------------
@@ -340,16 +353,18 @@ fn row_objects(result: &ResultSet) -> Vec<Json> {
     result
         .rows
         .iter()
-        .map(|row| {
-            let mut object = Map::new();
-            for (index, column) in result.columns.iter().enumerate() {
-                let value = row.get(index).map(json_value).unwrap_or(Json::Null);
-                let key = key(&object, column, index);
-                object.insert(key, value);
-            }
-            Json::Object(object)
-        })
+        .map(|row| row_object(&result.columns, row))
         .collect()
+}
+
+fn row_object(columns: &[Column], row: &[Value]) -> Json {
+    let mut object = Map::new();
+    for (index, column) in columns.iter().enumerate() {
+        let value = row.get(index).map(json_value).unwrap_or(Json::Null);
+        let key = key(&object, column, index);
+        object.insert(key, value);
+    }
+    Json::Object(object)
 }
 
 /// The column's name, made unique. Two columns of the same name are legal SQL
@@ -602,5 +617,57 @@ mod tests {
             out.lines().all(|line| line.width() <= MAX_COLUMN_WIDTH + 4),
             "{out}"
         );
+    }
+
+    #[test]
+    fn the_record_encoders_add_up_to_the_buffered_output() {
+        let result = ResultSet {
+            columns: vec![
+                Column::new("id", "int"),
+                Column::new("id", "int"),
+                Column::new("note", "text"),
+            ],
+            rows: vec![
+                vec![Value::Int(1), Value::Null, Value::Text("a,b\t\"c\"".into())],
+                vec![
+                    Value::Int(2),
+                    Value::Int(3),
+                    Value::Text("two\nlines".into()),
+                ],
+                vec![Value::Null, Value::Null, Value::Null],
+            ],
+            rows_affected: None,
+            elapsed: Duration::ZERO,
+            truncated: false,
+        };
+
+        let jsonl: String = result
+            .rows
+            .iter()
+            .map(|row| jsonl_line(&result.columns, row))
+            .collect();
+        assert_eq!(jsonl, rows(&result, &options(Format::Jsonl)));
+
+        for (format, delimiter) in [(Format::Csv, ','), (Format::Tsv, '\t')] {
+            for header in [true, false] {
+                let mut records = if header {
+                    header_line(&result.columns, delimiter)
+                } else {
+                    String::new()
+                };
+                for row in &result.rows {
+                    records.push_str(&separated_line(row, delimiter));
+                }
+                let buffered = rows(
+                    &result,
+                    &Options {
+                        format,
+                        header,
+                        ..Options::default()
+                    },
+                );
+                assert_eq!(records, buffered, "{format:?}, header {header}");
+            }
+        }
     }
 }
