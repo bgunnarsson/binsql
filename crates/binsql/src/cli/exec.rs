@@ -13,7 +13,7 @@ use super::{
     print, read_sql, statement_budget, usage,
 };
 
-pub(super) const VALUES: &[&str] = &["file", "f", "arg", "timeout-ms"];
+pub(super) const VALUES: &[&str] = &["file", "f", "arg"];
 pub(super) const SWITCHES: &[&str] = &["dry-run", "tx", "no-tx", "force"];
 
 pub async fn run(args: Vec<String>) -> Result<()> {

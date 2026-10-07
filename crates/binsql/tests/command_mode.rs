@@ -2342,3 +2342,67 @@ fn a_timeout_the_batch_beats_changes_nothing() {
         assert_eq!(plain.stderr, run.stderr);
     }
 }
+
+#[test]
+fn a_roomy_or_zero_timeout_changes_nothing_inspect_prints() {
+    let fixture = Fixture::new("timeout-inspect-roomy");
+    fixture.seed();
+    // The footer carries a timing, so it is left off to compare the rest.
+    for args in [
+        &["inspect", "--no-footer"][..],
+        &["inspect", "artist", "--no-footer"],
+        &["inspect", "--columns", "--no-footer"],
+    ] {
+        let plain = fixture.direct(args).succeeds();
+        for value in ["0", "60000"] {
+            let mut flagged = args.to_vec();
+            flagged.extend_from_slice(&["--timeout-ms", value]);
+            let run = fixture.direct(&flagged).succeeds();
+            assert_eq!(plain.stdout, run.stdout);
+            assert_eq!(plain.stderr, run.stderr);
+        }
+    }
+}
+
+#[test]
+fn inspect_gives_up_at_the_deadline() {
+    let fixture = Fixture::new("timeout-inspect");
+    let batch: String = (0..3000)
+        .map(|n| format!("CREATE TABLE t{n} (a INTEGER, b TEXT, c REAL, d BLOB);"))
+        .collect();
+    fixture.direct(&["exec", &batch]).succeeds();
+
+    let run = fixture
+        .direct(&["inspect", "--columns", "--timeout-ms", "1"])
+        .failed();
+    assert_eq!(run.stdout, "");
+    assert!(
+        run.stderr
+            .starts_with("error: timed out after 1 ms\n  nothing was changed by binsql"),
+        "{}",
+        run.stderr
+    );
+
+    let run = fixture
+        .direct(&[
+            "inspect",
+            "--columns",
+            "--timeout-ms",
+            "1",
+            "--error-format",
+            "json",
+        ])
+        .failed();
+    let record = error_record(&run);
+    assert_eq!(record["category"], "timeout");
+    assert_eq!(record["message"], "timed out after 1 ms");
+}
+
+#[test]
+fn inspect_refuses_a_timeout_that_is_not_a_number() {
+    let fixture = Fixture::new("timeout-inspect-bad");
+    fixture.seed();
+    fixture
+        .direct(&["inspect", "--timeout-ms", "abc"])
+        .refused();
+}

@@ -8,15 +8,12 @@ use binsql_core::sql;
 
 use super::render;
 use super::{
-    Category, GRACE, Phase, Result, Stop, Transaction, bind_values, connect, failed, output, parse,
-    print, read_sql, statement_budget, usage,
+    Category, GRACE, NOTHING_CHANGED, Phase, Result, Stop, Transaction, bind_values, connect,
+    failed, output, parse, print, read_sql, statement_budget, usage,
 };
 
-pub(super) const VALUES: &[&str] = &["file", "f", "limit", "arg", "timeout-ms"];
+pub(super) const VALUES: &[&str] = &["file", "f", "limit", "arg"];
 pub(super) const SWITCHES: &[&str] = &["allow-write", "plan", "require-rows"];
-
-/// What a timed-out read leaves behind.
-const NOTHING_CHANGED: &str = "nothing was changed by binsql";
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     let args = parse(args, VALUES, SWITCHES)?;

@@ -772,6 +772,7 @@ const SHARED_VALUES: &[&str] = &[
     "schema",
     "error-format",
     "connect-timeout-ms",
+    "timeout-ms",
 ];
 const SHARED_SWITCHES: &[&str] = &["pretty", "no-header", "no-footer"];
 
@@ -987,6 +988,23 @@ pub fn statement_budget(args: &Args) -> Result<Option<u64>> {
             i32::MAX
         ))),
     }
+}
+
+/// What a timed-out read leaves behind.
+pub const NOTHING_CHANGED: &str = "nothing was changed by binsql";
+
+/// Runs `work` that has no token to cancel, dropping it at the deadline.
+pub async fn cut_off<T>(
+    timeout: Option<u64>,
+    known: &str,
+    work: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    let Some(ms) = timeout else {
+        return work.await;
+    };
+    tokio::time::timeout(Duration::from_millis(ms), work)
+        .await
+        .unwrap_or_else(|_| Err(timed_out(ms, known)))
 }
 
 /// What stops a command's work: a ⌃C from the terminal, or the deadline

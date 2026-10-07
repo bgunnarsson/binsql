@@ -22,7 +22,7 @@ output, messages and exit codes stay as they are.
   takes it, and leaves `query`'s and `exec`'s own lists.
 - `inspect` has no token to cancel, so it does not go through `Stop`: that
   would install a ⌃C handler nobody answers. A deadline-only helper,
-  `within`, drops the work at the deadline, which is 12's grace of 0, and
+  `cut_off`, drops the work at the deadline, which is 12's grace of 0, and
   leaves ⌃C as it is today.
 - One deadline covers everything after connecting: the catalogue lookup,
   `list`, `describe` and `--columns`, and the per-catalog connection
@@ -50,8 +50,8 @@ never name a zsh variable `status`; every new flag is in HELP and the README.
 
 ## Tasks
 
-- [ ] **1. The deadline.** `cli/mod.rs`: `timeout-ms` in `SHARED_VALUES`,
-  `within`. `cli/inspect.rs`: the work after connecting under it.
+- [x] **1. The deadline.** `cli/mod.rs`: `timeout-ms` in `SHARED_VALUES`,
+  `cut_off`. `cli/inspect.rs`: the work after connecting under it.
   `query.rs`, `exec.rs`: the flag out of their own lists.
   Verify: `cargo test --workspace` — the integration tests above.
 

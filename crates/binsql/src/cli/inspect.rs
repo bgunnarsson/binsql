@@ -12,7 +12,10 @@ use std::time::Instant;
 use binsql_core::{Column, ObjectKind, ObjectRef, ResultSet, Session, Value};
 
 use super::render;
-use super::{Category, Result, caused, connect, core, failed, note, output, parse, print, usage};
+use super::{
+    Category, NOTHING_CHANGED, Result, caused, connect, core, cut_off, failed, note, output, parse,
+    print, statement_budget, usage,
+};
 
 pub(super) const VALUES: &[&str] = &[];
 pub(super) const SWITCHES: &[&str] = &["columns"];
@@ -21,6 +24,7 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     let args = parse(args, VALUES, SWITCHES)?;
     let options = output(&args)?;
     let every_column = args.is_set(&["columns"]);
+    let timeout = statement_budget(&args)?;
 
     let target = match args.positional() {
         [] => None,
@@ -39,8 +43,12 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     let schema = args.value(&["schema"]).map(str::to_string);
 
     if every_column {
-        let (result, empty) =
-            columns_of(&session, &catalog, schema.as_deref(), target.as_deref()).await?;
+        let (result, empty) = cut_off(
+            timeout,
+            NOTHING_CHANGED,
+            columns_of(&session, &catalog, schema.as_deref(), target.as_deref()),
+        )
+        .await?;
         print(&render::rows(&result, &options))?;
         for object in empty {
             note(&options, &format!("{object} has no columns"));
@@ -48,10 +56,13 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
-    let result = match target {
-        Some(table) => describe(&session, &catalog, schema.as_deref(), &table).await?,
-        None => list(&session, &catalog, schema.as_deref()).await?,
-    };
+    let result = cut_off(timeout, NOTHING_CHANGED, async {
+        match target {
+            Some(table) => describe(&session, &catalog, schema.as_deref(), &table).await,
+            None => list(&session, &catalog, schema.as_deref()).await,
+        }
+    })
+    .await?;
 
     print(&render::rows(&result, &options))
 }
