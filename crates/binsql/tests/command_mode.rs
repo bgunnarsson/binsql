@@ -552,6 +552,120 @@ fn inspect_lists_columns_in_declared_order() {
 }
 
 #[test]
+fn inspect_columns_lists_every_object_with_its_identity() {
+    let fixture = Fixture::new("inspect-columns");
+    fixture
+        .direct(&[
+            "exec",
+            "CREATE TABLE track (title TEXT NOT NULL, id INTEGER PRIMARY KEY); \
+             CREATE VIEW long_track AS SELECT title FROM track",
+        ])
+        .succeeds();
+
+    let run = fixture
+        .direct(&["inspect", "--columns", "-o", "json"])
+        .succeeds();
+    let mut parsed: serde_json::Value = serde_json::from_str(&run.stdout).expect("json");
+    parsed
+        .as_object_mut()
+        .expect("an envelope")
+        .remove("duration_ms")
+        .expect("a duration");
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "columns": [
+                {"name": "catalog", "type": "text"},
+                {"name": "schema", "type": "text"},
+                {"name": "object", "type": "text"},
+                {"name": "kind", "type": "text"},
+                {"name": "column", "type": "text"},
+                {"name": "type", "type": "text"},
+                {"name": "nullable", "type": "bool"},
+                {"name": "default", "type": "text"},
+                {"name": "primary_key", "type": "bool"},
+            ],
+            "row_count": 3,
+            "rows": [
+                {"catalog": "main", "schema": null, "object": "long_track", "kind": "view",
+                 "column": "title", "type": "TEXT", "nullable": true, "default": null,
+                 "primary_key": false},
+                {"catalog": "main", "schema": null, "object": "track", "kind": "table",
+                 "column": "title", "type": "TEXT", "nullable": false, "default": null,
+                 "primary_key": false},
+                {"catalog": "main", "schema": null, "object": "track", "kind": "table",
+                 "column": "id", "type": "INTEGER", "nullable": true, "default": null,
+                 "primary_key": true},
+            ],
+            "truncated": false,
+        })
+    );
+
+    let run = fixture
+        .direct(&["inspect", "--columns", "-o", "jsonl"])
+        .succeeds();
+    let lines: Vec<serde_json::Value> = run
+        .stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a json line"))
+        .collect();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0]["object"], "long_track");
+    assert_eq!(lines[2]["column"], "id");
+
+    let run = fixture
+        .direct(&["inspect", "--columns", "-o", "csv"])
+        .succeeds();
+    assert_eq!(
+        run.stdout,
+        "catalog,schema,object,kind,column,type,nullable,default,primary_key\n\
+         main,,long_track,view,title,TEXT,true,,false\n\
+         main,,track,table,title,TEXT,false,,false\n\
+         main,,track,table,id,INTEGER,true,,true\n"
+    );
+}
+
+#[test]
+fn inspect_columns_refuses_a_name_until_it_can_match_one_exactly() {
+    let fixture = Fixture::new("inspect-columns-name");
+    fixture.seed();
+
+    let run = fixture
+        .direct(&["inspect", "--columns", "artist"])
+        .refused()
+        .stderr_has("naming one is not supported yet");
+    assert_eq!(run.stdout, "");
+}
+
+#[test]
+fn inspect_without_columns_prints_what_it_did_before() {
+    let fixture = Fixture::new("inspect-unchanged");
+    fixture.seed();
+
+    assert_eq!(
+        fixture.direct(&["inspect", "-o", "csv"]).succeeds().stdout,
+        "schema,name,kind\n,artist,table\n"
+    );
+    assert_eq!(
+        fixture
+            .direct(&["inspect", "-o", "jsonl"])
+            .succeeds()
+            .stdout,
+        "{\"kind\":\"table\",\"name\":\"artist\",\"schema\":\"\"}\n"
+    );
+    assert_eq!(
+        fixture
+            .direct(&["inspect", "artist", "-o", "csv"])
+            .succeeds()
+            .stdout,
+        "column,type,nullable,default,primary_key\n\
+         id,INTEGER,true,,true\n\
+         name,TEXT,false,,false\n\
+         founded,INTEGER,true,,false\n"
+    );
+}
+
+#[test]
 fn a_saved_data_source_and_the_default_both_work() {
     let fixture = Fixture::new("saved");
     fixture.write_config();

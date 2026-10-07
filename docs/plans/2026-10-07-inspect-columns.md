@@ -76,7 +76,7 @@ Decisions made here (the user asked for no questions, and we chose whatever chan
 
 ## Tasks
 
-- [ ] **`--columns` in `inspect.rs`, with tests.**
+- [x] **`--columns` in `inspect.rs`, with tests.**
   - Pass `&["columns"]` as the switches to `parse` (`inspect.rs:15`).
   - Read the switch with `args.is_set(&["columns"])` (`args.rs:98`).
   - Refuse a positional when the switch is set.
