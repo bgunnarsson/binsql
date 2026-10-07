@@ -364,6 +364,22 @@ Exit codes are `0` for success, `1` for a database that said no, and `2` for a
 usage mistake, so a script can tell "you asked wrong" from "it did not work".
 `⌃C` cancels the running query the same way it does in the TUI.
 
+### Data sources
+
+`binsql source list` prints every saved data source, user and project alike, and
+`binsql source show NAME` prints one, found the way `--conn` finds it. Each row
+is `name, scope, driver, dsn, readonly, open_on_start, default, description,
+shadowed`. A `keychain://` or `keyvault://` reference prints as written, and a
+connection string kept in the config has its password masked: nothing is
+resolved and nothing connects, so of the shared flags only the output ones
+apply.
+
+`shadowed` marks a data source a command has taken the bare name of — a
+top-level `query`, or `team/inspect` when it is the only `inspect` — and a note
+on stderr says how to open it instead. `binsql source` alone, or with only
+options after it, still opens a saved data source named `source`; it is a
+command only with an operation after it.
+
 ## Databases
 
 | Driver names | Connection string |
@@ -582,9 +598,11 @@ targets, nothing published — and refuses a tag that disagrees with `Cargo.toml
 What works today is everything above. What has **not** been carried across from
 v2 yet:
 
-- **Managing data sources from the command line.** v2 had `binsql conn add`. In
-  v3 a data source is added with `⌃N`, or by editing the config by hand — which
-  now means knowing whether you meant the user file or a project's.
+- **Changing data sources from the command line.** `binsql source list` and
+  `source show` read them; v2's `binsql conn add` has no counterpart yet, so a
+  data source is added, edited or removed with `⌃N` in the TUI, or by editing
+  the config by hand — which means knowing whether you meant the user file or
+  a project's.
 - **Managed identity and service-principal credentials** for Key Vault, as
   binsql's own. v2 linked them in; v3 reaches the same identities through
   `az login --identity` and `az login --service-principal`, run first (see

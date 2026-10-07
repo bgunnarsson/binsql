@@ -131,7 +131,7 @@ None found.
   row; `show nope` and an ambiguous leaf are exit 2; `list extra`,
   `show` with no name and `list --conn x` are exit 2.
   Verify: `cargo test -p binsql`, clippy.
-- [ ] **Docs.** A SOURCE section in `cli::HELP` (after INSPECT, `cli/mod.rs:120`)
+- [x] **Docs.** A SOURCE section in `cli::HELP` (after INSPECT, `cli/mod.rs:120`)
   naming `source list`, `source show NAME`, the columns, that references print
   as written and literals masked, and that only `-o`, `--pretty`,
   `--no-header`, `--no-footer` apply; add `binsql source list -o json` to

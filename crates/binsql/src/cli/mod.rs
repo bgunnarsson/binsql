@@ -94,6 +94,8 @@ COMMAND MODE
     binsql query \"<sql>\"       run a read-only statement and print the result
     binsql exec \"<sql>\"        run statements that change the database
     binsql inspect [table]     list tables, or describe one
+    binsql source list         list the saved data sources
+    binsql source show NAME    show one, found the way --conn finds it
 
 CONNECTION
     -c, --conn NAME       a saved data source, `folder/name` or a bare name
@@ -133,6 +135,12 @@ INSPECT
                           a NAME after it is matched exactly, never split on
                           dots, with the schema taken from --schema alone
 
+SOURCE
+    One row per data source: name, scope, driver, dsn, readonly, open_on_start,
+    default, description, shadowed. A keychain:// or keyvault:// reference
+    prints as written; a connection string has its password masked. Nothing
+    connects, so only the OUTPUT flags apply.
+
 BIND VALUES
     An --arg is text unless it says otherwise: int:42, float:1.5, bool:true,
     null:, json:{\"a\":1} — or str: for text that begins with one of those.
@@ -144,6 +152,7 @@ EXAMPLES
     binsql exec -f migration.sql --dry-run
     binsql inspect --conn scratch
     binsql inspect users
+    binsql source list -o json
 ";
 
 /// The flags every command shares. Kept in one list so `--conn` means the same
